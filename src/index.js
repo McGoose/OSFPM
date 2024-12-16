@@ -1,8 +1,8 @@
 // Importing necessary modules and resources
-import './assets/styles/global.css';
-import './assets/js/modules/preproduction/index.js';
-import './assets/js/modules/production/index.js';
-import './assets/js/modules/postproduction/index.js';
+import '/public/assets/styles/global.css';
+import './modules/PreProduction/index.js';
+import './modules/Production/index.js';
+import './modules/PostProduction/index.js';
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', function() {
