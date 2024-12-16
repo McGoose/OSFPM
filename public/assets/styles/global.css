@@ -1,0 +1,248 @@
+/* Reset some basic styles */
+*,
+*::before,
+*::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+/* Global font and body styles */
+body {
+  font-family: 'Roboto', sans-serif;
+  background-color: #f4f4f4;
+  color: #333;
+  line-height: 1.6;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+/* Container for content centering */
+.container {
+  width: 90%;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+/* Header styles */
+header {
+  background-color: #2b2b2b;
+  padding: 20px 0;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+header .logo {
+  display: flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+header .logo .logo-img {
+  width: 40px;
+  height: auto;
+  margin-right: 10px;
+}
+
+header .logo .logo-text {
+  font-size: 1.6rem;
+  color: #fff;
+  font-weight: 500;
+}
+
+header .main-nav {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+
+header .main-nav ul {
+  list-style: none;
+  display: flex;
+}
+
+header .main-nav ul li {
+  margin-left: 20px;
+}
+
+header .main-nav ul li a {
+  color: #fff;
+  text-decoration: none;
+  font-weight: 500;
+  padding: 8px 12px;
+}
+
+header .main-nav ul li a:hover {
+  background-color: #ff6f61;
+  border-radius: 4px;
+}
+
+/* Section Styles */
+section {
+  padding: 60px 0;
+}
+
+section h2 {
+  font-size: 2rem;
+  margin-bottom: 20px;
+  color: #333;
+}
+
+section p {
+  font-size: 1rem;
+  color: #666;
+  line-height: 1.6;
+  margin-bottom: 20px;
+}
+
+.cta-button {
+  background-color: #ff6f61;
+  color: white;
+  padding: 12px 20px;
+  text-decoration: none;
+  border-radius: 4px;
+  font-size: 1.1rem;
+  font-weight: 500;
+  display: inline-block;
+  transition: background-color 0.3s ease;
+}
+
+.cta-button:hover {
+  background-color: #e24a3a;
+}
+
+.section {
+  background-color: #fff;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+  border-radius: 8px;
+  padding: 40px;
+}
+
+section#intro {
+  background-color: #ff6f61;
+  color: white;
+  text-align: center;
+  padding: 100px 0;
+}
+
+section#intro h1 {
+  font-size: 2.5rem;
+  font-weight: 700;
+}
+
+section#intro p {
+  font-size: 1.2rem;
+  margin: 20px 0;
+}
+
+/* Footer Styles */
+footer {
+  background-color: #2b2b2b;
+  color: white;
+  padding: 20px 0;
+  text-align: center;
+}
+
+footer a {
+  color: #ff6f61;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+footer a:hover {
+  text-decoration: underline;
+}
+
+/* Responsive Design for Mobile */
+@media (max-width: 768px) {
+  header .main-nav ul {
+    flex-direction: column;
+    align-items: center;
+  }
+
+  header .main-nav ul li {
+    margin: 10px 0;
+  }
+
+  section#intro {
+    padding: 60px 20px;
+  }
+
+  section#intro h1 {
+    font-size: 2rem;
+  }
+
+  .container {
+    width: 100%;
+    padding: 10px;
+  }
+}
+
+/* Utility Classes */
+.text-center {
+  text-align: center;
+}
+
+.text-right {
+  text-align: right;
+}
+
+.mb-20 {
+  margin-bottom: 20px;
+}
+
+.mt-20 {
+  margin-top: 20px;
+}
+
+.pt-20 {
+  padding-top: 20px;
+}
+
+.pb-20 {
+  padding-bottom: 20px;
+}
+
+.bg-light {
+  background-color: #f8f8f8;
+}
+
+.bg-dark {
+  background-color: #2b2b2b;
+  color: white;
+}
+
+/* Custom Form Elements */
+input,
+textarea,
+select {
+  font-size: 1rem;
+  padding: 10px;
+  margin: 8px 0;
+  width: 100%;
+  border-radius: 4px;
+  border: 1px solid #ddd;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: #ff6f61;
+  outline: none;
+}
+
+button {
+  background-color: #ff6f61;
+  color: white;
+  padding: 10px 20px;
+  font-size: 1rem;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+}
+
+button:hover {
+  background-color: #e24a3a;
+}
