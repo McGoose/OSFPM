@@ -50,7 +50,7 @@ The Open Source Film Production Manager is a self-hosted, web-based application 
 - Video Leader creator
 
 
- For a complete list of features, please refer to the [Roadmap](#/ROADMAP.md).
+ For a complete list of features, please refer to the [Roadmap](https://github.com/McGoose/OSFPM/blob/main/ROADMAP.md).
 
 ---
 
@@ -112,7 +112,7 @@ Contributions are welcome! Please follow these steps:
 
 ## **Contact**
 
-For questions or support, contact:
+For questions or support, contact, or to send the filmmaking memes, please reach out to:
 - **Email**: peter.berberih@gmail.com
 - **GitHub Issues**: [Report an Issue](https://github.com/McGoose/OSFPM/issues)
 
