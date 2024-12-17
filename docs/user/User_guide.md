@@ -1,6 +1,6 @@
 # **User Guide (Coming Soon)**
 
-Welcome to the Open Source ***Open Source Film Production Manager User Guide***!
+Welcome to the ***Open Source Film Production Manager User Guide***!
 
 Well... not exactly the user guide. Yet. You see, "The Goose"™ is hard at work crafting a comprehensive, step-by-step manual to make your filmmaking journey as smooth as a perfectly planned shot.
 
