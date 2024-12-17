@@ -1,11 +1,11 @@
-# **Open Source Film Production Manger**
+# **Open Source Film Production Manager**
 
-![Contributors](https://img.shields.io/github/contributors/your-username/film-production-system)  
-![Issues](https://img.shields.io/github/issues/your-username/film-production-system)
+![Contributors](https://img.shields.io/github/contributors/McGoose/OSFPM)  
+![Issues](https://img.shields.io/github/issues/McGoose/OSFPM)
 
 ## **Table of Contents**
 1. [Introduction](#introduction)
-2. [Features](#features)
+2. [Planned Features](#planned-features)
 3. [Installation](#installation)
 4. [Usage](#usage)
 5. [Development Guide](#development-guide)
@@ -22,7 +22,7 @@ The Open Source Film Production Manager is a self-hosted, web-based application 
 
 ---
 
-## **Features**
+## **Planned Features**
 ### **Pre-production**
 - Script breakdown: manage scenes, characters, locations, props, costumes, and more.
 - Budgeting and finance tracking.
@@ -47,6 +47,10 @@ The Open Source Film Production Manager is a self-hosted, web-based application 
 - Centralized calendar.
 - Contact book.
 - To-do lists.
+- Video Leader creator
+
+
+ For a complete list of features, please refer to the [Roadmap](#/ROADMAP.md).
 
 ---
 
@@ -67,9 +71,11 @@ The Open Source Film Production Manager is a self-hosted, web-based application 
 
 ## **API Documentation**
 
+
 ---
 
 ## **Testing**
+
 
 ---
 
@@ -94,7 +100,7 @@ Contributions are welcome! Please follow these steps:
 
 ### Guidelines
 - Write clear and concise commit messages.
-- Follow the code style guidelines.
+- Follow the code style guidelines... once I actully write it
 - Update tests and documentation if necessary.
 
 ---
@@ -102,6 +108,7 @@ Contributions are welcome! Please follow these steps:
 ## **License**
 
 
+---
 
 ## **Contact**
 
