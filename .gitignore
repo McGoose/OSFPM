@@ -1,5 +1,27 @@
-#Log files
-*.log
+# Dependencies
+node_modules/
 
-#Locals folder
-/locals
+# Database
+data/
+
+# Build output
+client/dist/
+client/.vite/
+
+# Environment files
+.env
+server/.env
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

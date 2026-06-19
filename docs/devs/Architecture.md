@@ -1,34 +1,77 @@
-# **Architecture**
+# Architecture
 
-Welcome to the ***Open Source Film Production Manager Architecture***! Or as I like to call it, *“The Grand Blueprint of Filmmaking Magic.”* 🎬✨
+## Stack
 
-This document will eventually explain how the application is structured, but for now, here's a placeholder with some very technical terms that sound impressive, but do not mean much (yet).
+| Layer      | Technology          | Notes                                              |
+|------------|---------------------|----------------------------------------------------|
+| Frontend   | React 18 + Vite 6   | `client/` directory. React Router v6 for routing.  |
+| Backend    | Node.js + Express 4 | `server/` directory. ES modules (`"type":"module"`).|
+| Database   | TBD (PostgreSQL planned) | Relational. To be added in v0.2.0.            |
+| Email      | TBD (Nodemailer planned) | For call sheet distribution in v0.3.0.        |
 
----
+## Monorepo Structure
 
-## **The Basics**
+```
+OSFPM/
+├── client/                  # React + Vite frontend
+│   ├── src/
+│   │   ├── main.jsx         # Entry point
+│   │   ├── App.jsx          # Router setup
+│   │   ├── App.css          # Global styles + CSS variables
+│   │   ├── modules/
+│   │   │   ├── Home/        # Dashboard
+│   │   │   ├── PreProduction/
+│   │   │   ├── Production/
+│   │   │   └── PostProduction/
+│   │   └── shared/
+│   │       ├── Layout/      # Header, Sidebar, Layout wrapper
+│   │       ├── Calendar/
+│   │       ├── Contacts/
+│   │       └── Todo/
+│   ├── index.html
+│   └── vite.config.js       # Dev server on :3000, proxies /api → :5000
+│
+├── server/                  # Express API
+│   ├── src/
+│   │   ├── index.js         # App entry, middleware, route mounting
+│   │   └── routes/
+│   │       ├── preproduction.js
+│   │       ├── production.js
+│   │       └── postproduction.js
+│   └── .env.example
+│
+├── docs/
+└── package.json             # npm workspaces root
+```
 
-At the core of our system is a combination of various programming languages. You know, what a program needs to work. There is also some (for now non-existent) back-end magic, but I am still figuring out exactly how to make that work.
+## Dev Setup
 
-### Frontend
-The frontend is like the director of the app: it’s in charge of making everything look pretty, functional, and making sure no one gets lost, minus the cocaine, anxiety and self-pitty.
+```bash
+npm install          # installs all workspace dependencies
+npm run dev          # starts client (:3000) and server (:5000) concurrently
+```
 
-### Backend
-Imagine it's like the unsung crew member who makes sure everything works behind the curtain.
+## Data Flow
 
-### Database
-Our data is safely stored somewhere, probably. The plan is to use a relational database, basically a big binder with tabs, where each tab holds a specific piece of information about the film. Nothing has been picked it yet, but relational sounds professional enough, right?
+The Vite dev server proxies `/api/*` requests to the Express server, so there are no CORS issues in development. In production, Express will serve the built `client/dist/` as static files.
 
-### Data Flow
+## Routing
 
-Right now, data flows only from my brain to my computer. Sometimes it’s more of a flow and less of a well-thought-out flow. But I am getting there!
+| Path             | Component         |
+|------------------|-------------------|
+| `/`              | Home (Dashboard)  |
+| `/preproduction` | PreProduction     |
+| `/production`    | Production        |
+| `/postproduction`| PostProduction    |
+| `/calendar`      | Calendar          |
+| `/contacts`      | Contacts          |
+| `/todo`          | Todo              |
 
----
+## API Endpoints (v0.1.0 stubs)
 
-## **The Big Picture (Literally)**
-
-Eventually, there will be diagrams here showing how all the pieces fit together. For now, just picture a big movie set with lots of moving parts. (Or a spaghetti junction, depending on your level of optimism).
-
-Stay tuned for a more detailed explanation, once I get the kinks worked out!
-
-Happy filming! 🎬
+| Method | Path                   | Description    |
+|--------|------------------------|----------------|
+| GET    | `/api/health`          | Health check   |
+| GET    | `/api/preproduction`   | Module stub    |
+| GET    | `/api/production`      | Module stub    |
+| GET    | `/api/postproduction`  | Module stub    |

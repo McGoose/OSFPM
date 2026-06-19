@@ -1,147 +1,100 @@
-# **Open Source Film Production Manager: Roadmap**
+# OSFPM Roadmap
+
+*Last updated: 2026-06-19*
 
 ---
 
-## **Current Status**
-- **Version:** 0.0.0 (Pre-Existing)
-- **Core Focus:** Establishing the foundational structure and basic functionality of the application (Fancy speak for: just get something actually fucking done!).
+## Current Status
+
+**Version:** 0.1.0 — Foundation complete. Auth, database, and workspace customization are live. Module UI is scaffolded; real features begin in v0.2.0.
 
 ---
 
-## **Milestones**
+## Phase 1: Foundation and Architecture — v0.1.0 ✅
 
-### **Phase 1: Foundation and Architecture (v0.1.0)**
-- [ ] Define project structure and core directory organization.
-- [ ] Develop global template files:
-  - `index.html`
-  - `global.css`
-  - `index.js`
-- [ ] Create modular structure for:
-  - PreProduction
-  - Production
-  - PostProduction
-- [ ] Set up shared utilities:
-  - Global calendar
-  - Contacts system
-  - To-do list feature.
-
-- **Goal:** Get the core functionality up and running (again, fancy speak for: just get something actually fucking done!).
----
-
-### **Phase 2: Pre-Production Module (v0.2.0)**
-- **Planned Features:**
-  - [ ] Film project creation:
-    - Set basic details (title, genre, technical aspects).
-  - [ ] Script breakdown tool:
-    - Scene details (characters, props, locations, etc.).
-    - Automated task generation for departments.
-  - [ ] Budgeting system:
-    - Local currency support.
-    - Track estimated and actual costs.
-  - [ ] Department reports:
-    - Customizable templates for department heads.
-  - [ ] Scheduling:
-    - Integration with global calendar.
-
-- **Goal:** Deliver a functional module for organizing the preproduction phase of a film.
+- [x] Monorepo structure (npm workspaces: `client/`, `server/`)
+- [x] React 18 + Vite 6 frontend with React Router v6
+- [x] Node.js + Express 4 backend (ES modules)
+- [x] SQLite database via better-sqlite3 + Drizzle ORM
+- [x] JWT authentication (httpOnly cookies, 7-day sessions)
+- [x] Role-based access control foundation (`admin` / `crew`)
+- [x] First-run setup wizard (admin account + workspace config)
+- [x] Workspace customization: accent color, org name, currency, timezone
+- [x] Scaffolded UI for all three production modules + shared tools
+- [x] Dark cinematic UI theme with live CSS variable theming
 
 ---
 
-### **Phase 3: Production Module (v0.3.0)**
-- **Planned Features:**
-  - [ ] Daily schedule tracking:
-    - Call sheet creation and distribution.
-  - [ ] Dailies management:
-    - Track footage and metadata from the set.
-  - [ ] Filming reports:
-    - Automated and manual report creation for daily updates.
-  - [ ] Gear tracking:
-    - List of equipment with status updates.
-  - [ ] Crew management:
-    - Real-time updates on availability, dietary needs, and other information.
+## Phase 2: Pre-Production Module — v0.2.0
 
-- **Goal:** Provide tools to manage the production phase efficiently.
+- [ ] Film project creation (title, genre, format, technical details)
+- [ ] Script breakdown tool (scenes, characters, props, locations, costumes)
+- [ ] Budget tracker (estimated vs. actual costs, currency from workspace settings)
+- [ ] Department reports (customizable templates per department head)
+- [ ] Scheduling (calendar integration)
+- [ ] Crew management
+- [ ] Meeting tracker
 
 ---
 
-### **Phase 4: Post-Production Module (v0.4.0)**
-- **Planned Features:**
-  - [ ] Media data management:
-    - Organize footage, edits, and metadata.
-  - [ ] Review notes:
-    - Annotate and track feedback on edits.
-  - [ ] Scheduling:
-    - Timeline for editing, color grading, VFX, and sound design.
+## Phase 3: Production Module — v0.3.0
 
-- **Goal:** Streamline postproduction workflows and enable seamless communication between teams.
+- [ ] Call sheet creation and distribution
+- [ ] Dailies management (footage tracking, metadata, backup status)
+- [ ] Filming reports (daily updates, automated and manual)
+- [ ] Gear tracking (equipment list with status)
+- [ ] Crew monitoring (availability, contact, on-set notes)
+- [ ] Schedule adherence tools
 
 ---
 
-### **Phase 5: Cross-Module Features (v0.5.0)**
-- **Planned Features:**
-  - [ ] Global calendar integration:
-    - Unified scheduling across preproduction, production, and postproduction.
-  - [ ] Unified contacts management:
-    - Shared contact database for cast, crew, and vendors.
-  - [ ] Advanced to-do list:
-    - Cross-module task management with reminders and priorities.
+## Phase 4: Post-Production Module — v0.4.0
 
-- **Goal:** Unify shared functionality across all modules for better usability.
+- [ ] Media data organization (footage, edits, metadata)
+- [ ] Review notes (annotate and track feedback on edits)
+- [ ] Delivery scheduling (timeline for editing, grade, VFX, sound)
+- [ ] Collaboration tools for editors and VFX supervisors
 
 ---
 
-### **Phase 6: User Interface Enhancements (v0.6.0)**
-- **Planned Features:**
-  - [ ] Design responsive UI components.
-  - [ ] Improve navigation for module transitions.
-  - [ ] Add real-time collaboration features:
-    - Multi-user access.
-    - Change tracking.
+## Phase 5: Shared Tools — v0.5.0
 
-- **Goal:** Ensure a smooth and user-friendly experience across devices.
+- [ ] Unified calendar (events from all modules, per-user and global views)
+- [ ] Contact book (cast, crew, vendors — linked to crew management)
+- [ ] To-do lists (cross-module task management with priorities and reminders)
+- [ ] Video leader creator
 
 ---
 
-### **Phase 7: Beta Release (v1.0.0)**
-- **Planned Features:**
-  - [ ] Finalize all core functionality.
-  - [ ] Fix major bugs and improve performance.
-  - [ ] Prepare comprehensive user and developer documentation.
+## Phase 6: UI Polish and Collaboration — v0.6.0
 
-- **Goal:** Release a stable and feature-complete version of the project.
-
----
-
-### **Future Enhancements**
-- **Mobile App:**  
-  - Develop a mobile version of the application for on-the-go access.
-- **"AI"-Assisted Tools:**  
-  - Integrate "AI" for script breakdowns, budget optimizations, and scheduling.
-- **Third-Party Integrations:**  
-  - Cloud storage options for media.
-  - External tools like Trello or a Calendar app.
-- **Plugin System:**  
-  - Allow developers to extend functionality with custom plugins.
+- [ ] Responsive layout for tablets and mobile
+- [ ] Real-time multi-user updates (WebSockets or polling)
+- [ ] Change tracking and activity log
+- [ ] Notification system (in-app, optionally email via SMTP)
+- [ ] Logo upload for workspace branding
 
 ---
 
-## **How to Contribute**
-Your contributions are essential to help shape the future of this project!  
-To contribute:
-1. Review the current issues and open Pull Requests (PRs) on [GitHub](https://github.com/McGoose/OSFPM/pulls).
-2. Suggest or discuss new features and enhancements in the [Issues tab](https://github.com/McGoose/OSFPM/issues).
-3. Follow the guidelines in `CONTRIBUTING.md`.
+## Phase 7: Beta Release — v1.0.0
+
+- [ ] Full end-to-end testing
+- [ ] Performance review and optimisation
+- [ ] Complete user documentation
+- [ ] Complete developer/self-hosting documentation
+- [ ] Stable API with versioning
 
 ---
 
-## **Feedback**
-Your feedback is invaluable to the success of this project!  
-Feel free to share your ideas, questions, or concerns by opening an issue on GitHub.
+## Future Enhancements
+
+- **Mobile app** — React Native companion for on-set use
+- **AI-assisted tools** — script breakdown automation, budget suggestions, scheduling optimisation
+- **Third-party integrations** — cloud storage, external calendar sync (iCal/Google)
+- **Plugin system** — allow developers to extend functionality with custom modules
 
 ---
 
-*This roadmap will be regularly updated as the project evolves.*
+Contributions and feature suggestions welcome via [GitHub Issues](https://github.com/McGoose/OSFPM/issues).
 
 Happy filming! 🎬
-
-### **Latest update:** **17/12/2024**
