@@ -198,6 +198,81 @@ await client.execute(`
   )
 `)
 
+await client.execute(`
+  CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    date TEXT NOT NULL,
+    start_time TEXT NOT NULL DEFAULT '09:00',
+    end_time TEXT NOT NULL DEFAULT '17:00',
+    location TEXT DEFAULT '',
+    location_type TEXT DEFAULT 'in_person',
+    notes TEXT DEFAULT '',
+    slot_duration_minutes INTEGER,
+    break_after_slots INTEGER,
+    break_duration_minutes INTEGER,
+    created_at INTEGER NOT NULL
+  )
+`)
+
+await client.execute(`
+  CREATE TABLE IF NOT EXISTS event_attendees (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    member_id INTEGER,
+    department_id INTEGER
+  )
+`)
+
+await client.execute(`
+  CREATE TABLE IF NOT EXISTS event_scenes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id INTEGER NOT NULL,
+    scene_id INTEGER NOT NULL
+  )
+`)
+
+await client.execute(`
+  CREATE TABLE IF NOT EXISTS potential_actors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    email TEXT DEFAULT '',
+    phone TEXT DEFAULT '',
+    role TEXT DEFAULT '',
+    notes TEXT DEFAULT '',
+    availability_token TEXT,
+    availability_token_expires INTEGER,
+    availability_submitted_at INTEGER,
+    created_at INTEGER NOT NULL
+  )
+`)
+
+await client.execute(`
+  CREATE TABLE IF NOT EXISTS actor_event_availability (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor_id INTEGER NOT NULL,
+    event_id INTEGER NOT NULL,
+    available INTEGER NOT NULL DEFAULT 1
+  )
+`)
+
+await client.execute(`
+  CREATE TABLE IF NOT EXISTS casting_slots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id INTEGER NOT NULL,
+    start_time TEXT NOT NULL,
+    end_time TEXT NOT NULL,
+    actor_id INTEGER,
+    is_break INTEGER NOT NULL DEFAULT 0,
+    notes TEXT DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0
+  )
+`)
+
 // Auto-seed global budget template if empty
 const { rows } = await client.execute('SELECT COUNT(*) as count FROM budget_template_categories')
 if (Number(rows[0].count) === 0) {

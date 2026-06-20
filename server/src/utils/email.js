@@ -14,25 +14,28 @@ function createTransport() {
   })
 }
 
-export async function sendOnboardingEmail({ to, name, projectTitle, role, link }) {
+export async function sendOnboardingEmail({ to, name, projectTitle, role, link, subject, bodyText }) {
   const transport = createTransport()
   if (!transport) return false
 
   const from = process.env.SMTP_FROM ?? process.env.SMTP_USER ?? 'noreply@osfpm.local'
 
+  const resolvedSubject = subject ?? `Complete your onboarding for ${projectTitle}`
+  const resolvedBody = bodyText ?? `Please complete your onboarding by visiting the link below.`
+
   await transport.sendMail({
     from,
     to,
-    subject: `Complete your onboarding for ${projectTitle}`,
+    subject: resolvedSubject,
     text: [
       `Hi ${name},`,
       '',
       `You've been added to "${projectTitle}" as ${role}.`,
       '',
-      `Please complete your onboarding by visiting:`,
+      resolvedBody,
       link,
       '',
-      `This link is personal to you — do not share it. It expires in 7 days.`,
+      `This link is personal to you — do not share it.`,
       '',
       `— OSFPM`,
     ].join('\n'),

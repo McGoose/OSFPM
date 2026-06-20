@@ -14,6 +14,7 @@ const projectTools = [
   { to: '/budget', label: 'Budget', icon: '💰' },
   { to: '/breakdown', label: 'Breakdown', icon: '📋' },
   { to: '/crew', label: 'Crew & Cast', icon: '👥' },
+  { to: '/calendar', label: 'Calendar', icon: '📅' },
 ]
 
 export default function Sidebar() {

@@ -133,6 +133,69 @@ export const breakdownElements = sqliteTable('breakdown_elements', {
   sortOrder: integer('sort_order').notNull().default(0),
 })
 
+export const events = sqliteTable('events', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  projectId: integer('project_id').notNull(),
+  type: text('type').notNull(), // meeting | recce | casting | rehearsal | shoot_day
+  title: text('title').notNull().default(''),
+  date: text('date').notNull(), // YYYY-MM-DD
+  startTime: text('start_time').notNull().default('09:00'),
+  endTime: text('end_time').notNull().default('17:00'),
+  location: text('location').default(''),
+  locationType: text('location_type').default('in_person'), // in_person | online | hybrid
+  notes: text('notes').default(''),
+  slotDurationMinutes: integer('slot_duration_minutes'),
+  breakAfterSlots: integer('break_after_slots'),
+  breakDurationMinutes: integer('break_duration_minutes'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+})
+
+export const eventAttendees = sqliteTable('event_attendees', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  eventId: integer('event_id').notNull(),
+  type: text('type').notNull(), // member | department
+  memberId: integer('member_id'),
+  departmentId: integer('department_id'),
+})
+
+export const eventScenes = sqliteTable('event_scenes', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  eventId: integer('event_id').notNull(),
+  sceneId: integer('scene_id').notNull(),
+})
+
+export const potentialActors = sqliteTable('potential_actors', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  projectId: integer('project_id').notNull(),
+  name: text('name').notNull(),
+  email: text('email').default(''),
+  phone: text('phone').default(''),
+  role: text('role').default(''),
+  notes: text('notes').default(''),
+  availabilityToken: text('availability_token'),
+  availabilityTokenExpires: integer('availability_token_expires'),
+  availabilitySubmittedAt: integer('availability_submitted_at', { mode: 'timestamp' }),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+})
+
+export const actorEventAvailability = sqliteTable('actor_event_availability', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  actorId: integer('actor_id').notNull(),
+  eventId: integer('event_id').notNull(),
+  available: integer('available', { mode: 'boolean' }).notNull().default(true),
+})
+
+export const castingSlots = sqliteTable('casting_slots', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  eventId: integer('event_id').notNull(),
+  startTime: text('start_time').notNull(),
+  endTime: text('end_time').notNull(),
+  actorId: integer('actor_id'),
+  isBreak: integer('is_break', { mode: 'boolean' }).notNull().default(false),
+  notes: text('notes').default(''),
+  sortOrder: integer('sort_order').notNull().default(0),
+})
+
 export const invoices = sqliteTable('invoices', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   projectId: integer('project_id').notNull(),

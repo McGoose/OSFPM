@@ -1,8 +1,7 @@
 import { Router } from 'express'
 import crypto from 'crypto'
-import bcrypt from 'bcryptjs'
 import { db } from '../db/index.js'
-import { crewMembers, users, projects } from '../db/schema.js'
+import { crewMembers, projects } from '../db/schema.js'
 import { eq, asc } from 'drizzle-orm'
 import { requireAdmin } from '../middleware/auth.js'
 import { sendOnboardingEmail, emailConfigured } from '../utils/email.js'
@@ -30,11 +29,6 @@ function clean(fields, body) {
     }
   }
   return updates
-}
-
-function generatePassword() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789'
-  return Array.from({ length: 12 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
 }
 
 // GET /api/projects/:projectId/crew
@@ -107,56 +101,6 @@ router.delete('/:memberId', requireAdmin, async (req, res) => {
   if (!member || member.projectId !== projectId) return res.status(404).json({ error: 'Not found' })
   await db.delete(crewMembers).where(eq(crewMembers.id, memberId))
   res.json({ ok: true })
-})
-
-// POST /api/projects/:projectId/crew/:memberId/invite
-// Creates an OSFPM account for this member, or resets their password if one exists.
-// Returns the plain-text password exactly once — not stored.
-router.post('/:memberId/invite', requireAdmin, async (req, res) => {
-  const projectId = pid(req)
-  const memberId = parseInt(req.params.memberId)
-
-  const [member] = await db.select().from(crewMembers).where(eq(crewMembers.id, memberId))
-  if (!member || member.projectId !== projectId) return res.status(404).json({ error: 'Not found' })
-  if (!member.email?.trim()) {
-    return res.status(400).json({ error: 'An email address is required to create an account' })
-  }
-
-  const password = generatePassword()
-  const passwordHash = await bcrypt.hash(password, 10)
-
-  // If member already has a linked account — reset its password
-  if (member.userId) {
-    const [existing] = await db.select().from(users).where(eq(users.id, member.userId))
-    if (existing) {
-      await db.update(users).set({ passwordHash }).where(eq(users.id, member.userId))
-      return res.json({ reset: true, email: existing.email, temporaryPassword: password })
-    }
-  }
-
-  // Check if the email is already registered
-  const [byEmail] = await db.select().from(users).where(eq(users.email, member.email.trim()))
-  if (byEmail) {
-    // Link the existing account and reset its password
-    await db.update(users).set({ passwordHash }).where(eq(users.id, byEmail.id))
-    await db.update(crewMembers).set({ userId: byEmail.id }).where(eq(crewMembers.id, memberId))
-    const [updated] = await db.select().from(crewMembers).where(eq(crewMembers.id, memberId))
-    return res.json({ linked: true, email: byEmail.email, temporaryPassword: password, member: updated })
-  }
-
-  // Create a brand-new account
-  await db.insert(users).values({
-    email: member.email.trim(),
-    passwordHash,
-    name: member.name,
-    role: 'crew',
-    createdAt: new Date(),
-  })
-  const [newUser] = await db.select().from(users).where(eq(users.email, member.email.trim()))
-  await db.update(crewMembers).set({ userId: newUser.id }).where(eq(crewMembers.id, memberId))
-  const [updated] = await db.select().from(crewMembers).where(eq(crewMembers.id, memberId))
-
-  res.json({ created: true, email: newUser.email, temporaryPassword: password, member: updated })
 })
 
 // POST /api/projects/:projectId/crew/:memberId/onboarding-link

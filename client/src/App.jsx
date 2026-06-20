@@ -13,6 +13,8 @@ import EditProject from './modules/Projects/EditProject'
 import Budget from './modules/Budget/Budget'
 import Breakdown from './modules/Breakdown/Breakdown'
 import Crew from './modules/Crew/Crew'
+import ProjectCalendar from './modules/Calendar/ProjectCalendar'
+import ActorAvailability from './modules/Actors/ActorAvailability'
 import Department from './modules/Departments/Department'
 import Calendar from './shared/Calendar/Calendar'
 import Contacts from './shared/Contacts/Contacts'
@@ -32,6 +34,7 @@ export default function App() {
               <Route path="/login" element={<Login />} />
               <Route path="/setup" element={<Setup />} />
               <Route path="/onboard/:token" element={<OnboardingForm />} />
+              <Route path="/casting-availability/:token" element={<ActorAvailability />} />
               <Route
                 path="/"
                 element={
@@ -48,6 +51,7 @@ export default function App() {
                 <Route path="projects/:id/budget" element={<Budget />} />
                 <Route path="projects/:id/breakdown" element={<Breakdown />} />
                 <Route path="projects/:id/crew" element={<Crew />} />
+              <Route path="projects/:id/calendar" element={<ProjectCalendar />} />
                 <Route path="projects/:id/departments/:deptId" element={<Department />} />
                 {/* Legacy redirects so old bookmarks still work */}
                 <Route path="projects/:id/preproduction/budget" element={<Navigate to="../budget" relative="path" replace />} />

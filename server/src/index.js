@@ -15,6 +15,9 @@ import departmentsRouter from './routes/departments.js'
 import breakdownRouter from './routes/breakdown.js'
 import crewRouter from './routes/crew.js'
 import onboardingRouter from './routes/onboarding.js'
+import eventsRouter from './routes/events.js'
+import potentialActorsRouter from './routes/potentialActors.js'
+import actorAvailabilityRouter from './routes/actorAvailability.js'
 import preproductionRouter from './routes/preproduction.js'
 import productionRouter from './routes/production.js'
 import postproductionRouter from './routes/postproduction.js'
@@ -32,6 +35,7 @@ app.get('/api/health', (_req, res) => {
 
 app.use('/api/auth', authRouter)
 app.use('/api/onboarding', onboardingRouter) // public — no auth
+app.use('/api/casting-availability', actorAvailabilityRouter) // public — no auth
 app.use('/api/settings', settingsRouter)
 app.use('/api/settings/budget-template', requireAuth, budgetTemplateRouter)
 app.use('/api/users', usersRouter)
@@ -42,6 +46,8 @@ app.use('/api/projects/:projectId/coproducers', requireAuth, coproducersRouter)
 app.use('/api/projects/:projectId/invoices', requireAuth, invoicesRouter)
 app.use('/api/projects/:projectId/breakdown', requireAuth, breakdownRouter)
 app.use('/api/projects/:projectId/crew', requireAuth, crewRouter)
+app.use('/api/projects/:projectId/events', requireAuth, eventsRouter)
+app.use('/api/projects/:projectId/potential-actors', requireAuth, potentialActorsRouter)
 app.use('/api/preproduction', requireAuth, preproductionRouter)
 app.use('/api/production', requireAuth, productionRouter)
 app.use('/api/postproduction', requireAuth, postproductionRouter)
