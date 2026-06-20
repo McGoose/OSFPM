@@ -1,28 +1,25 @@
-import { NavLink, useNavigate } from 'react-router-dom'
+import { NavLink, Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import { useSettings } from '../../context/SettingsContext'
+import { useProject } from '../../context/ProjectContext'
 
-const nav = [
-  { to: '/', label: 'Dashboard', icon: '⌂', end: true },
-  { type: 'divider' },
-  { type: 'section', label: 'Pre-Production' },
-  { to: '/preproduction', label: 'Overview', icon: '◈' },
-  { type: 'divider' },
-  { type: 'section', label: 'Production' },
-  { to: '/production', label: 'Overview', icon: '◉' },
-  { type: 'divider' },
-  { type: 'section', label: 'Post-Production' },
-  { to: '/postproduction', label: 'Overview', icon: '◆' },
-  { type: 'divider' },
-  { type: 'section', label: 'Shared Tools' },
+const sharedTools = [
   { to: '/calendar', label: 'Calendar', icon: '◷' },
   { to: '/contacts', label: 'Contacts', icon: '◎' },
   { to: '/todo', label: 'To-Do', icon: '◻' },
 ]
 
+const projectTools = [
+  { to: '', label: 'Overview', icon: '⊞', end: true },
+  { to: '/budget', label: 'Budget', icon: '💰' },
+  { to: '/breakdown', label: 'Breakdown', icon: '📋' },
+  { to: '/crew', label: 'Crew & Cast', icon: '👥' },
+]
+
 export default function Sidebar() {
   const { user, logout } = useAuth()
   const { settings } = useSettings()
+  const { currentProject, currentProjectId, departments } = useProject()
   const navigate = useNavigate()
 
   const handleLogout = async () => {
@@ -30,37 +27,82 @@ export default function Sidebar() {
     navigate('/login')
   }
 
+  const navLink = (to, icon, label, end = false) => (
+    <NavLink
+      key={to}
+      to={to}
+      end={end}
+      className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}
+    >
+      <span className="icon">{icon}</span>
+      {label}
+    </NavLink>
+  )
+
   return (
     <aside className="sidebar">
       <div className="sidebar-nav">
-        {nav.map((item, i) => {
-          if (item.type === 'divider') return <div key={i} className="sidebar-divider" />
-          if (item.type === 'section') return <div key={i} className="sidebar-section-label">{item.label}</div>
-          return (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}
-            >
-              <span className="icon">{item.icon}</span>
-              {item.label}
-            </NavLink>
-          )
-        })}
+
+        {currentProject ? (
+          <>
+            <Link to="/projects" className="sidebar-link sidebar-back">
+              <span className="icon">←</span>
+              Projects
+            </Link>
+            <div className="sidebar-divider" />
+            <div className="sidebar-section-label sidebar-project-name" title={currentProject.title}>
+              {currentProject.title}
+            </div>
+
+            {/* Project-level tools */}
+            {projectTools.map(t => (
+              <NavLink
+                key={t.to}
+                to={`/projects/${currentProjectId}${t.to}`}
+                end={t.end}
+                className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}
+              >
+                <span className="icon">{t.icon}</span>
+                {t.label}
+              </NavLink>
+            ))}
+
+            {/* Departments */}
+            {departments.length > 0 && (
+              <>
+                <div className="sidebar-divider" />
+                <div className="sidebar-section-label">Departments</div>
+                {departments.map(dept => (
+                  <NavLink
+                    key={dept.id}
+                    to={`/projects/${currentProjectId}/departments/${dept.id}`}
+                    className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}
+                  >
+                    <span className="icon">{dept.icon}</span>
+                    {dept.name}
+                  </NavLink>
+                ))}
+              </>
+            )}
+          </>
+        ) : (
+          navLink('/projects', '⊞', 'Projects', true)
+        )}
+
+        <div className="sidebar-divider" />
+        <div className="sidebar-section-label">Shared Tools</div>
+        {sharedTools.map(t => navLink(t.to, t.icon, t.label))}
 
         {user?.role === 'admin' && (
           <>
             <div className="sidebar-divider" />
-            <NavLink
-              to="/settings"
-              className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}
-            >
-              <span className="icon">⚙</span>
-              Settings
-            </NavLink>
+            <div className="sidebar-section-label">Admin</div>
+            {navLink('/users', '◎', 'Users')}
+            {navLink('/settings', '⚙', 'Settings')}
+            {navLink('/settings/budget-template', '≡', 'Budget Template')}
           </>
         )}
+
       </div>
 
       <div className="sidebar-footer">

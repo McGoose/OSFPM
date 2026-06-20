@@ -8,13 +8,14 @@
     "start": "node src/index.js"
   },
   "dependencies": {
-    "bcryptjs": "^2.4.3",
     "@libsql/client": "^0.14.0",
+    "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "drizzle-orm": "^0.45.2",
     "express": "^4.21.2",
-    "jsonwebtoken": "^9.0.2"
+    "jsonwebtoken": "^9.0.2",
+    "nodemailer": "^9.0.1"
   }
 }
