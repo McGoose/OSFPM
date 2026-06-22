@@ -2,6 +2,8 @@ import express from 'express'
 import cors from 'cors'
 import cookieParser from 'cookie-parser'
 import 'dotenv/config'
+import path from 'path'
+import { fileURLToPath } from 'url'
 import { requireAuth } from './middleware/auth.js'
 import authRouter from './routes/auth.js'
 import settingsRouter from './routes/settings.js'
@@ -57,6 +59,14 @@ app.use('/api/projects/:projectId/potential-actors', requireAuth, potentialActor
 app.use('/api/preproduction', requireAuth, preproductionRouter)
 app.use('/api/production', requireAuth, productionRouter)
 app.use('/api/postproduction', requireAuth, postproductionRouter)
+
+// In production the Express server also serves the built React SPA
+if (process.env.NODE_ENV === 'production') {
+  const __dirname = path.dirname(fileURLToPath(import.meta.url))
+  const distDir = path.join(__dirname, '../../client/dist')
+  app.use(express.static(distDir))
+  app.get('*', (_req, res) => res.sendFile(path.join(distDir, 'index.html')))
+}
 
 app.listen(PORT, () => {
   console.log(`OSFPM server running on http://localhost:${PORT}`)

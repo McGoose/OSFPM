@@ -1,0 +1,17 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      - osfpm_data:/app/data
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      # Set JWT_SECRET in a .env file next to docker-compose.yml — never commit it
+      JWT_SECRET: ${JWT_SECRET:-change-me-before-going-to-production}
+      CLIENT_URL: http://localhost:5000
+
+volumes:
+  osfpm_data:

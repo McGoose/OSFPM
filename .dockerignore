@@ -1,0 +1,12 @@
+node_modules/
+data/
+client/dist/
+client/.vite/
+server/.env
+.env
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+.git/
+.gitignore
