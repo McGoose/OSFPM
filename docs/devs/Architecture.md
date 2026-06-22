@@ -98,6 +98,13 @@ SQLite database file lives at `server/osfpm.db`. Schema is managed via Drizzle O
 | `budget_categories`         | Per-project budget categories (copied from template on seed) |
 | `budget_lines`              | Per-project budget lines: qty × rate = total                 |
 | `invoices`                  | Invoice tracker; optionally linked to a budget line          |
+| `funding_sources`           | Funding tracker (crowdfunding, sponsors, in-kind, co-prod)   |
+| `crew_members`              | Cast and crew roster per project                             |
+| `scenes`                    | Scenes with Fountain content, metadata, page count           |
+| `breakdown_elements`        | Tagged elements per scene (cast, props, vehicles, etc.)      |
+| `events`                    | Calendar events (shoot days, meetings, etc.)                 |
+| `event_scenes`              | Many-to-many: events ↔ scenes                                |
+| `call_sheets`               | Per-shoot-day call sheet data (JSON blob)                    |
 
 ### Migration pattern
 

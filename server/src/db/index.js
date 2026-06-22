@@ -110,6 +110,21 @@ await tryAlter("ALTER TABLE budget_lines ADD COLUMN rate  REAL NOT NULL DEFAULT 
 await tryAlter("ALTER TABLE budget_lines ADD COLUMN total REAL NOT NULL DEFAULT 0")
 
 await client.execute(`
+  CREATE TABLE IF NOT EXISTS funding_sources (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    type TEXT NOT NULL DEFAULT 'other',
+    name TEXT NOT NULL DEFAULT '',
+    expected_amount REAL NOT NULL DEFAULT 0,
+    received_amount REAL NOT NULL DEFAULT 0,
+    notes TEXT DEFAULT '',
+    co_producer_id INTEGER,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+  )
+`)
+
+await client.execute(`
   CREATE TABLE IF NOT EXISTS invoices (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL,
@@ -270,6 +285,34 @@ await client.execute(`
     is_break INTEGER NOT NULL DEFAULT 0,
     notes TEXT DEFAULT '',
     sort_order INTEGER NOT NULL DEFAULT 0
+  )
+`)
+
+await client.execute(`
+  CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    user_id INTEGER,
+    department_id INTEGER,
+    title TEXT NOT NULL,
+    done INTEGER NOT NULL DEFAULT 0,
+    priority TEXT DEFAULT 'medium',
+    due_date TEXT,
+    sort_order INTEGER DEFAULT 0,
+    created_at INTEGER NOT NULL
+  )
+`)
+
+await tryAlter("ALTER TABLE departments ADD COLUMN task_permission TEXT DEFAULT 'all'")
+
+await client.execute(`
+  CREATE TABLE IF NOT EXISTS call_sheets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id INTEGER NOT NULL UNIQUE,
+    project_id INTEGER NOT NULL,
+    data TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER
   )
 `)
 

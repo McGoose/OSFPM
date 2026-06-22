@@ -1,6 +1,6 @@
 # User Guide
 
-*Version: 0.1.0 — Last updated: 2026-06-19*
+*Version: 0.2.2 — Last updated: 2026-06-22*
 
 ---
 

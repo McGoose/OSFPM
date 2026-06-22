@@ -70,10 +70,11 @@ router.put('/:deptId', requireAdmin, async (req, res) => {
   const [existing] = await db.select().from(departments).where(eq(departments.id, deptId))
   if (!existing || existing.projectId !== projectId) return res.status(404).json({ error: 'Not found' })
 
-  const { name, icon } = req.body
+  const { name, icon, taskPermission } = req.body
   const updates = {}
   if (name !== undefined) updates.name = name.trim()
   if (icon !== undefined) updates.icon = icon.trim()
+  if (taskPermission !== undefined) updates.taskPermission = taskPermission
 
   await db.update(departments).set(updates).where(eq(departments.id, deptId))
   const [updated] = await db.select().from(departments).where(eq(departments.id, deptId))

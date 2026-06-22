@@ -64,7 +64,7 @@ router.put('/:token', async (req, res) => {
 
   const updates = { availabilitySubmittedAt: new Date() }
   if (name?.trim()) updates.name = name.trim()
-  if (phone?.trim() !== undefined) updates.phone = phone?.trim() ?? ''
+  if (phone !== undefined) updates.phone = phone.trim()
 
   await db.update(potentialActors).set(updates).where(eq(potentialActors.id, actor.id))
 

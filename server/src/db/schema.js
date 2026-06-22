@@ -31,6 +31,7 @@ export const departments = sqliteTable('departments', {
   name: text('name').notNull(),
   icon: text('icon').notNull().default('📁'),
   sortOrder: integer('sort_order').notNull().default(0),
+  taskPermission: text('task_permission').default('all'), // 'all' | 'admin_only'
 })
 
 export const coproducers = sqliteTable('coproducers', {
@@ -194,6 +195,41 @@ export const castingSlots = sqliteTable('casting_slots', {
   isBreak: integer('is_break', { mode: 'boolean' }).notNull().default(false),
   notes: text('notes').default(''),
   sortOrder: integer('sort_order').notNull().default(0),
+})
+
+export const tasks = sqliteTable('tasks', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  projectId: integer('project_id').notNull(),
+  userId: integer('user_id'),
+  departmentId: integer('department_id'),
+  title: text('title').notNull(),
+  done: integer('done', { mode: 'boolean' }).notNull().default(false),
+  priority: text('priority').default('medium'),
+  dueDate: text('due_date'),
+  sortOrder: integer('sort_order').default(0),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+})
+
+export const callSheets = sqliteTable('call_sheets', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  eventId: integer('event_id').notNull().unique(),
+  projectId: integer('project_id').notNull(),
+  data: text('data').notNull().default('{}'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }),
+})
+
+export const fundingSources = sqliteTable('funding_sources', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  projectId: integer('project_id').notNull(),
+  type: text('type').notNull().default('other'), // crowdfunding | sponsor | in_kind | coprod | other
+  name: text('name').notNull().default(''),
+  expectedAmount: real('expected_amount').notNull().default(0),
+  receivedAmount: real('received_amount').notNull().default(0),
+  notes: text('notes').default(''),
+  coProducerId: integer('co_producer_id'),
+  sortOrder: integer('sort_order').notNull().default(0),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
 })
 
 export const invoices = sqliteTable('invoices', {

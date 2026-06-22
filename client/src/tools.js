@@ -10,9 +10,9 @@ export const TOOLS = [
   // ── Project-level tools ──────────────────────────────────────────────────
   {
     id: 'budget',
-    name: 'Budget',
+    name: 'Money',
     icon: '💰',
-    description: 'Plan costs with dept categories, track invoices, manage co-production splits.',
+    description: 'Budget plan, invoices, co-production splits, and funding income tracking.',
     route: ({ projectId }) => `/projects/${projectId}/budget`,
     scope: 'project',
     status: 'live',

@@ -2,7 +2,7 @@ import { Router } from 'express'
 import crypto from 'crypto'
 import { db } from '../db/index.js'
 import { potentialActors, actorEventAvailability, events } from '../db/schema.js'
-import { eq, and } from 'drizzle-orm'
+import { eq, and, desc } from 'drizzle-orm'
 import { sendOnboardingEmail, emailConfigured } from '../utils/email.js'
 
 const router = Router({ mergeParams: true })
@@ -34,8 +34,11 @@ router.post('/', async (req, res) => {
     notes: notes?.trim() ?? '',
     createdAt: new Date(),
   })
-  const all = await db.select().from(potentialActors).where(eq(potentialActors.projectId, pid(req)))
-  res.status(201).json(await withAvailability(all[all.length - 1]))
+  const [newActor] = await db.select().from(potentialActors)
+    .where(eq(potentialActors.projectId, pid(req)))
+    .orderBy(desc(potentialActors.id))
+    .limit(1)
+  res.status(201).json(await withAvailability(newActor))
 })
 
 // PUT /api/projects/:projectId/potential-actors/:actorId
@@ -97,6 +100,7 @@ router.post('/:actorId/availability-link', async (req, res) => {
         link,
         subject: `Casting availability — please indicate when you're free`,
         bodyText: `Please click the link below to tell us when you're available for casting.`,
+        buttonLabel: 'Casting availability →',
       })
     } catch (e) {
       console.error('Availability email failed:', e.message)

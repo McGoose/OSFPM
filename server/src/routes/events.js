@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { db } from '../db/index.js'
 import { events, eventAttendees, eventScenes, castingSlots, crewMembers } from '../db/schema.js'
-import { eq, and, inArray } from 'drizzle-orm'
+import { eq, and, desc } from 'drizzle-orm'
 import { requireAdmin } from '../middleware/auth.js'
 
 const router = Router({ mergeParams: true })
@@ -99,8 +99,8 @@ router.get('/:eventId', async (req, res) => {
   res.json(await enrichEvent(event))
 })
 
-// POST /api/projects/:projectId/events
-router.post('/', async (req, res) => {
+// POST /api/projects/:projectId/events — admin only
+router.post('/', requireAdmin, async (req, res) => {
   const projectId = pid(req)
   const { type, title, date, startTime, endTime, location, locationType, notes,
     slotDurationMinutes, breakAfterSlots, breakDurationMinutes,
@@ -141,8 +141,10 @@ router.post('/', async (req, res) => {
     createdAt: new Date(),
   })
 
-  const all = await db.select().from(events).where(eq(events.projectId, projectId))
-  const newEvent = all[all.length - 1]
+  const [newEvent] = await db.select().from(events)
+    .where(eq(events.projectId, projectId))
+    .orderBy(desc(events.id))
+    .limit(1)
 
   // Save attendees
   for (const a of attendees) {
@@ -170,8 +172,8 @@ router.post('/', async (req, res) => {
   res.status(201).json(await enrichEvent(newEvent))
 })
 
-// PUT /api/projects/:projectId/events/:eventId
-router.put('/:eventId', async (req, res) => {
+// PUT /api/projects/:projectId/events/:eventId — admin only
+router.put('/:eventId', requireAdmin, async (req, res) => {
   const projectId = pid(req)
   const eventId = parseInt(req.params.eventId)
   const [existing] = await db.select().from(events).where(eq(events.id, eventId))
@@ -191,8 +193,9 @@ router.put('/:eventId', async (req, res) => {
     if (dur > 720) return res.status(400).json({ error: 'Shoot days cannot exceed 12 hours' })
   }
 
-  if (newType === 'shoot_day' && attendees) {
-    const conflict = await checkShootDayGap(projectId, newDate, newStart, newEnd, attendees, eventId)
+  if (newType === 'shoot_day') {
+    const checkAttendees = attendees ?? await db.select().from(eventAttendees).where(eq(eventAttendees.eventId, eventId))
+    const conflict = await checkShootDayGap(projectId, newDate, newStart, newEnd, checkAttendees, eventId)
     if (conflict) {
       return res.status(409).json({
         error: `This shoot day conflicts with "${conflict.title}" on ${conflict.date} (${conflict.startTime}–${conflict.endTime}). A 12-hour gap is required.`,

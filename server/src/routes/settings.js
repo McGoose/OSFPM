@@ -6,7 +6,7 @@ import { requireAuth, requireAdmin } from '../middleware/auth.js'
 
 const router = Router()
 
-const PUBLIC_KEYS = ['org_name', 'accent_color']
+const PUBLIC_KEYS = ['org_name', 'accent_color', 'currency']
 const ALL_KEYS = ['org_name', 'currency', 'timezone', 'accent_color']
 
 export const DEFAULTS = {

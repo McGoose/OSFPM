@@ -16,6 +16,9 @@ import breakdownRouter from './routes/breakdown.js'
 import crewRouter from './routes/crew.js'
 import onboardingRouter from './routes/onboarding.js'
 import eventsRouter from './routes/events.js'
+import tasksRouter from './routes/tasks.js'
+import callSheetsRouter from './routes/callSheets.js'
+import fundingRouter from './routes/funding.js'
 import potentialActorsRouter from './routes/potentialActors.js'
 import actorAvailabilityRouter from './routes/actorAvailability.js'
 import preproductionRouter from './routes/preproduction.js'
@@ -47,6 +50,9 @@ app.use('/api/projects/:projectId/invoices', requireAuth, invoicesRouter)
 app.use('/api/projects/:projectId/breakdown', requireAuth, breakdownRouter)
 app.use('/api/projects/:projectId/crew', requireAuth, crewRouter)
 app.use('/api/projects/:projectId/events', requireAuth, eventsRouter)
+app.use('/api/projects/:projectId/tasks', requireAuth, tasksRouter)
+app.use('/api/projects/:projectId/call-sheets', requireAuth, callSheetsRouter)
+app.use('/api/projects/:projectId/funding', requireAuth, fundingRouter)
 app.use('/api/projects/:projectId/potential-actors', requireAuth, potentialActorsRouter)
 app.use('/api/preproduction', requireAuth, preproductionRouter)
 app.use('/api/production', requireAuth, productionRouter)

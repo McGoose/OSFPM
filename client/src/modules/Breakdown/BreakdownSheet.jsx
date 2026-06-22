@@ -156,9 +156,30 @@ function ElementsGrid({ scene, catDrafts, setCatDrafts, onAddElement, onDeleteEl
     elementsByCategory[cat.id] = scene.elements?.filter(e => e.category === cat.id) ?? []
   }
 
+  // Build render order: inject a group header before the first item in each group
+  const rendered = []
+  let lastGroup = null
+  for (const cat of BREAKDOWN_CATEGORIES) {
+    if (cat.group && cat.group !== lastGroup) {
+      rendered.push({ type: 'groupHeader', group: cat.group })
+      lastGroup = cat.group
+    } else if (!cat.group) {
+      lastGroup = null
+    }
+    rendered.push({ type: 'cat', cat })
+  }
+
   return (
     <div className="breakdown-categories">
-      {BREAKDOWN_CATEGORIES.map(cat => {
+      {rendered.map((item, idx) => {
+        if (item.type === 'groupHeader') {
+          return (
+            <div key={`grp-${item.group}`} className="breakdown-group-header">
+              {item.group}
+            </div>
+          )
+        }
+        const { cat } = item
         const els = elementsByCategory[cat.id]
         const draft = catDrafts[cat.id] ?? ''
 
@@ -209,6 +230,50 @@ function ElementsGrid({ scene, catDrafts, setCatDrafts, onAddElement, onDeleteEl
           </div>
         )
       })}
+    </div>
+  )
+}
+
+// ── Annotation view (elements panel + script side by side) ───────────────────
+
+function AnnotationView({ scene, onAddElement, onDeleteElement }) {
+  const elements = scene.elements ?? []
+
+  const byCategory = {}
+  for (const cat of BREAKDOWN_CATEGORIES) {
+    const els = elements.filter(e => e.category === cat.id)
+    if (els.length > 0) byCategory[cat.id] = { cat, els }
+  }
+
+  return (
+    <div className="annotation-layout">
+      <div className="annotation-legend">
+        <div className="annotation-legend-title">Elements</div>
+        {Object.keys(byCategory).length === 0 && (
+          <p style={{ fontSize: 12, color: 'var(--text-muted)', padding: '8px 0' }}>No elements tagged yet.</p>
+        )}
+        {Object.values(byCategory).map(({ cat, els }) => (
+          <div key={cat.id} className="annotation-legend-group">
+            <div className="annotation-legend-cat" style={{ color: cat.color }}>
+              <span className="annotation-legend-dot" style={{ background: cat.color }} />
+              {cat.label}
+            </div>
+            <ul className="annotation-legend-list">
+              {els.map(el => (
+                <li key={el.id} className="annotation-legend-item">
+                  {el.description}
+                  {onDeleteElement && (
+                    <button className="breakdown-element-delete" onClick={() => onDeleteElement(el.id)} title="Remove">×</button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+      <div className="annotation-script">
+        <ScriptView scene={scene} onAddElement={onAddElement} onDeleteElement={onDeleteElement} />
+      </div>
     </div>
   )
 }
@@ -377,11 +442,20 @@ export default function BreakdownSheet({
           📋 Elements
           {elementCount > 0 && <span className="budget-tab-count">{elementCount}</span>}
         </button>
+        {scene.content && (
+          <button
+            className={`budget-tab${tab === 'annotation' ? ' budget-tab--active' : ''}`}
+            onClick={() => setTab('annotation')}
+          >
+            🎨 Annotation
+          </button>
+        )}
       </div>
 
-      {tab === 'script' ? (
+      {tab === 'script' && (
         <ScriptView scene={scene} onAddElement={handleAddElement} onDeleteElement={handleDeleteElement} />
-      ) : (
+      )}
+      {tab === 'elements' && (
         <ElementsGrid
           scene={scene}
           catDrafts={catDrafts}
@@ -390,6 +464,9 @@ export default function BreakdownSheet({
           onDeleteElement={handleDeleteElement}
           onPatchElement={handlePatchElement}
         />
+      )}
+      {tab === 'annotation' && (
+        <AnnotationView scene={scene} onAddElement={handleAddElement} onDeleteElement={handleDeleteElement} />
       )}
     </div>
   )

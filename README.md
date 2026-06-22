@@ -1,78 +1,51 @@
 # Open Source Film Production Manager
 
-![Contributors](https://img.shields.io/github/contributors/McGoose/OSFPM)
-![Issues](https://img.shields.io/github/issues/McGoose/OSFPM)
-![Version](https://img.shields.io/badge/version-0.1.0-blue)
+![Version](https://img.shields.io/badge/version-0.2.x-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-A self-hosted, web-based application for managing all phases of film production — from script breakdown to final delivery.
-
-## Table of Contents
-
-1. [Introduction](#introduction)
-2. [Features](#features)
-3. [Tech Stack](#tech-stack)
-4. [Installation](#installation)
-5. [Development](#development)
-6. [Contributing](#contributing)
-7. [License](#license)
+A self-hosted, web-based application for managing all phases of film production — from script breakdown to final delivery. No subscriptions, no cloud lock-in, no per-seat fees.
 
 ---
 
-## Introduction
+## What's live
 
-OSFPM is a free, open-source alternative to expensive production management tools. It runs entirely on your own server — no subscriptions, no cloud lock-in, and no per-seat fees. Designed for indie productions, film schools, and anyone who wants full control over their production data.
+### App-level
+- Auth — login, first-run setup, JWT (httpOnly cookies), 7-day sessions
+- Role-based access control (`admin` / `crew`)
+- User management (admin CRUD)
+- Settings — org name, accent color, currency, timezone
 
----
+### Project tools
+| Tool | Description |
+|---|---|
+| **Money** | Budget planning (categories + lines), invoice tracker, co-production splits, funding tracker |
+| **Crew & Cast** | Full roster with roles, departments, character names, status |
+| **Calendar** | Project calendar — events, shoot days, attendees |
+| **Call Sheet** | Per-shoot-day multi-tab form + PDF download |
+| **Script Breakdown** | Scene list, per-scene element tagging (cast, props, vehicles, etc.), annotation view |
+| **To-Do** | Personal + per-department task lists with permission control |
+| **Meetings** | Meeting notes per project |
 
-## Features
-
-### Pre-Production *(v0.2.0)*
-- Script breakdown — scenes, characters, locations, props, costumes
-- Budget tracker with local currency support
-- Scheduling with calendar integration
-- Department reports
-- Crew management
-- Meeting tracker
-
-### Production *(v0.3.0)*
-- Call sheet creation and distribution
-- Dailies tracking (footage, metadata, backups)
-- Filming reports
-- Gear tracking
-- Crew monitoring and schedule adherence
-
-### Post-Production *(v0.4.0)*
-- Review note management
-- Media data organization and delivery scheduling
-- Collaboration tools for editors and VFX supervisors
-
-### Shared Tools *(v0.5.0)*
-- Centralized calendar
-- Contact book
-- To-do lists
-
-
-### Workspace Customization
-- Custom accent color and organization branding
-- Per-workspace currency and timezone settings
+### Department workspaces
+Each department has its own workspace with department-level tools.
 
 ---
 
-## Tech Stack
+## Stack
 
-| Layer    | Technology                        |
-|----------|-----------------------------------|
-| Frontend | React 18, Vite 6, React Router v6 |
-| Backend  | Node.js, Express 4                |
-| Database | SQLite via better-sqlite3         |
-| ORM      | Drizzle ORM                       |
-| Auth     | JWT (httpOnly cookies), bcryptjs  |
+| Layer | Technology |
+|---|---|
+| Frontend | React 18 + Vite 6, React Router v6 |
+| Backend | Node.js + Express 4 (ES modules) |
+| Database | SQLite via `@libsql/client`, Drizzle ORM v0.45.2 |
+| Auth | JWT in HttpOnly cookies, bcryptjs |
+| PDF | `@react-pdf/renderer` (client-side) |
 
 ---
 
-## Installation
+## Quick start
 
-Requirements: [Node.js](https://nodejs.org/) v18+
+**Requirements:** Node.js 18+, npm 9+
 
 ```bash
 git clone https://github.com/McGoose/OSFPM.git
@@ -89,58 +62,68 @@ JWT_SECRET=your-secret-here
 CLIENT_URL=http://localhost:3000
 ```
 
-Start the app:
-
 ```bash
-npm run dev
+npm run dev    # client :3000  +  server :5000
 ```
 
-Open [http://localhost:3000](http://localhost:3000). The first time you visit, you'll be guided through creating an admin account and configuring your workspace.
+Open [http://localhost:3000](http://localhost:3000). The first visit takes you to the Setup page to create your admin account.
+
+### Seed demo data
+
+```bash
+cd server
+node seed.js
+```
+
+Seeds *The Last Withdrawal* — a retired-pensioner heist comedy — with 20 fully written scenes, breakdown elements, cast, crew, and shoot days. Safe to re-run; deletes and recreates the project each time.
 
 ---
 
-## Development
+## Project structure
 
 ```
 OSFPM/
-├── client/          # React + Vite frontend
+├── client/            # React + Vite frontend
 │   └── src/
-│       ├── modules/ # Feature pages (Auth, Home, PreProduction, etc.)
-│       ├── shared/  # Layout, Calendar, Contacts, Todo
-│       └── context/ # AuthContext, SettingsContext
-├── server/          # Express backend
-│   └── src/
-│       ├── db/      # SQLite schema and Drizzle setup
-│       ├── middleware/
-│       └── routes/
-└── data/            # SQLite database file (gitignored)
+│       ├── App.jsx        # All routes
+│       ├── tools.js       # Central tool registry (single source of truth)
+│       └── modules/       # One directory per feature
+├── server/            # Express API
+│   ├── src/
+│   │   ├── db/schema.js   # Drizzle ORM table definitions
+│   │   ├── db/index.js    # DB init + migrations
+│   │   └── routes/        # One file per resource
+│   └── seed.js            # Demo data seeder
+├── docs/
+│   ├── user/User_guide.md
+│   ├── devs/Architecture.md
+│   └── features/
+├── data/              # SQLite database (git-ignored)
+│   └── osfpm.db
+├── README.md
+├── ROADMAP.md
+└── CHANGELOG.md
 ```
 
-Run both servers simultaneously:
-```bash
-npm run dev          # client :3000 + server :5000
-```
+---
 
-See [docs/devs/Architecture.md](docs/devs/Architecture.md) for the full architecture reference.
+## Docs
+
+- [User Guide](docs/user/User_guide.md)
+- [Architecture](docs/devs/Architecture.md)
+- [Roadmap](ROADMAP.md)
+- [Changelog](CHANGELOG.md)
 
 ---
 
 ## Contributing
 
-Contributions are welcome.
-
-1. Fork the repository
+1. Fork the repo
 2. Create a branch: `git checkout -b feature/<name>`
-3. Commit your changes: `git commit -m "Add <feature>"`
+3. Commit: `git commit -m "Add <feature>"`
 4. Push and open a pull request
 
-Please follow existing code style and keep commits focused.
-
----
-
-## License
-
-TBD
+Follow existing code style. Keep commits focused.
 
 ---
 
@@ -149,4 +132,8 @@ TBD
 - **Email**: peter.berberih@gmail.com
 - **Issues**: [GitHub Issues](https://github.com/McGoose/OSFPM/issues)
 
-Happy filming! 🎬
+---
+
+## License
+
+MIT — Happy filming!

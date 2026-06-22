@@ -1,100 +1,103 @@
 # OSFPM Roadmap
 
-*Last updated: 2026-06-19*
+*Last updated: 2026-06-22*
 
 ---
 
-## Current Status
+## Current status
 
-**Version:** 0.1.0 — Foundation complete. Auth, database, and workspace customization are live. Module UI is scaffolded; real features begin in v0.2.0.
+**Version 0.2.x** — Pre-production module live. Projects, departments, crew & cast, calendar, call sheets, script breakdown, budget/money, to-do, and meetings are all working.
 
 ---
 
-## Phase 1: Foundation and Architecture — v0.1.0 ✅
+## Phase 1 — Foundation ✅ v0.1.0
 
-- [x] Monorepo structure (npm workspaces: `client/`, `server/`)
-- [x] React 18 + Vite 6 frontend with React Router v6
-- [x] Node.js + Express 4 backend (ES modules)
-- [x] SQLite database via better-sqlite3 + Drizzle ORM
-- [x] JWT authentication (httpOnly cookies, 7-day sessions)
-- [x] Role-based access control foundation (`admin` / `crew`)
-- [x] First-run setup wizard (admin account + workspace config)
-- [x] Workspace customization: accent color, org name, currency, timezone
-- [x] Scaffolded UI for all three production modules + shared tools
+- [x] Monorepo (npm workspaces: `client/`, `server/`)
+- [x] React 18 + Vite 6, React Router v6
+- [x] Node.js + Express 4 (ES modules)
+- [x] SQLite + `@libsql/client` + Drizzle ORM
+- [x] JWT auth (HttpOnly cookies, 7-day sessions)
+- [x] Role-based access (`admin` / `crew`)
+- [x] First-run setup wizard
+- [x] App settings (org name, accent color, currency, timezone)
 - [x] Dark cinematic UI theme with live CSS variable theming
+- [x] User management
 
 ---
 
-## Phase 2: Pre-Production Module — v0.2.0
+## Phase 2 — Pre-Production Module ✅ v0.2.x
 
-- [ ] Film project creation (title, genre, format, technical details)
-- [ ] Script breakdown tool (scenes, characters, props, locations, costumes)
-- [ ] Budget tracker (estimated vs. actual costs, currency from workspace settings)
-- [ ] Department reports (customizable templates per department head)
-- [ ] Scheduling (calendar integration)
-- [ ] Crew management
-- [ ] Meeting tracker
-
----
-
-## Phase 3: Production Module — v0.3.0
-
-- [ ] Call sheet creation and distribution
-- [ ] Dailies management (footage tracking, metadata, backup status)
-- [ ] Filming reports (daily updates, automated and manual)
-- [ ] Gear tracking (equipment list with status)
-- [ ] Crew monitoring (availability, contact, on-set notes)
-- [ ] Schedule adherence tools
+- [x] Projects CRUD (title, genre, format, status, description)
+- [x] Project hub — tool strip + per-project departments
+- [x] Department workspaces (14 standard or custom)
+- [x] **Crew & Cast** — full roster, roles, departments, character names
+- [x] **Money** — budget categories + lines, invoice tracker, co-production splits
+- [x] Funding tracker (crowdfunding, sponsors, in-kind, co-production income)
+- [x] **Calendar** — events, shoot days, attendees
+- [x] **Call Sheet** — multi-tab form (times, cast, crew, dept notes, PDF export)
+- [x] **Script Breakdown** — scene list, per-scene element tagging by category
+- [x] Breakdown annotation view (script + highlighted elements side-by-side)
+- [x] Fountain screenplay import
+- [x] **To-Do** — personal + per-department task lists, permission control
+- [x] **Meetings** — meeting notes per project
+- [x] Central tool registry (`tools.js`)
+- [x] Demo seeder with full screenplay content
 
 ---
 
-## Phase 4: Post-Production Module — v0.4.0
+## Phase 3 — Production Tools — v0.3.0
+
+- [ ] Dailies tracker (footage, metadata, backup status)
+- [ ] Filming / shoot report (daily summary)
+- [ ] Gear tracking (equipment list + status)
+- [ ] On-set crew monitoring
+- [ ] Schedule adherence tracking
+
+---
+
+## Phase 4 — Post-Production Module — v0.4.0
 
 - [ ] Media data organization (footage, edits, metadata)
-- [ ] Review notes (annotate and track feedback on edits)
-- [ ] Delivery scheduling (timeline for editing, grade, VFX, sound)
+- [ ] Review notes (annotate and track feedback per cut)
+- [ ] Delivery schedule (editing, grade, VFX, sound, delivery)
 - [ ] Collaboration tools for editors and VFX supervisors
 
 ---
 
-## Phase 5: Shared Tools — v0.5.0
+## Phase 5 — Shared / Cross-Module Tools — v0.5.0
 
-- [ ] Unified calendar (events from all modules, per-user and global views)
+- [ ] Unified calendar (events from all modules in one view)
 - [ ] Contact book (cast, crew, vendors — linked to crew management)
-- [ ] To-do lists (cross-module task management with priorities and reminders)
-- [ ] Video leader creator
+- [ ] Video leader generator
 
 ---
 
-## Phase 6: UI Polish and Collaboration — v0.6.0
+## Phase 6 — Polish & Collaboration — v0.6.0
 
 - [ ] Responsive layout for tablets and mobile
-- [ ] Real-time multi-user updates (WebSockets or polling)
-- [ ] Change tracking and activity log
-- [ ] Notification system (in-app, optionally email via SMTP)
+- [ ] Real-time multi-user updates (WebSockets or SSE)
+- [ ] Activity log / change tracking
+- [ ] In-app notifications (optionally email via SMTP)
 - [ ] Logo upload for workspace branding
 
 ---
 
-## Phase 7: Beta Release — v1.0.0
+## Phase 7 — Beta Release — v1.0.0
 
-- [ ] Full end-to-end testing
+- [ ] End-to-end test coverage
 - [ ] Performance review and optimisation
-- [ ] Complete user documentation
-- [ ] Complete developer/self-hosting documentation
+- [ ] Complete user and self-hosting documentation
 - [ ] Stable API with versioning
 
 ---
 
-## Future Enhancements
+## Future ideas
 
-- **Mobile app** — React Native companion for on-set use
-- **AI-assisted tools** — script breakdown automation, budget suggestions, scheduling optimisation
-- **Third-party integrations** — cloud storage, external calendar sync (iCal/Google)
-- **Plugin system** — allow developers to extend functionality with custom modules
+- Mobile app (React Native) for on-set use
+- AI-assisted script breakdown and budget estimation
+- Third-party integrations (cloud storage, iCal/Google Calendar sync)
+- Plugin system for custom modules
 
 ---
 
-Contributions and feature suggestions welcome via [GitHub Issues](https://github.com/McGoose/OSFPM/issues).
-
-Happy filming! 🎬
+Suggestions and contributions welcome via [GitHub Issues](https://github.com/McGoose/OSFPM/issues).

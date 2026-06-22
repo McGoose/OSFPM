@@ -41,6 +41,7 @@ export default function Budget() {
   const [categories, setCategories] = useState([])
   const [invoiceList, setInvoiceList] = useState([])
   const [coprods, setCoprods] = useState([])
+  const [funding, setFunding] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -49,6 +50,10 @@ export default function Budget() {
   const [addingInv, setAddingInv] = useState(false)
   const [invFilter, setInvFilter] = useState('all')
   const [addCoprodName, setAddCoprodName] = useState('')
+
+  // Funding form state
+  const [addingFunding, setAddingFunding] = useState(false)
+  const [newFunding, setNewFunding] = useState({ type: 'crowdfunding', name: '', expectedAmount: '', receivedAmount: '', notes: '', coProducerId: '' })
 
   const fmt = useCallback((n) =>
     new Intl.NumberFormat(undefined, {
@@ -67,15 +72,17 @@ export default function Budget() {
 
   const load = useCallback(async () => {
     try {
-      const [bRes, iRes, cRes] = await Promise.all([
+      const [bRes, iRes, cRes, fRes] = await Promise.all([
         fetch(`/api/projects/${id}/budget`, { credentials: 'include' }),
         fetch(`/api/projects/${id}/invoices`, { credentials: 'include' }),
         fetch(`/api/projects/${id}/coproducers`, { credentials: 'include' }),
+        fetch(`/api/projects/${id}/funding`, { credentials: 'include' }),
       ])
-      const [bData, iData, cData] = await Promise.all([bRes.json(), iRes.json(), cRes.json()])
+      const [bData, iData, cData, fData] = await Promise.all([bRes.json(), iRes.json(), cRes.json(), fRes.json()])
       setCategories(Array.isArray(bData) ? bData : [])
       setInvoiceList(Array.isArray(iData) ? iData : [])
       setCoprods(Array.isArray(cData) ? cData : [])
+      setFunding(Array.isArray(fData) ? fData : [])
     } catch {
       setError('Failed to load budget data')
     } finally {
@@ -225,6 +232,39 @@ export default function Budget() {
     setCoprods(c => c.filter(r => r.id !== cpId))
   }
 
+  // ── Funding actions ───────────────────────────────────────────────────────
+
+  const submitFunding = async (e) => {
+    e.preventDefault()
+    const res = await fetch(`/api/projects/${id}/funding`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ ...newFunding, coProducerId: newFunding.coProducerId || null }),
+    })
+    const data = await res.json()
+    if (!res.ok) { setError(data.error); return }
+    setFunding(f => [...f, data])
+    setNewFunding({ type: 'crowdfunding', name: '', expectedAmount: '', receivedAmount: '', notes: '', coProducerId: '' })
+    setAddingFunding(false)
+  }
+
+  const updateFundingField = async (fsId, field, value) => {
+    setFunding(f => f.map(r => r.id !== fsId ? r : { ...r, [field]: value }))
+    await fetch(`/api/projects/${id}/funding/${fsId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ [field]: value === '' ? null : value }),
+    })
+  }
+
+  const deleteFunding = async (fsId, name) => {
+    if (!confirm(`Remove "${name || 'this source'}"?`)) return
+    await fetch(`/api/projects/${id}/funding/${fsId}`, { method: 'DELETE', credentials: 'include' })
+    setFunding(f => f.filter(r => r.id !== fsId))
+  }
+
   // ── Computed totals ────────────────────────────────────────────────────────
 
   const sectionTotals = SECTIONS.reduce((acc, s) => { acc[s.key] = 0; return acc }, {})
@@ -253,7 +293,7 @@ export default function Budget() {
         <Link to={`/projects/${id}`} className="back-link">← Overview</Link>
         <div className="page-header-row">
           <div>
-            <h1>Budget Tracker</h1>
+            <h1>Money</h1>
             <p className="page-subtitle">{currentProject?.title}</p>
           </div>
         </div>
@@ -295,6 +335,10 @@ export default function Budget() {
         <button className={`budget-tab${tab === 'invoices' ? ' budget-tab--active' : ''}`} onClick={() => setTab('invoices')}>
           Invoices
           {invoiceList.length > 0 && <span className="budget-tab-count">{invoiceList.length}</span>}
+        </button>
+        <button className={`budget-tab${tab === 'funding' ? ' budget-tab--active' : ''}`} onClick={() => setTab('funding')}>
+          Funding
+          {funding.length > 0 && <span className="budget-tab-count">{funding.length}</span>}
         </button>
       </div>
 
@@ -643,6 +687,173 @@ export default function Budget() {
           )}
         </div>
       )}
+
+      {/* ── FUNDING TAB ── */}
+      {tab === 'funding' && (() => {
+        const FUNDING_TYPES = [
+          { value: 'crowdfunding', label: 'Crowdfunding' },
+          { value: 'sponsor',      label: 'Sponsor' },
+          { value: 'in_kind',      label: 'In-Kind Sponsor' },
+          { value: 'coprod',       label: 'Co-production' },
+          { value: 'other',        label: 'Other' },
+        ]
+        const totalExpected = funding.reduce((s, r) => s + (parseFloat(r.expectedAmount) || 0), 0)
+        const totalReceived = funding.reduce((s, r) => s + (parseFloat(r.receivedAmount) || 0), 0)
+
+        return (
+          <div>
+            {/* Summary bar */}
+            {funding.length > 0 && (
+              <div className="inv-summary-bar">
+                <div className="inv-summary-item">
+                  Expected income: <strong>{fmt(totalExpected)}</strong>
+                </div>
+                <div className="inv-summary-item inv-summary-total">
+                  Received so far: <strong>{fmt(totalReceived)}</strong>
+                </div>
+                {totalExpected > 0 && (
+                  <div className="inv-summary-item" style={{ color: totalReceived >= totalExpected ? '#22c55e' : 'var(--text-muted)' }}>
+                    {Math.round(totalReceived / totalExpected * 100)}% received
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Toolbar */}
+            <div className="inv-toolbar">
+              <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                Track all income sources — crowdfunding, sponsors, in-kind contributions, and co-production deals.
+              </div>
+              {isAdmin && (
+                <button className="btn-primary" style={{ width: 'auto', padding: '7px 16px', fontSize: 13 }} onClick={() => setAddingFunding(v => !v)}>
+                  {addingFunding ? 'Cancel' : '+ Add Source'}
+                </button>
+              )}
+            </div>
+
+            {/* Add form */}
+            {addingFunding && isAdmin && (
+              <form className="inv-add-form" onSubmit={submitFunding}>
+                <div className="inv-add-grid">
+                  <div className="field" style={{ marginBottom: 0 }}>
+                    <label>Type</label>
+                    <select value={newFunding.type} onChange={e => setNewFunding(v => ({ ...v, type: e.target.value }))}>
+                      {FUNDING_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                    </select>
+                  </div>
+                  <div className="field" style={{ marginBottom: 0 }}>
+                    <label>Name / Source</label>
+                    <input value={newFunding.name} onChange={e => setNewFunding(v => ({ ...v, name: e.target.value }))} placeholder="e.g. Kickstarter campaign" required />
+                  </div>
+                  <div className="field" style={{ marginBottom: 0 }}>
+                    <label>Expected ({settings.currency || 'USD'})</label>
+                    <input type="number" min="0" step="any" value={newFunding.expectedAmount} onChange={e => setNewFunding(v => ({ ...v, expectedAmount: e.target.value }))} placeholder="0" />
+                  </div>
+                  <div className="field" style={{ marginBottom: 0 }}>
+                    <label>Received ({settings.currency || 'USD'})</label>
+                    <input type="number" min="0" step="any" value={newFunding.receivedAmount} onChange={e => setNewFunding(v => ({ ...v, receivedAmount: e.target.value }))} placeholder="0" />
+                  </div>
+                  {newFunding.type === 'coprod' && coprods.length > 0 && (
+                    <div className="field" style={{ marginBottom: 0 }}>
+                      <label>Co-producer</label>
+                      <select value={newFunding.coProducerId} onChange={e => setNewFunding(v => ({ ...v, coProducerId: e.target.value }))}>
+                        <option value="">— None —</option>
+                        {coprods.map(cp => <option key={cp.id} value={cp.id}>{cp.name}</option>)}
+                      </select>
+                    </div>
+                  )}
+                  <div className="field" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                    <label>Notes</label>
+                    <input value={newFunding.notes} onChange={e => setNewFunding(v => ({ ...v, notes: e.target.value }))} placeholder="Campaign URL, contact, terms…" />
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
+                  <button type="submit" className="btn-primary" style={{ width: 'auto', padding: '8px 20px' }}>Add Source</button>
+                  <button type="button" className="btn-secondary" style={{ width: 'auto', padding: '8px 16px' }} onClick={() => setAddingFunding(false)}>Cancel</button>
+                </div>
+              </form>
+            )}
+
+            {/* Funding table */}
+            {funding.length === 0 ? (
+              <div className="empty-state" style={{ padding: '48px 20px' }}>
+                <div className="empty-state-icon">💸</div>
+                <p>No funding sources recorded yet.</p>
+              </div>
+            ) : (
+              <div className="budget-table-wrap" style={{ marginTop: 0 }}>
+                <table className="budget-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: '14%' }}>Type</th>
+                      <th style={{ width: '22%' }}>Name / Source</th>
+                      <th className="budget-col-num" style={{ width: '14%' }}>Expected</th>
+                      <th className="budget-col-num" style={{ width: '14%' }}>Received</th>
+                      <th style={{ width: '14%' }}>Co-producer</th>
+                      <th style={{ width: '17%' }}>Notes</th>
+                      <th className="budget-col-act"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {funding.map(fs => {
+                      const typeLabel = FUNDING_TYPES.find(t => t.value === fs.type)?.label ?? fs.type
+                      const linkedCp = coprods.find(cp => cp.id === fs.coProducerId)
+                      return (
+                        <tr key={fs.id} className="budget-line-row">
+                          <td>
+                            <select
+                              className="budget-unit-select"
+                              value={fs.type}
+                              onChange={e => updateFundingField(fs.id, 'type', e.target.value)}
+                            >
+                              {FUNDING_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                            </select>
+                          </td>
+                          <td>
+                            <input className="budget-inline-input" defaultValue={fs.name} onBlur={e => updateFundingField(fs.id, 'name', e.target.value)} placeholder="Source name" />
+                          </td>
+                          <td>
+                            <input className="budget-inline-input budget-num-input" type="number" min="0" step="any" defaultValue={fs.expectedAmount} onBlur={e => updateFundingField(fs.id, 'expectedAmount', parseFloat(e.target.value) || 0)} placeholder="0" />
+                          </td>
+                          <td>
+                            <input className="budget-inline-input budget-num-input" type="number" min="0" step="any" defaultValue={fs.receivedAmount} onBlur={e => updateFundingField(fs.id, 'receivedAmount', parseFloat(e.target.value) || 0)} placeholder="0" />
+                          </td>
+                          <td>
+                            {fs.type === 'coprod' ? (
+                              <select
+                                className="budget-unit-select"
+                                value={fs.coProducerId || ''}
+                                onChange={e => updateFundingField(fs.id, 'coProducerId', e.target.value || null)}
+                              >
+                                <option value="">— None —</option>
+                                {coprods.map(cp => <option key={cp.id} value={cp.id}>{cp.name}</option>)}
+                              </select>
+                            ) : (
+                              <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>—</span>
+                            )}
+                          </td>
+                          <td>
+                            <input className="budget-inline-input" defaultValue={fs.notes || ''} onBlur={e => updateFundingField(fs.id, 'notes', e.target.value)} placeholder="Notes…" />
+                          </td>
+                          <td className="budget-col-act">
+                            {isAdmin && <button className="budget-delete-btn" onClick={() => deleteFunding(fs.id, fs.name)}>✕</button>}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                    <tr className="budget-section-total">
+                      <td colSpan={2}>Total</td>
+                      <td className="budget-num">{fmt(totalExpected)}</td>
+                      <td className="budget-num">{fmt(totalReceived)}</td>
+                      <td colSpan={3}></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )
+      })()}
 
       {/* ── CO-PRODUCTION SPLIT ── */}
       <div className="coprod-section">

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -132,17 +132,6 @@ function ScenePicker({ scenes, value, onChange }) {
 // ── Casting slot list ────────────────────────────────────────────────────────
 
 function CastingSlots({ event, potentialActors, onSlotChange }) {
-  const [avail, setAvail] = useState({}) // { actorId: Set<eventId> }
-
-  useEffect(() => {
-    // Flatten availability from potentialActors
-    const map = {}
-    for (const a of potentialActors) {
-      map[a.id] = new Set((a.availability ?? []).filter(av => av.available && av.eventId === event.id).map(av => av.actorId))
-    }
-    setAvail(map)
-  }, [potentialActors, event.id])
-
   const availableActors = potentialActors.filter(a =>
     (a.availability ?? []).some(av => av.eventId === event.id && av.available)
   )
@@ -396,6 +385,7 @@ function EventForm({ initial, departments, crew, scenes, potentialActors, projec
 // ── Event detail ─────────────────────────────────────────────────────────────
 
 function EventDetail({ event, departments, crew, scenes, potentialActors, projectId, onEdit, onDelete, onSlotChange, isAdmin }) {
+  const navigate = useNavigate()
   const cfg = TYPE_CFG[event.type] ?? TYPE_CFG.meeting
 
   const attendeeDepts   = (event.attendees ?? []).filter(a => a.type === 'department')
@@ -468,6 +458,14 @@ function EventDetail({ event, departments, crew, scenes, potentialActors, projec
 
       <div className="cal-detail-actions">
         <button className="btn-secondary" onClick={() => onEdit(event)}>Edit event</button>
+        {event.type === 'shoot_day' && isAdmin && (
+          <button
+            className="btn-primary"
+            onClick={() => navigate(`/projects/${projectId}/call-sheet/${event.id}`)}
+          >
+            Call Sheet →
+          </button>
+        )}
       </div>
     </div>
   )
@@ -643,27 +641,30 @@ export default function ProjectCalendar() {
   const [editing, setEditing] = useState(null)   // event being edited (or null for new)
   const [selected, setSelected] = useState(null) // selected event for detail
   const [formDate, setFormDate] = useState(null)
-  const [formType, setFormType] = useState('meeting')
   const [isAdmin, setIsAdmin]   = useState(false)
 
   const load = useCallback(async () => {
-    const [evRes, deptRes, crewRes, bdRes, actRes, meRes] = await Promise.all([
+    const [evRes, deptRes, crewRes, bdRes, actRes] = await Promise.all([
       fetch(`/api/projects/${projectId}/events`, { credentials: 'include' }),
       fetch(`/api/projects/${projectId}/departments`, { credentials: 'include' }),
       fetch(`/api/projects/${projectId}/crew`, { credentials: 'include' }),
       fetch(`/api/projects/${projectId}/breakdown`, { credentials: 'include' }),
       fetch(`/api/projects/${projectId}/potential-actors`, { credentials: 'include' }),
-      fetch('/api/auth/me', { credentials: 'include' }),
     ])
     if (evRes.ok)   setEvents(await evRes.json())
     if (deptRes.ok) setDepartments(await deptRes.json())
     if (crewRes.ok) setCrew(await crewRes.json())
     if (bdRes.ok)   setScenes((await bdRes.json()).map(s => ({ id: s.id, sceneNumber: s.sceneNumber, intExt: s.intExt, location: s.location, timeOfDay: s.timeOfDay, pages: s.pages })))
     if (actRes.ok)  setPotentialActors(await actRes.json())
-    if (meRes.ok)   { const me = await meRes.json(); setIsAdmin(me.role === 'admin') }
   }, [projectId])
 
   useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    fetch('/api/auth/me', { credentials: 'include' })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data) setIsAdmin(data.user?.role === 'admin') })
+  }, [])
 
   const prevMonth = () => { if (month === 0) { setMonth(11); setYear(y => y - 1) } else setMonth(m => m - 1) }
   const nextMonth = () => { if (month === 11) { setMonth(0); setYear(y => y + 1) } else setMonth(m => m + 1) }
@@ -725,7 +726,7 @@ export default function ProjectCalendar() {
 
   const formInitial = editing
     ? { ...editing }
-    : blankForm(formType, formDate)
+    : blankForm('meeting', formDate)
 
   return (
     <div className="cal-page">

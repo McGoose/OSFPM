@@ -14,14 +14,15 @@ function createTransport() {
   })
 }
 
-export async function sendOnboardingEmail({ to, name, projectTitle, role, link, subject, bodyText }) {
+export async function sendOnboardingEmail({ to, name, projectTitle, role, link, subject, bodyText, buttonLabel }) {
   const transport = createTransport()
   if (!transport) return false
 
   const from = process.env.SMTP_FROM ?? process.env.SMTP_USER ?? 'noreply@osfpm.local'
 
   const resolvedSubject = subject ?? `Complete your onboarding for ${projectTitle}`
-  const resolvedBody = bodyText ?? `Please complete your onboarding by visiting the link below.`
+  const resolvedBody = bodyText ?? `Please take a few minutes to fill out your onboarding form. This helps the production team with scheduling, safety, and catering.`
+  const resolvedButton = buttonLabel ?? 'Complete onboarding →'
 
   await transport.sendMail({
     from,
@@ -51,14 +52,14 @@ export async function sendOnboardingEmail({ to, name, projectTitle, role, link, 
         You've been added as <strong style="color:#e0e0e0">${role}</strong>.
       </p>
       <p style="margin:0 0 28px;font-size:14px;line-height:1.7;color:#bbb">
-        Please take a few minutes to fill out your onboarding form. This helps the production team with scheduling, safety, and catering.
+        ${resolvedBody}
       </p>
       <a href="${link}"
          style="display:inline-block;padding:13px 26px;background:#c9a84c;color:#000;font-size:14px;font-weight:700;text-decoration:none;border-radius:6px">
-        Complete onboarding →
+        ${resolvedButton}
       </a>
       <p style="margin:28px 0 0;font-size:12px;color:#444;line-height:1.6">
-        This link is personal to you — please don't share it. It expires in 7 days.<br>
+        This link is personal to you — please don't share it.<br>
         If the button doesn't work, copy this address into your browser:<br>
         <span style="color:#666">${link}</span>
       </p>

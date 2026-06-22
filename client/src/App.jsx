@@ -14,6 +14,7 @@ import Budget from './modules/Budget/Budget'
 import Breakdown from './modules/Breakdown/Breakdown'
 import Crew from './modules/Crew/Crew'
 import ProjectCalendar from './modules/Calendar/ProjectCalendar'
+import CallSheetEditor from './modules/CallSheet/CallSheetEditor'
 import ActorAvailability from './modules/Actors/ActorAvailability'
 import Department from './modules/Departments/Department'
 import Calendar from './shared/Calendar/Calendar'
@@ -52,6 +53,7 @@ export default function App() {
                 <Route path="projects/:id/breakdown" element={<Breakdown />} />
                 <Route path="projects/:id/crew" element={<Crew />} />
               <Route path="projects/:id/calendar" element={<ProjectCalendar />} />
+              <Route path="projects/:id/call-sheet/:eventId" element={<CallSheetEditor />} />
                 <Route path="projects/:id/departments/:deptId" element={<Department />} />
                 {/* Legacy redirects so old bookmarks still work */}
                 <Route path="projects/:id/preproduction/budget" element={<Navigate to="../budget" relative="path" replace />} />
