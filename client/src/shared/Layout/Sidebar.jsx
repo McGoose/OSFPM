@@ -17,7 +17,7 @@ const projectTools = [
   { to: '/calendar', label: 'Calendar', icon: '📅' },
 ]
 
-export default function Sidebar() {
+export default function Sidebar({ open, onClose }) {
   const { user, logout } = useAuth()
   const { settings } = useSettings()
   const { currentProject, currentProjectId, departments } = useProject()
@@ -33,6 +33,7 @@ export default function Sidebar() {
       key={to}
       to={to}
       end={end}
+      onClick={onClose}
       className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}
     >
       <span className="icon">{icon}</span>
@@ -41,12 +42,12 @@ export default function Sidebar() {
   )
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar${open ? ' sidebar--open' : ''}`}>
       <div className="sidebar-nav">
 
         {currentProject ? (
           <>
-            <Link to="/projects" className="sidebar-link sidebar-back">
+            <Link to="/projects" onClick={onClose} className="sidebar-link sidebar-back">
               <span className="icon">←</span>
               Projects
             </Link>
@@ -61,6 +62,7 @@ export default function Sidebar() {
                 key={t.to}
                 to={`/projects/${currentProjectId}${t.to}`}
                 end={t.end}
+                onClick={onClose}
                 className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}
               >
                 <span className="icon">{t.icon}</span>
@@ -77,6 +79,7 @@ export default function Sidebar() {
                   <NavLink
                     key={dept.id}
                     to={`/projects/${currentProjectId}/departments/${dept.id}`}
+                    onClick={onClose}
                     className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}
                   >
                     <span className="icon">{dept.icon}</span>

@@ -2878,3 +2878,104 @@ textarea:focus { border-color: var(--accent); }
   margin-top: 4px;
 }
 .breakdown-group-header:first-child { margin-top: 0; border-top: none; }
+
+/* ═══════════════════════════════════════════════════════
+   MOBILE RESPONSIVENESS
+═══════════════════════════════════════════════════════ */
+
+/* Hamburger — hidden on desktop */
+.header-menu-btn {
+  display: none;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px 8px;
+  margin-right: 12px;
+  border-radius: var(--radius);
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+/* Sidebar overlay backdrop */
+.sidebar-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 199;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+.sidebar-overlay--open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (max-width: 768px) {
+  /* Show hamburger */
+  .header-menu-btn { display: flex; align-items: center; }
+
+  /* Sidebar drawer */
+  .sidebar {
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    z-index: 200;
+  }
+  .sidebar--open { transform: none; }
+
+  /* Main content fills full width */
+  .main-content {
+    margin-left: 0;
+    padding: 20px 16px;
+  }
+
+  /* Grids collapse to single column */
+  .card-grid { grid-template-columns: 1fr; }
+  .dept-grid { grid-template-columns: 1fr; }
+  .proj-tools-row { grid-template-columns: repeat(2, 1fr); }
+
+  /* Typography */
+  .page-header h1 { font-size: 18px; }
+
+  /* Form field rows → stack */
+  .field-row { grid-template-columns: 1fr; }
+
+  /* All tables get a min-width so they scroll rather than squash */
+  table { min-width: 520px; }
+  .table-scroll,
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+  /* Dashboard widgets stack */
+  .db-widgets { flex-direction: column; }
+  .db-widget { width: 100% !important; max-width: 100%; }
+
+  /* Script tool sidebar stacks below content */
+  .script-panel { flex-direction: column; }
+  .script-sidebar {
+    width: 100%;
+    max-width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* Auth pages */
+  .auth-card { margin: 16px; padding: 24px 20px; }
+
+  /* Settings */
+  .settings-form { max-width: 100%; }
+
+  /* Call sheet */
+  .cs-layout { flex-direction: column; }
+  .cs-sidebar { width: 100%; max-width: 100%; }
+
+  /* Button groups wrap */
+  .btn-group { flex-wrap: wrap; }
+}
+
+@media (max-width: 480px) {
+  .main-content { padding: 14px 12px; }
+  .proj-tools-row { grid-template-columns: 1fr; }
+  .page-header h1 { font-size: 16px; }
+}

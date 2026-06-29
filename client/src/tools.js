@@ -9,6 +9,15 @@
 export const TOOLS = [
   // ── Project-level tools ──────────────────────────────────────────────────
   {
+    id: 'script',
+    name: 'Script',
+    icon: '📜',
+    description: 'Import and manage script versions — scriptments, drafts, and shooting scripts with DGA revision colors.',
+    route: ({ projectId }) => `/projects/${projectId}/script`,
+    scope: 'project',
+    status: 'live',
+  },
+  {
     id: 'budget',
     name: 'Money',
     icon: '💰',
@@ -21,8 +30,17 @@ export const TOOLS = [
     id: 'breakdown',
     name: 'Breakdown',
     icon: '📋',
-    description: 'Scene-by-scene script breakdown — cast, props, costume, VFX, and all department elements.',
+    description: 'Scene-by-scene breakdown — tag cast, props, costume, VFX, and all department elements. Driven by shooting scripts from the Script tool.',
     route: ({ projectId }) => `/projects/${projectId}/breakdown`,
+    scope: 'project',
+    status: 'live',
+  },
+  {
+    id: 'reports',
+    name: 'Reports',
+    icon: '📊',
+    description: 'Sound reports, camera reports, and daily progress reports — one per shoot day.',
+    route: ({ projectId }) => `/projects/${projectId}/reports`,
     scope: 'project',
     status: 'live',
   },

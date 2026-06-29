@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { db } from '../db/index.js'
-import { scenes, breakdownElements, scripts } from '../db/schema.js'
+import { scenes, breakdownElements } from '../db/schema.js'
 import { eq, asc } from 'drizzle-orm'
 import { requireAdmin } from '../middleware/auth.js'
 
@@ -22,92 +22,6 @@ router.get('/', async (req, res) => {
   res.json(sceneRows.map(s => ({
     ...s,
     elements: elementRows.filter(e => e.sceneId === s.id),
-  })))
-})
-
-// POST /api/projects/:projectId/breakdown/import
-// Accepts fountain-parsed scenes from the client and bulk-creates them
-router.post('/import', requireAdmin, async (req, res) => {
-  const projectId = pid(req)
-  const { filename, rawContent, scenes: incoming, autoElements, replaceExisting } = req.body
-
-  if (!Array.isArray(incoming) || incoming.length === 0) {
-    return res.status(400).json({ error: 'No scenes provided' })
-  }
-
-  // Store / replace the raw script file
-  await db.delete(scripts).where(eq(scripts.projectId, projectId))
-  await db.insert(scripts).values({
-    projectId,
-    filename: filename ?? 'script.fountain',
-    rawContent: rawContent ?? '',
-    uploadedAt: new Date(),
-  })
-
-  // Optionally wipe existing scenes + elements
-  if (replaceExisting) {
-    await db.delete(breakdownElements).where(eq(breakdownElements.projectId, projectId))
-    await db.delete(scenes).where(eq(scenes.projectId, projectId))
-  }
-
-  // Determine base sort order (for append mode)
-  const existing = await db.select().from(scenes).where(eq(scenes.projectId, projectId))
-  const baseOrder = existing.reduce((m, s) => Math.max(m, s.sortOrder), 0)
-
-  // Insert scenes
-  for (let i = 0; i < incoming.length; i++) {
-    const s = incoming[i]
-    await db.insert(scenes).values({
-      projectId,
-      sceneNumber: String(s.sceneNumber ?? i + 1),
-      intExt: s.intExt ?? 'INT',
-      location: s.location ?? '',
-      timeOfDay: s.timeOfDay ?? 'DAY',
-      description: s.description ?? '',
-      content: s.content ?? '',
-      pages: Number(s.pages) || 1,
-      sortOrder: baseOrder + (i + 1) * 10,
-    })
-  }
-
-  // Fetch all scenes now (in order) to map sceneIndex → id
-  const allScenes = await db.select().from(scenes)
-    .where(eq(scenes.projectId, projectId))
-    .orderBy(asc(scenes.sortOrder))
-
-  // appendOffset: where the newly inserted scenes begin in allScenes
-  const appendOffset = replaceExisting ? 0 : allScenes.length - incoming.length
-
-  // Insert auto-detected elements
-  if (Array.isArray(autoElements)) {
-    for (const el of autoElements) {
-      const target = allScenes[appendOffset + el.sceneIndex]
-      if (!target) continue
-      const elRows = await db.select().from(breakdownElements)
-        .where(eq(breakdownElements.sceneId, target.id))
-      const maxOrder = elRows.filter(e => e.category === el.category)
-        .reduce((m, e) => Math.max(m, e.sortOrder), 0)
-      await db.insert(breakdownElements).values({
-        sceneId: target.id,
-        projectId,
-        category: el.category,
-        description: el.description,
-        sortOrder: maxOrder + 10,
-      })
-    }
-  }
-
-  // Return complete scene list with elements
-  const finalScenes = await db.select().from(scenes)
-    .where(eq(scenes.projectId, projectId))
-    .orderBy(asc(scenes.sortOrder))
-  const allElements = await db.select().from(breakdownElements)
-    .where(eq(breakdownElements.projectId, projectId))
-    .orderBy(asc(breakdownElements.sortOrder))
-
-  res.json(finalScenes.map(s => ({
-    ...s,
-    elements: allElements.filter(e => e.sceneId === s.id),
   })))
 })
 

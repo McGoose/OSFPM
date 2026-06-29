@@ -106,8 +106,15 @@ export const crewMembers = sqliteTable('crew_members', {
 export const scripts = sqliteTable('scripts', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   projectId: integer('project_id').notNull(),
+  type: text('type').notNull().default('shooting_script'), // 'scriptment' | 'draft' | 'shooting_script'
+  versionNumber: integer('version_number').notNull().default(1),
+  colorRevision: text('color_revision').notNull().default('white'), // DGA system, shooting scripts only
+  title: text('title').notNull().default(''),
   filename: text('filename').notNull().default(''),
+  format: text('format').notNull().default('fountain'), // 'fountain' | 'fdx' | 'fadein' | 'xml'
   rawContent: text('raw_content').notNull().default(''),
+  scenesData: text('scenes_data').notNull().default('[]'), // JSON array of parsed scenes
+  notes: text('notes').default(''),
   uploadedAt: integer('uploaded_at', { mode: 'timestamp' }).notNull(),
 })
 
@@ -121,6 +128,7 @@ export const scenes = sqliteTable('scenes', {
   description: text('description').notNull().default(''),
   content: text('content').default(''),
   pages: real('pages').notNull().default(1),
+  scriptVersionId: integer('script_version_id'), // FK to scripts.id — null if added manually
   sortOrder: integer('sort_order').notNull().default(0),
 })
 
@@ -230,6 +238,34 @@ export const fundingSources = sqliteTable('funding_sources', {
   coProducerId: integer('co_producer_id'),
   sortOrder: integer('sort_order').notNull().default(0),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+})
+
+export const soundReports = sqliteTable('sound_reports', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  projectId: integer('project_id').notNull(),
+  eventId: integer('event_id').notNull().unique(),
+  csvData: text('csv_data').notNull().default('[]'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }),
+})
+
+export const cameraReports = sqliteTable('camera_reports', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  projectId: integer('project_id').notNull(),
+  eventId: integer('event_id').notNull().unique(),
+  setup: text('setup').notNull().default('{}'),
+  takes: text('takes').notNull().default('[]'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }),
+})
+
+export const dailyProgressReports = sqliteTable('daily_progress_reports', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  projectId: integer('project_id').notNull(),
+  eventId: integer('event_id').notNull().unique(),
+  data: text('data').notNull().default('{}'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }),
 })
 
 export const invoices = sqliteTable('invoices', {

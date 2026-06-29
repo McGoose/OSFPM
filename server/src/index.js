@@ -15,11 +15,13 @@ import coproducersRouter from './routes/coproducers.js'
 import invoicesRouter from './routes/invoices.js'
 import departmentsRouter from './routes/departments.js'
 import breakdownRouter from './routes/breakdown.js'
+import scriptsRouter from './routes/scripts.js'
 import crewRouter from './routes/crew.js'
 import onboardingRouter from './routes/onboarding.js'
 import eventsRouter from './routes/events.js'
 import tasksRouter from './routes/tasks.js'
 import callSheetsRouter from './routes/callSheets.js'
+import reportsRouter from './routes/reports.js'
 import fundingRouter from './routes/funding.js'
 import potentialActorsRouter from './routes/potentialActors.js'
 import actorAvailabilityRouter from './routes/actorAvailability.js'
@@ -49,11 +51,13 @@ app.use('/api/projects/:projectId/budget', requireAuth, budgetRouter)
 app.use('/api/projects/:projectId/departments', requireAuth, departmentsRouter)
 app.use('/api/projects/:projectId/coproducers', requireAuth, coproducersRouter)
 app.use('/api/projects/:projectId/invoices', requireAuth, invoicesRouter)
+app.use('/api/projects/:projectId/scripts', requireAuth, scriptsRouter)
 app.use('/api/projects/:projectId/breakdown', requireAuth, breakdownRouter)
 app.use('/api/projects/:projectId/crew', requireAuth, crewRouter)
 app.use('/api/projects/:projectId/events', requireAuth, eventsRouter)
 app.use('/api/projects/:projectId/tasks', requireAuth, tasksRouter)
 app.use('/api/projects/:projectId/call-sheets', requireAuth, callSheetsRouter)
+app.use('/api/projects/:projectId/reports', requireAuth, reportsRouter)
 app.use('/api/projects/:projectId/funding', requireAuth, fundingRouter)
 app.use('/api/projects/:projectId/potential-actors', requireAuth, potentialActorsRouter)
 app.use('/api/preproduction', requireAuth, preproductionRouter)

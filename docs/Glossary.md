@@ -41,6 +41,9 @@ The main daily production document. Distributed the evening before each shoot da
 **Call Time**
 The time a specific person is required on set or at a location.
 
+**Camera Report**
+A per-take log of every clip recorded on a given shoot day. Captures camera setup (model, format, colour space), lens, ISO, shutter speed, scene number, take number, and notes. False takes are marked separately. In OSFPM, the camera report feeds slate and card numbers into the Daily Progress Report.
+
 **Co-producer / Co-production**
 An arrangement where two or more separate legal entities share the production budget and associated rights. Each entity's financial share is usually defined as a percentage of the total budget.
 
@@ -54,6 +57,9 @@ Ensuring that details (costume, props, hair, set dressing) remain consistent bet
 **Daily**
 In production, a "daily" is a crew member hired on a day-rate basis rather than a weekly or flat deal.
 
+**Daily Progress Report (DPR)**
+An official end-of-day summary documenting what was shot, key timings (crew call, first slate, lunch, wrap), scenes completed and carried forward, talent attendance, media used, and petty cash spend. Also called the "production report" or simply the "daily." In OSFPM, the DPR auto-populates from the call sheet, crew list, camera report, and sound report.
+
 **DIT (Digital Imaging Technician)**
 On-set technician responsible for ingesting, backing up, and quality-checking camera files during and after each shoot day.
 
@@ -63,6 +69,9 @@ A wheeled platform that the camera and camera operator sit on, used to create sm
 ---
 
 ## F
+
+**False Take**
+A take that was aborted before the intended action or performance began — e.g. a camera issue, a stumble, or an aircraft flying over. Logged in the camera report with "FT" in the take column; the next take keeps the same slate number rather than incrementing.
 
 **Flat Deal**
 A fixed fee paid for a service or piece of work regardless of time taken, as opposed to a day or week rate.
@@ -107,6 +116,9 @@ The producer responsible for the day-to-day running of the production and for ma
 **Martini Shot**
 The last shot of the shoot day (so called because the next drink is a martini). Also called the "window shot" — you can see the window out of which you'll be throwing your gear.
 
+**MixPre**
+A range of portable field audio recorders made by Sound Devices, widely used for production sound recording. At the end of each shoot day the MixPre generates a CSV report listing every recorded file with metadata (scene, take, circled, file name, duration, track names). OSFPM imports this CSV in the Sound Report.
+
 ---
 
 ## P
@@ -142,6 +154,9 @@ The fee charged per unit of work — per day, per week, per hour, or as a flat d
 
 **Script Supervisor**
 Also called "continuity." Responsible for maintaining script continuity across all takes and shots, and for keeping a detailed log of what was shot each day.
+
+**Shooting Script**
+The final, locked version of a screenplay that is distributed to the full cast and crew for production. Subsequent revisions are distributed on coloured paper following the WGA/DGA sequence: white (initial lock), blue, pink, yellow, green, goldenrod, buff, salmon, cherry, tan, ivory — then repeating. OSFPM tracks shooting script revisions and assigns these colours automatically.
 
 **Sides**
 A cut-down version of the script for the day — only the scenes being filmed that day. Printed small for actors and director to carry on set.

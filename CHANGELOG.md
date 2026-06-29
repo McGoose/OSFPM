@@ -7,8 +7,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- **Script tool** — multi-version script management with scriptments, drafts, and shooting scripts; DGA revision colour system (white → blue → pink → yellow → green → goldenrod → buff → salmon → cherry → tan → ivory); send shooting scripts to Breakdown to auto-populate scenes; side-by-side diff view between any two versions
+- **Reports tool** — one report set per shoot day, accessed from `/projects/:id/reports`:
+  - **Sound Report**: drag-drop MixPre CSV import, header-driven parser (works for any track count), full table display with priority columns first
+  - **Camera Report**: per-take log with Camera Type and Recording Format dropdowns (common options + "Other" free-text fallback); False Take marks file and keeps the same take number for the next take; Card/Mag Change increments roll counter and inserts a divider; setup auto-populates from previous day's camera report
+  - **Daily Progress Report**: auto-populated from call sheet, crew list, camera and sound reports; petty cash from Money tool (sum of approved/paid invoices in petty-cash budget categories); fully editable before saving
+- **Mobile responsiveness** — slide-in sidebar drawer with hamburger button; all grids stack on small screens; tables scroll horizontally; CSS breakpoints at 768px and 480px
+
+### Changed
+- Breakdown tool no longer has a direct Fountain import button — scenes are now populated by sending a shooting script from the Script tool; a banner shows the active script version and alerts when a newer one is available
+- Camera Report setup fields (Camera Type, Recording Format) changed from free-text to dropdowns with common options + "Other" free-text fallback
+- False Take behaviour: the next take after a false take keeps the same take number (re-shoot), rather than incrementing
+
 ### Fixed
-- Annotation view not showing in Script Breakdown tool (investigation pending)
+- PUT report endpoints now verify event ownership before upserting (security — unauthenticated writes to foreign events were possible)
+- Report tab selection resets to Sound when navigating between shoot days
+- Switching camera dropdown away from "Other" now clears the stale custom text
+- Sidebar overlay now fades out smoothly with the sidebar (was disappearing instantly before slide animation completed)
+- `findCrew` in Daily Progress Report now guards against a null or non-array crew prop
 
 ---
 

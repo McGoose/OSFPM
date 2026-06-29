@@ -100,11 +100,16 @@ SQLite database file lives at `server/osfpm.db`. Schema is managed via Drizzle O
 | `invoices`                  | Invoice tracker; optionally linked to a budget line          |
 | `funding_sources`           | Funding tracker (crowdfunding, sponsors, in-kind, co-prod)   |
 | `crew_members`              | Cast and crew roster per project                             |
-| `scenes`                    | Scenes with Fountain content, metadata, page count           |
+| `scripts`                   | Multi-version scripts: type, version_number, color_revision, title, filename, format, raw_content, scenes_data, notes |
+| `scenes`                    | Scenes with Fountain content, metadata, page count; `script_version_id` FK links to the script version that generated the scene |
 | `breakdown_elements`        | Tagged elements per scene (cast, props, vehicles, etc.)      |
 | `events`                    | Calendar events (shoot days, meetings, etc.)                 |
 | `event_scenes`              | Many-to-many: events ↔ scenes                                |
+| `event_attendees`           | Many-to-many: events ↔ crew members                          |
 | `call_sheets`               | Per-shoot-day call sheet data (JSON blob)                    |
+| `sound_reports`             | Per-shoot-day sound report: `csv_data` JSON array of parsed MixPre rows |
+| `camera_reports`            | Per-shoot-day camera report: `setup` JSON object + `takes` JSON array of take/roll-change rows |
+| `daily_progress_reports`    | Per-shoot-day progress report: `data` JSON object (all form fields) |
 
 ### Migration pattern
 
@@ -246,8 +251,15 @@ The budget module uses a **save-on-blur** pattern (spreadsheet feel, no explicit
 | `/projects/new`                               | CreateProject      |                                    |
 | `/projects/:id`                               | ProjectDashboard   | Hub with tools strip + departments |
 | `/projects/:id/edit`                          | EditProject        |                                    |
+| `/projects/:id/script`                        | Script             | Multi-version script management    |
 | `/projects/:id/budget`                        | Budget             | Budget planning + invoices         |
 | `/projects/:id/departments/:deptId`           | Department         | Department workspace               |
+| `/projects/:id/reports`                       | ReportList         | List of shoot days with ✓/— badges |
+| `/projects/:id/reports/:eventId`              | ReportDay          | Sound / Camera / Daily Progress tabs |
+| `/projects/:id/breakdown`                     | Breakdown          | Scene list + element tagging       |
+| `/projects/:id/crew`                          | Crew               | Crew & cast roster                 |
+| `/projects/:id/calendar`                      | ProjectCalendar    | Project-level calendar             |
+| `/projects/:id/call-sheet/:eventId`           | CallSheetEditor    | Per-shoot-day call sheet + PDF     |
 | `/calendar`                                   | Calendar           | Placeholder                        |
 | `/contacts`                                   | Contacts           | Placeholder                        |
 | `/todo`                                       | Todo               | Placeholder                        |

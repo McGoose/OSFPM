@@ -8,17 +8,17 @@ The Breakdown tool is a scene-by-scene script analysis workspace. It lets the pr
 
 ---
 
-## Script import
+## Script integration
 
-A script written in **Fountain** format can be uploaded directly. The parser extracts:
+Scenes are populated from the **Script tool** (`/projects/:id/script`). Once a shooting script has been uploaded there, click **Send to Breakdown** on the version card. The parser extracts:
 
 - Scene headings (INT./EXT., location, DAY/NIGHT)
 - Scene content (action lines, dialogue)
 - Estimated page count per scene (based on content length)
 
-Fountain is a plain-text screenplay format supported by most modern screenwriting apps (Highland, Writer Duet, Fade In, etc.).
+A banner at the top of Breakdown shows which script version the scenes are based on, and alerts you when a newer shooting script has been uploaded.
 
-Once imported, the script cannot be re-imported without clearing existing scenes.
+Manual scenes added directly in Breakdown are preserved when a new script version is sent.
 
 ---
 

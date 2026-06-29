@@ -1,7 +1,6 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
-import { parseFountain, extractCharacters } from '../../utils/fountain'
 import { INT_EXT_OPTIONS, TIME_OPTIONS } from './constants'
 import BreakdownSheet from './BreakdownSheet'
 
@@ -17,31 +16,45 @@ export default function Breakdown() {
   const { id } = useParams()
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
-  const fileInputRef = useRef(null)
 
   const [scenes, setScenes] = useState([])
   const [selectedId, setSelectedId] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [scriptInfo, setScriptInfo] = useState(null)
+  // scriptInfo: { current: script | null, hasNewer: boolean, latestId: number | null }
 
   // Manual add-scene form
   const [adding, setAdding] = useState(false)
   const [newScene, setNewScene] = useState(defaultNew())
   const [addError, setAddError] = useState('')
 
-  // Fountain import
-  const [importPreview, setImportPreview] = useState(null) // { filename, rawContent, scenes, charsByScene }
-  const [importing, setImporting] = useState(false)
-  const [importError, setImportError] = useState('')
-
   // ── Load ─────────────────────────────────────────────────────────────────────
 
   const load = async () => {
-    const res = await api(`/api/projects/${id}/breakdown`)
-    if (!res.ok) { setError('Failed to load breakdown'); setLoading(false); return }
-    const data = await res.json()
+    const [breakdownRes, scriptsRes] = await Promise.all([
+      api(`/api/projects/${id}/breakdown`),
+      api(`/api/projects/${id}/scripts`),
+    ])
+    if (!breakdownRes.ok) { setError('Failed to load breakdown'); setLoading(false); return }
+    const data = await breakdownRes.json()
     setScenes(data)
     if (data.length > 0) setSelectedId(prev => prev ?? data[0].id)
+
+    if (scriptsRes.ok) {
+      const allScripts = await scriptsRes.json()
+      const shootingScripts = allScripts
+        .filter(s => s.type === 'shooting_script')
+        .sort((a, b) => b.versionNumber - a.versionNumber)
+      const latest = shootingScripts[0] ?? null
+      const currentVersionId = data[0]?.scriptVersionId ?? null
+      const current = currentVersionId
+        ? allScripts.find(s => s.id === currentVersionId) ?? null
+        : null
+      const hasNewer = latest && currentVersionId !== latest.id
+      setScriptInfo({ current, hasNewer: !!hasNewer, latestId: latest?.id ?? null })
+    }
+
     setLoading(false)
   }
 
@@ -125,54 +138,6 @@ export default function Breakdown() {
     ))
   }
 
-  // ── Fountain import ───────────────────────────────────────────────────────────
-
-  const handleFileChange = (e) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = (ev) => {
-      const raw = ev.target.result
-      const parsed = parseFountain(raw)
-      const charsByScene = parsed.map(s => extractCharacters(s.content))
-      setImportPreview({ filename: file.name, rawContent: raw, scenes: parsed, charsByScene })
-      setImportError('')
-    }
-    reader.readAsText(file)
-    e.target.value = ''
-  }
-
-  const doImport = async (replaceExisting) => {
-    if (!importPreview) return
-    setImporting(true)
-    setImportError('')
-
-    // Build auto-elements from detected characters
-    const autoElements = []
-    importPreview.charsByScene.forEach((chars, sceneIndex) => {
-      chars.forEach(name => autoElements.push({ sceneIndex, category: 'cast', description: name }))
-    })
-
-    const res = await api(`/api/projects/${id}/breakdown/import`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        filename: importPreview.filename,
-        rawContent: importPreview.rawContent,
-        scenes: importPreview.scenes,
-        autoElements,
-        replaceExisting,
-      }),
-    })
-    const data = await res.json()
-    setImporting(false)
-
-    if (!res.ok) { setImportError(data.error ?? 'Import failed'); return }
-    setScenes(data)
-    setSelectedId(data[0]?.id ?? null)
-    setImportPreview(null)
-  }
-
   // ── Render ────────────────────────────────────────────────────────────────────
 
   if (loading) return <div className="empty-state"><p>Loading…</p></div>
@@ -200,79 +165,48 @@ export default function Breakdown() {
             </p>
           </div>
           {isAdmin && (
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button
-                className="btn-secondary"
-                style={{ width: 'auto', padding: '8px 14px' }}
-                onClick={() => fileInputRef.current?.click()}
-              >
-                Import .fountain
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".fountain,.txt"
-                style={{ display: 'none' }}
-                onChange={handleFileChange}
-              />
-              <button
-                className="btn-primary"
-                style={{ width: 'auto', padding: '8px 16px' }}
-                onClick={() => { setAdding(v => !v); setAddError('') }}
-              >
-                {adding ? 'Cancel' : '+ Add scene'}
-              </button>
-            </div>
+            <button
+              className="btn-primary"
+              style={{ width: 'auto', padding: '8px 16px' }}
+              onClick={() => { setAdding(v => !v); setAddError('') }}
+            >
+              {adding ? 'Cancel' : '+ Add scene'}
+            </button>
           )}
         </div>
       </div>
 
-      {/* Import preview panel */}
-      {importPreview && (
-        <div className="import-panel">
-          <div className="import-panel-header">
-            <div>
-              <span className="import-panel-filename">📄 {importPreview.filename}</span>
-              <span className="import-panel-count">{importPreview.scenes.length} scenes found</span>
-              <span className="import-panel-count">
-                {importPreview.charsByScene.flat().length} character mention{importPreview.charsByScene.flat().length !== 1 ? 's' : ''} auto-detected
-              </span>
-            </div>
-            <button className="btn-secondary" style={{ width: 'auto', padding: '6px 12px', fontSize: 12 }} onClick={() => setImportPreview(null)}>
-              Discard
-            </button>
-          </div>
-          {importError && <p className="auth-error" style={{ margin: '8px 0 0' }}>{importError}</p>}
-          <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-            <button
-              className="btn-primary"
-              style={{ width: 'auto', padding: '8px 16px' }}
-              onClick={() => doImport(true)}
-              disabled={importing}
-            >
-              {importing ? 'Importing…' : scenes.length > 0 ? 'Replace all scenes' : 'Import scenes'}
-            </button>
-            {scenes.length > 0 && (
-              <button
-                className="btn-secondary"
-                style={{ width: 'auto', padding: '8px 14px' }}
-                onClick={() => doImport(false)}
-                disabled={importing}
-              >
-                Append to existing
-              </button>
-            )}
-          </div>
-          {scenes.length > 0 && (
-            <p style={{ marginTop: 8, fontSize: 12, color: 'var(--text-muted)' }}>
-              "Replace all scenes" will delete the current {scenes.length} scene{scenes.length !== 1 ? 's' : ''} and all their elements.
-            </p>
+      {/* Script source banner */}
+      {scriptInfo && (scriptInfo.current || scriptInfo.hasNewer) && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+          padding: '8px 12px', borderRadius: 6, marginBottom: 8,
+          background: scriptInfo.hasNewer ? 'var(--warning-bg, #FFFBEB)' : 'var(--surface-2)',
+          border: `1px solid ${scriptInfo.hasNewer ? 'var(--warning-border, #F6E05E)' : 'var(--border)'}`,
+          fontSize: 13,
+        }}>
+          {scriptInfo.current ? (
+            <span style={{ color: 'var(--text-secondary)' }}>
+              Based on: <strong>{scriptInfo.current.title || scriptInfo.current.filename}</strong>
+            </span>
+          ) : null}
+          {scriptInfo.hasNewer && (
+            <span style={{ color: 'var(--text-secondary)' }}>
+              {scriptInfo.current ? ' · ' : ''}
+              New shooting script available.
+            </span>
           )}
+          <Link
+            to={`/projects/${id}/script`}
+            style={{ color: 'var(--accent)', fontSize: 13, marginLeft: 4 }}
+          >
+            {scriptInfo.hasNewer ? 'Go to Script tool to update →' : 'Script tool →'}
+          </Link>
         </div>
       )}
 
       {/* Manual add-scene form */}
-      {adding && !importPreview && isAdmin && (
+      {adding && isAdmin && (
         <form onSubmit={addScene} className="breakdown-add-form">
           <div className="breakdown-add-row">
             <div className="field" style={{ width: 80, marginBottom: 0 }}>
@@ -334,7 +268,7 @@ export default function Breakdown() {
           <div className="empty-state-icon">📋</div>
           <p>
             {isAdmin
-              ? 'Import a .fountain script to auto-populate scenes, or add scenes manually.'
+              ? <>Send a shooting script from the <Link to={`/projects/${id}/script`} style={{ color: 'var(--accent)' }}>Script tool</Link> to populate scenes automatically, or add scenes manually.</>
               : 'No scenes yet.'}
           </p>
         </div>

@@ -1,12 +1,12 @@
 # OSFPM Roadmap
 
-*Last updated: 2026-06-22*
+*Last updated: 2026-06-29*
 
 ---
 
 ## Current status
 
-**Version 0.2.x** — Pre-production module live. Projects, departments, crew & cast, calendar, call sheets, script breakdown, budget/money, to-do, and meetings are all working.
+**Version 0.2.x** — Pre-production module live plus early production tools. Projects, departments, crew & cast, calendar, call sheets, script tool, script breakdown, budget/money, reports, to-do, and meetings are all working. The app is fully mobile-responsive.
 
 ---
 
@@ -37,7 +37,7 @@
 - [x] **Call Sheet** — multi-tab form (times, cast, crew, dept notes, PDF export)
 - [x] **Script Breakdown** — scene list, per-scene element tagging by category
 - [x] Breakdown annotation view (script + highlighted elements side-by-side)
-- [x] Fountain screenplay import
+- [x] **Script tool** — multi-version management, DGA revision colours, send to Breakdown, diff view
 - [x] **To-Do** — personal + per-department task lists, permission control
 - [x] **Meetings** — meeting notes per project
 - [x] Central tool registry (`tools.js`)
@@ -47,8 +47,10 @@
 
 ## Phase 3 — Production Tools — v0.3.0
 
+- [x] **Sound Report** — MixPre CSV import, header-driven parser, table display
+- [x] **Camera Report** — per-take log, card/mag tracking, setup continuity between days
+- [x] **Daily Progress Report** — aggregates from call sheet, crew, camera, sound, money
 - [ ] Dailies tracker (footage, metadata, backup status)
-- [ ] Filming / shoot report (daily summary)
 - [ ] Gear tracking (equipment list + status)
 - [ ] On-set crew monitoring
 - [ ] Schedule adherence tracking
@@ -74,7 +76,7 @@
 
 ## Phase 6 — Polish & Collaboration — v0.6.0
 
-- [ ] Responsive layout for tablets and mobile
+- [x] Responsive layout for tablets and mobile
 - [ ] Real-time multi-user updates (WebSockets or SSE)
 - [ ] Activity log / change tracking
 - [ ] In-app notifications (optionally email via SMTP)

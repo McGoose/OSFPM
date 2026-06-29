@@ -18,16 +18,21 @@ A self-hosted, web-based application for managing all phases of film production 
 ### Project tools
 | Tool | Description |
 |---|---|
+| **Script** | Multi-version script management — scriptments, drafts, shooting scripts with DGA revision colours; send to Breakdown |
 | **Money** | Budget planning (categories + lines), invoice tracker, co-production splits, funding tracker |
 | **Crew & Cast** | Full roster with roles, departments, character names, status |
 | **Calendar** | Project calendar — events, shoot days, attendees |
 | **Call Sheet** | Per-shoot-day multi-tab form + PDF download |
 | **Script Breakdown** | Scene list, per-scene element tagging (cast, props, vehicles, etc.), annotation view |
+| **Reports** | Sound report (MixPre CSV import), camera report (per-take log), daily progress report — one set per shoot day |
 | **To-Do** | Personal + per-department task lists with permission control |
 | **Meetings** | Meeting notes per project |
 
 ### Department workspaces
 Each department has its own workspace with department-level tools.
+
+### Mobile
+Fully responsive — sidebar becomes a slide-in drawer on phones, all grids and tables adapt to small screens.
 
 ---
 

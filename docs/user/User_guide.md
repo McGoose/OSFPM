@@ -1,6 +1,6 @@
 # User Guide
 
-*Version: 0.2.2 — Last updated: 2026-06-22*
+*Version: 0.2.x — Last updated: 2026-06-29*
 
 ---
 
@@ -29,16 +29,21 @@ The sidebar on the left gives access to everything:
 
 | Section | Pages |
 |---|---|
-| Dashboard | Overview and quick links to all modules |
-| Pre-Production | Overview of pre-production tools |
-| Production | Overview of production tools |
-| Post-Production | Overview of post-production tools |
-| Calendar | Shared team calendar *(coming v0.5.0)* |
-| Contacts | Contact book *(coming v0.5.0)* |
-| To-Do | Task lists *(coming v0.5.0)* |
+| Projects | Project list and dashboard |
+| Script | Script version manager — scriptments, drafts, shooting scripts |
+| Money | Budget, invoices, co-production, funding |
+| Breakdown | Scene-by-scene element tagging |
+| Crew & Cast | Full roster and onboarding |
+| Calendar | Project calendar and shoot days |
+| Reports | Sound, camera, and daily progress reports |
+| Calendar | Shared team calendar |
+| Contacts | Contact book |
+| To-Do | Task lists |
 | Settings | Workspace configuration *(admin only)* |
 
 Your name and organization are shown at the bottom of the sidebar. Click the **↪** icon to sign out.
+
+**On mobile:** the sidebar collapses — tap the **☰** button in the top-left of the header to open it. Tap a link or tap the dark overlay to close it.
 
 ---
 
@@ -71,11 +76,26 @@ Changes apply immediately after clicking **Save settings**.
 
 ## Modules
 
-The three production modules are currently scaffolded — their full feature sets are being built out in upcoming releases. See the [Roadmap](../../ROADMAP.md) for the planned timeline.
+See the [Roadmap](../../ROADMAP.md) for the full planned timeline.
 
-- **Pre-Production** — Script breakdown, budgeting, scheduling, crew management, department reports, meeting tracker *(v0.2.0)*
-- **Production** — Call sheets, dailies, filming reports, gear tracking, crew monitoring *(v0.3.0)*
-- **Post-Production** — Review notes, media organization, delivery scheduling *(v0.4.0)*
+### Live now
+
+| Tool | What it does |
+|---|---|
+| **Script** | Upload scriptments, drafts, and shooting scripts. DGA revision colours assigned automatically. Send a shooting script to Breakdown to auto-populate scenes. |
+| **Money** | Budget lines, invoice tracker, co-production splits, funding tracker. |
+| **Breakdown** | Scene list driven by the Script tool. Tag each scene with cast, props, costume, VFX, vehicles, and more. |
+| **Crew & Cast** | Full roster. Onboard crew via a one-time email link. Actors get a public availability form. |
+| **Calendar** | Create and manage events — meetings, recces, casting, rehearsals, shoot days. Shoot days link to call sheets. |
+| **Call Sheet** | Multi-tab form (times, cast, crew, notes) with PDF download. One per shoot day. |
+| **Reports** | Per shoot day: Sound Report (MixPre import), Camera Report (take log), Daily Progress Report. |
+| **To-Do** | Personal task list + per-department task lists. |
+| **Meetings** | Meeting notes per project. |
+
+### Coming soon
+
+- **Production** — Dailies tracker, gear tracking, crew monitoring *(v0.3.0)*
+- **Post-Production** — Review notes, media organisation, delivery scheduling *(v0.4.0)*
 
 ---
 

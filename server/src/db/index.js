@@ -179,11 +179,27 @@ await client.execute(`
   CREATE TABLE IF NOT EXISTS scripts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL,
+    type TEXT NOT NULL DEFAULT 'shooting_script',
+    version_number INTEGER NOT NULL DEFAULT 1,
+    color_revision TEXT NOT NULL DEFAULT 'white',
+    title TEXT NOT NULL DEFAULT '',
     filename TEXT NOT NULL DEFAULT '',
+    format TEXT NOT NULL DEFAULT 'fountain',
     raw_content TEXT NOT NULL DEFAULT '',
+    scenes_data TEXT NOT NULL DEFAULT '[]',
+    notes TEXT DEFAULT '',
     uploaded_at INTEGER NOT NULL
   )
 `)
+
+// Migrate existing scripts tables
+await tryAlter("ALTER TABLE scripts ADD COLUMN type TEXT NOT NULL DEFAULT 'shooting_script'")
+await tryAlter("ALTER TABLE scripts ADD COLUMN version_number INTEGER NOT NULL DEFAULT 1")
+await tryAlter("ALTER TABLE scripts ADD COLUMN color_revision TEXT NOT NULL DEFAULT 'white'")
+await tryAlter("ALTER TABLE scripts ADD COLUMN title TEXT NOT NULL DEFAULT ''")
+await tryAlter("ALTER TABLE scripts ADD COLUMN format TEXT NOT NULL DEFAULT 'fountain'")
+await tryAlter("ALTER TABLE scripts ADD COLUMN scenes_data TEXT NOT NULL DEFAULT '[]'")
+await tryAlter("ALTER TABLE scripts ADD COLUMN notes TEXT DEFAULT ''")
 
 await client.execute(`
   CREATE TABLE IF NOT EXISTS scenes (
@@ -195,11 +211,13 @@ await client.execute(`
     time_of_day TEXT NOT NULL DEFAULT 'DAY',
     description TEXT NOT NULL DEFAULT '',
     pages REAL NOT NULL DEFAULT 1,
+    script_version_id INTEGER,
     sort_order INTEGER NOT NULL DEFAULT 0
   )
 `)
 
 await tryAlter("ALTER TABLE scenes ADD COLUMN content TEXT DEFAULT ''")
+await tryAlter("ALTER TABLE scenes ADD COLUMN script_version_id INTEGER")
 
 await client.execute(`
   CREATE TABLE IF NOT EXISTS breakdown_elements (
@@ -310,6 +328,40 @@ await client.execute(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     event_id INTEGER NOT NULL UNIQUE,
     project_id INTEGER NOT NULL,
+    data TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER
+  )
+`)
+
+await client.execute(`
+  CREATE TABLE IF NOT EXISTS sound_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    event_id INTEGER NOT NULL UNIQUE,
+    csv_data TEXT NOT NULL DEFAULT '[]',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER
+  )
+`)
+
+await client.execute(`
+  CREATE TABLE IF NOT EXISTS camera_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    event_id INTEGER NOT NULL UNIQUE,
+    setup TEXT NOT NULL DEFAULT '{}',
+    takes TEXT NOT NULL DEFAULT '[]',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER
+  )
+`)
+
+await client.execute(`
+  CREATE TABLE IF NOT EXISTS daily_progress_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    event_id INTEGER NOT NULL UNIQUE,
     data TEXT NOT NULL DEFAULT '{}',
     created_at INTEGER NOT NULL,
     updated_at INTEGER

@@ -10,11 +10,14 @@ import Projects from './modules/Projects/Projects'
 import ProjectDashboard from './modules/Projects/ProjectDashboard'
 import CreateProject from './modules/Projects/CreateProject'
 import EditProject from './modules/Projects/EditProject'
+import Script from './modules/Script/Script'
 import Budget from './modules/Budget/Budget'
 import Breakdown from './modules/Breakdown/Breakdown'
 import Crew from './modules/Crew/Crew'
 import ProjectCalendar from './modules/Calendar/ProjectCalendar'
 import CallSheetEditor from './modules/CallSheet/CallSheetEditor'
+import ReportList from './modules/Report/ReportList'
+import ReportDay from './modules/Report/ReportDay'
 import ActorAvailability from './modules/Actors/ActorAvailability'
 import Department from './modules/Departments/Department'
 import Calendar from './shared/Calendar/Calendar'
@@ -49,11 +52,14 @@ export default function App() {
                 <Route path="projects/new" element={<CreateProject />} />
                 <Route path="projects/:id" element={<ProjectDashboard />} />
                 <Route path="projects/:id/edit" element={<EditProject />} />
+                <Route path="projects/:id/script" element={<Script />} />
                 <Route path="projects/:id/budget" element={<Budget />} />
                 <Route path="projects/:id/breakdown" element={<Breakdown />} />
                 <Route path="projects/:id/crew" element={<Crew />} />
               <Route path="projects/:id/calendar" element={<ProjectCalendar />} />
               <Route path="projects/:id/call-sheet/:eventId" element={<CallSheetEditor />} />
+                <Route path="projects/:id/reports" element={<ReportList />} />
+                <Route path="projects/:id/reports/:eventId" element={<ReportDay />} />
                 <Route path="projects/:id/departments/:deptId" element={<Department />} />
                 {/* Legacy redirects so old bookmarks still work */}
                 <Route path="projects/:id/preproduction/budget" element={<Navigate to="../budget" relative="path" replace />} />
