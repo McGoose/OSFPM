@@ -58,4 +58,8 @@ Read-only reference at tag `prototype-final`. Port only what a prompt names.
 
 ## Commands
 
-Added in P-01c.
+- Install: `pnpm install`
+- Test: `pnpm test`
+- Lint: `pnpm lint`
+- Format: `pnpm format` (check only: `pnpm format:check`)
+- Typecheck: `pnpm typecheck`
