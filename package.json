@@ -12,6 +12,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
+    "test": "vitest run --dir packages",
     "typecheck": "pnpm -r run typecheck"
   },
   "devDependencies": {
@@ -20,6 +21,7 @@
     "eslint": "^10.14.0",
     "prettier": "^3.10.1",
     "typescript": "~6.0.3",
-    "typescript-eslint": "^8.72.2"
+    "typescript-eslint": "^8.72.2",
+    "vitest": "^5.1.0"
   }
 }
