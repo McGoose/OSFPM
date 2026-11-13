@@ -1,10 +1,8 @@
 import eslint from '@eslint/js';
-import { defineConfig, globalIgnores } from 'eslint/config';
+import { defineConfig } from 'eslint/config';
 import tseslint from 'typescript-eslint';
 
 export default defineConfig(
-  // Prototype sources: read-only reference, not part of the workspace.
-  globalIgnores(['client/', 'server/']),
   eslint.configs.recommended,
   tseslint.configs.recommendedTypeChecked,
   {
