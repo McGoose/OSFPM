@@ -1,0 +1,15 @@
+# Generated
+pnpm-lock.yaml
+
+# Prototype sources: read-only reference, not part of the workspace.
+client/
+server/
+docs/
+docker-compose.yml
+
+# Documents that predate this tooling; left as they are.
+CHANGELOG.md
+CLAUDE.md
+README.md
+ROADMAP.md
+SECURITY.md
