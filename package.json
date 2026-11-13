@@ -7,5 +7,12 @@
   "packageManager": "pnpm@12.18.0",
   "engines": {
     "node": "26.x"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r run typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "~6.0.3"
   }
 }
