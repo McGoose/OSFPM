@@ -656,6 +656,21 @@ describe.each(testTargets)('units, blocks and episodes on $name', (target) => {
       ]);
     });
 
+    it.each(['private', 'project', 'shared-with-partners'] as const)(
+      'copies the project visibility %s to the main unit',
+      async (visibility) => {
+        const organisationId = await newOrganisationId();
+        const created = await database.db.transaction((tx) =>
+          createProject(tx, ctx(), {
+            ...projectValues(organisationId, { code: `VIS-${visibility}` }),
+            visibility,
+          }),
+        );
+        expect(created.project.visibility).toBe(visibility);
+        expect(created.mainUnit.visibility).toBe(visibility);
+      },
+    );
+
     it('rolls back both records when the transaction fails', async () => {
       const organisationId = await newOrganisationId();
       const failure = new Error('stop');
