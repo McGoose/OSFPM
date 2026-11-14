@@ -1,5 +1,5 @@
-import { foreignKey, pgTable, text, unique, uuid } from 'drizzle-orm/pg-core';
-import { standardColumns, visibilityCheck } from '../columns.js';
+import { foreignKey, text, unique, uuid } from 'drizzle-orm/pg-core';
+import { standardColumns, tenantTable, visibilityCheck } from '../columns.js';
 import { department } from './department.js';
 import { permission } from './permission.js';
 import { role } from './role.js';
@@ -7,13 +7,11 @@ import { organisation } from './organisation.js';
 import { user } from './user.js';
 
 /** Grants a permission to a role, optionally limited to one department. */
-export const rolePermission = pgTable(
+export const rolePermission = tenantTable(
   'role_permission',
+  () => organisation.id,
   {
-    ...standardColumns(
-      () => user.id,
-      () => organisation.id,
-    ),
+    ...standardColumns(() => user.id),
     roleId: uuid('role_id').notNull(),
     permissionKey: text('permission_key').notNull(),
     departmentId: uuid('department_id'),

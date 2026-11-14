@@ -36,6 +36,13 @@
       "when": 1794694400188,
       "tag": "0004_change_and_audit_logs",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794695063277,
+      "tag": "0005_organisation_fk_names",
+      "breakpoints": true
     }
   ]
 }

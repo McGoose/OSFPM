@@ -1,13 +1,11 @@
 import { sql } from 'drizzle-orm';
+import { boolean, check, date, text, unique } from 'drizzle-orm/pg-core';
 import {
-  boolean,
-  check,
-  date,
-  pgTable,
-  text,
-  unique,
-} from 'drizzle-orm/pg-core';
-import { sqlList, standardColumns, visibilityCheck } from '../columns.js';
+  sqlList,
+  standardColumns,
+  tenantTable,
+  visibilityCheck,
+} from '../columns.js';
 import { organisation } from './organisation.js';
 import { user } from './user.js';
 
@@ -31,13 +29,11 @@ export const PROJECT_STATUSES = [
 ] as const;
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 
-export const project = pgTable(
+export const project = tenantTable(
   'project',
+  () => organisation.id,
   {
-    ...standardColumns(
-      () => user.id,
-      () => organisation.id,
-    ),
+    ...standardColumns(() => user.id),
     code: text('code').notNull(),
     title: text('title').notNull(),
     format: text('format').$type<ProjectFormat>().notNull(),

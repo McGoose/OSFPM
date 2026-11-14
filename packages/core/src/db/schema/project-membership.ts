@@ -3,12 +3,16 @@ import {
   check,
   date,
   foreignKey,
-  pgTable,
   text,
   unique,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { sqlList, standardColumns, visibilityCheck } from '../columns.js';
+import {
+  sqlList,
+  standardColumns,
+  tenantTable,
+  visibilityCheck,
+} from '../columns.js';
 import { project } from './project.js';
 import { organisation } from './organisation.js';
 import { user } from './user.js';
@@ -22,13 +26,11 @@ export type ProjectMembershipStatus =
   (typeof PROJECT_MEMBERSHIP_STATUSES)[number];
 
 /** A user's place on one project. Their roles are in `project_membership_role`. */
-export const projectMembership = pgTable(
+export const projectMembership = tenantTable(
   'project_membership',
+  () => organisation.id,
   {
-    ...standardColumns(
-      () => user.id,
-      () => organisation.id,
-    ),
+    ...standardColumns(() => user.id),
     projectId: uuid('project_id').notNull(),
     userId: uuid('user_id').notNull(),
     status: text('status').$type<ProjectMembershipStatus>().notNull(),

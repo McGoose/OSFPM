@@ -3,12 +3,16 @@ import {
   check,
   foreignKey,
   jsonb,
-  pgTable,
   text,
   unique,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { sqlList, standardColumns, visibilityCheck } from '../columns.js';
+import {
+  sqlList,
+  standardColumns,
+  tenantTable,
+  visibilityCheck,
+} from '../columns.js';
 import { project } from './project.js';
 import { organisation } from './organisation.js';
 import { user } from './user.js';
@@ -20,14 +24,11 @@ export type SettingLayer = (typeof SETTING_LAYERS)[number];
  * A setting stored at the organisation or project layer. Install-level
  * defaults ship in code (module contracts), so they are not stored here.
  */
-export const settingValue = pgTable(
+export const settingValue = tenantTable(
   'setting_value',
+  () => organisation.id,
   {
-    ...standardColumns(
-      () => user.id,
-      () => organisation.id,
-      { defaultVisibility: 'private' },
-    ),
+    ...standardColumns(() => user.id, { defaultVisibility: 'private' }),
     layer: text('layer').$type<SettingLayer>().notNull(),
     projectId: uuid('project_id'),
     key: text('key').notNull(),

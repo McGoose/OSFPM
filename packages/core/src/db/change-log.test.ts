@@ -1,11 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { sql } from 'drizzle-orm';
-import { pgTable, text, uuid } from 'drizzle-orm/pg-core';
+import { text, uuid } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { APPEND_ONLY_SQLSTATE, appendOnlyMigrationSql } from './append-only.js';
 import type { Database } from './client.js';
-import { standardColumns } from './columns.js';
+import { standardColumns, tenantTable } from './columns.js';
 import { newId } from './ids.js';
 import { MIGRATIONS_FOLDER } from './migrate.js';
 import {
@@ -36,11 +36,8 @@ import {
 } from './write.js';
 
 /** A stand-in tenant table. No real table has sensitive columns yet. */
-const dummyRecord = pgTable('dummy_record', {
-  ...standardColumns(
-    () => user.id,
-    () => organisation.id,
-  ),
+const dummyRecord = tenantTable('dummy_record', () => organisation.id, {
+  ...standardColumns(() => user.id),
   projectId: uuid('project_id'),
   title: text('title').notNull(),
   secretNote: text('secret_note'),
