@@ -230,14 +230,21 @@ describe.each(testTargets)('database schema on $name', (target) => {
           'audit_event',
           'change_event',
           'change_seq',
+          'company',
           'department',
           'installation',
+          'location',
           'org_membership',
           'organisation',
           'permission',
+          'person',
+          'person_company',
           'project',
+          'project_company',
+          'project_location',
           'project_membership',
           'project_membership_role',
+          'project_person',
           'role',
           'role_permission',
           'setting_value',
@@ -285,6 +292,49 @@ describe.each(testTargets)('database schema on $name', (target) => {
           names.filter((r) =>
             (r.conname as string).includes('_organisation_id_organisation_id_'),
           ),
+        ).toEqual([]);
+      } finally {
+        await cleanup();
+      }
+    });
+    it('scopes every foreign key between tenant tables by organisation_id', async () => {
+      const { database, cleanup } = await target.create();
+      try {
+        await migrate(database);
+        const found = await rows(
+          database,
+          sql`select c.conrelid::regclass::text as table_name,
+                     c.confrelid::regclass::text as target,
+                     c.conname,
+                     exists (
+                       select 1 from pg_attribute a
+                       where a.attrelid = c.conrelid
+                         and a.attname = 'organisation_id'
+                         and a.attnum = any (c.conkey)
+                     ) as from_scoped,
+                     exists (
+                       select 1 from pg_attribute a
+                       where a.attrelid = c.confrelid
+                         and a.attname = 'organisation_id'
+                         and a.attnum = any (c.confkey)
+                     ) as to_scoped
+              from pg_constraint c
+              where c.contype = 'f' and c.connamespace = 'public'::regnamespace`,
+        );
+        const tenant = tenantTableNames();
+        const between = found.filter(
+          (r) =>
+            tenant.has(r.table_name as string) &&
+            tenant.has(r.target as string) &&
+            r.target !== 'organisation',
+        );
+        // Guards against the query matching nothing and passing for nothing.
+        expect(between.length).toBeGreaterThanOrEqual(10);
+        // Names only: an unscoped key could point at another organisation's row.
+        expect(
+          between
+            .filter((r) => !r.from_scoped || !r.to_scoped)
+            .map((r) => `${r.table_name as string}.${r.conname as string}`),
         ).toEqual([]);
       } finally {
         await cleanup();

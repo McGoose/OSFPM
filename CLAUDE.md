@@ -24,7 +24,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Every record carries `organisation_id`, `origin_server`, `owner_org` and a visibility marker; timestamps are UTC.
 - Fields are tagged `normal` or `sensitive`. Sensitive fields never appear in logs, emails, webhook payloads, exports, error messages or API error responses unless a sensitive scope explicitly allows it.
 - Migrations are forward-only; never edit an applied migration.
-- Explicit foreign-key names follow `<table>_<target>_fk`.
+- Explicit foreign-key names follow `<table>_<target>_fk`; when a table references itself or the same target twice, use `<table>_<column without _id>_fk`.
 - No legal or financial numbers (rates, caps, thresholds, deadlines) in code: they live in rule packs as data.
 - Modules never read other modules' tables; they use core services and events.
 - Tenant records are written only through the write helper in `src/db/write.ts`.
