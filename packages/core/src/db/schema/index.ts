@@ -9,6 +9,7 @@ export * from './org-membership.js';
 export * from './organisation.js';
 export * from './permission.js';
 export * from './person-company.js';
+export * from './person-sensitive.js';
 export * from './person.js';
 export * from './project-company.js';
 export * from './project-location.js';

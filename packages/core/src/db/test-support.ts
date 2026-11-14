@@ -1,7 +1,9 @@
 import { randomBytes } from 'node:crypto';
+import { drizzle as drizzlePg } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
 import { createDatabase, type Database } from './client.js';
 import { migrate } from './migrate.js';
+import * as schema from './schema/index.js';
 
 export type TestTarget = {
   readonly name: 'pglite' | 'postgres';
@@ -33,14 +35,29 @@ function postgresTarget(adminUrl: string): TestTarget {
       await admin.query(`create database ${name}`);
       const url = new URL(adminUrl);
       url.pathname = `/${name}`;
-      const database = createDatabase({
+      // The test owns its pool, so it can handle the shutdown error that
+      // `drop database ... with (force)` sends to a connection that is still
+      // closing (57P01). During teardown only, that one error is expected;
+      // any other error is rethrown and fails the run, as before.
+      const pool = new pg.Pool({ connectionString: url.toString() });
+      let tearingDown = false;
+      const onError = (error: Error & { code?: string }) => {
+        if (tearingDown && error.code === '57P01') return;
+        throw error;
+      };
+      pool.on('error', onError);
+      pool.on('connect', (client) => client.on('error', onError));
+      const database: Database = {
         driver: 'postgres',
-        url: url.toString(),
-      });
+        db: drizzlePg({ client: pool, schema }),
+        close: () => pool.end(),
+      };
       return {
         database,
         cleanup: async () => {
-          await database.close();
+          tearingDown = true;
+          // Close every connection to the test database before dropping it.
+          await pool.end();
           await admin.query(`drop database ${name} with (force)`);
           await admin.end();
         },

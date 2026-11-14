@@ -456,15 +456,11 @@ function modifyRecord<T extends TenantTable>(
   );
 }
 
-/** Updates fields of a record and logs an `update` event. */
-export async function updateRecord<T extends TenantTable>(
-  tx: Tx,
+/** Validates `patch` and returns it without undefined values. */
+function checkedPatch<T extends TenantTable>(
   table: T,
-  id: string,
-  expectedVersion: number,
   patch: UpdatePatch<T>,
-  ctx: WriteContext,
-): Promise<T['$inferSelect']> {
+): Row {
   const change: Row = {};
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) continue;
@@ -481,16 +477,41 @@ export async function updateRecord<T extends TenantTable>(
     }
     change[key] = value;
   }
-  return modifyRecord(tx, table, id, expectedVersion, 'update', change, ctx);
+  return change;
 }
 
-/** Marks a record deleted and logs a `delete` event. */
+/** Updates fields of a record and logs an `update` event. */
+export async function updateRecord<T extends TenantTable>(
+  tx: Tx,
+  table: T,
+  id: string,
+  expectedVersion: number,
+  patch: UpdatePatch<T>,
+  ctx: WriteContext,
+): Promise<T['$inferSelect']> {
+  return modifyRecord(
+    tx,
+    table,
+    id,
+    expectedVersion,
+    'update',
+    checkedPatch(table, patch),
+    ctx,
+  );
+}
+
+/**
+ * Marks a record deleted and logs a `delete` event. `alsoSet` changes other
+ * fields in the same write, for example to erase values a table must not keep
+ * on a deleted row. It follows the rules of an update patch.
+ */
 export async function softDeleteRecord<T extends TenantTable>(
   tx: Tx,
   table: T,
   id: string,
   expectedVersion: number,
   ctx: WriteContext,
+  alsoSet: UpdatePatch<T> = {},
 ): Promise<T['$inferSelect']> {
   return modifyRecord(
     tx,
@@ -498,18 +519,26 @@ export async function softDeleteRecord<T extends TenantTable>(
     id,
     expectedVersion,
     'delete',
-    { deletedAt: ctx.clock(), deletedBy: attributedUserId(ctx) },
+    {
+      ...checkedPatch(table, alsoSet),
+      deletedAt: ctx.clock(),
+      deletedBy: attributedUserId(ctx),
+    },
     ctx,
   );
 }
 
-/** Clears the deletion mark and logs a `restore` event. */
-export function restoreRecord<T extends TenantTable>(
+/**
+ * Clears the deletion mark and logs a `restore` event. `alsoSet` changes other
+ * fields in the same write, for example to refill values erased on delete.
+ */
+export async function restoreRecord<T extends TenantTable>(
   tx: Tx,
   table: T,
   id: string,
   expectedVersion: number,
   ctx: WriteContext,
+  alsoSet: UpdatePatch<T> = {},
 ): Promise<T['$inferSelect']> {
   return modifyRecord(
     tx,
@@ -517,7 +546,7 @@ export function restoreRecord<T extends TenantTable>(
     id,
     expectedVersion,
     'restore',
-    { deletedAt: null, deletedBy: null },
+    { ...checkedPatch(table, alsoSet), deletedAt: null, deletedBy: null },
     ctx,
   );
 }

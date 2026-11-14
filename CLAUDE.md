@@ -28,6 +28,8 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - No legal or financial numbers (rates, caps, thresholds, deadlines) in code: they live in rule packs as data.
 - Modules never read other modules' tables; they use core services and events.
 - Tenant records are written only through the write helper in `src/db/write.ts`.
+- Only `src/sensitive/service.ts` touches `person_sensitive`; other code calls the service.
+- Access denials are audited before the typed error is thrown; callers catch it inside the transaction and commit, so the audit event survives.
 - Tenant tables are defined with `tenantTable()`, never bare `pgTable`.
 - Permission checks run only on the server through the policy engine.
 - Every endpoint gets a test proving 403 without access and no sensitive fields without `sensitive:read`.
