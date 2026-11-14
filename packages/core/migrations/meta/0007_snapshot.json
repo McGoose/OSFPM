@@ -1223,8 +1223,8 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "location_location_fk": {
-          "name": "location_location_fk",
+        "location_nearest_hospital_fk": {
+          "name": "location_nearest_hospital_fk",
           "tableFrom": "location",
           "tableTo": "location",
           "columnsFrom": [

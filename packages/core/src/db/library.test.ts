@@ -69,7 +69,11 @@ const TABLES = [
     name: 'location',
     visibility: 'private',
     table: location,
-    fks: ['location_company_fk', 'location_person_fk', 'location_location_fk'],
+    fks: [
+      'location_company_fk',
+      'location_person_fk',
+      'location_nearest_hospital_fk',
+    ],
   },
   {
     name: 'project_person',
@@ -393,7 +397,7 @@ describe.each(testTargets)('library tables on $name', (target) => {
         values: () => valid.location(a, { contactPersonId: b.personId }),
       },
       {
-        constraint: 'location_location_fk',
+        constraint: 'location_nearest_hospital_fk',
         table: location,
         values: () => valid.location(a, { nearestHospitalId: b.locationId }),
       },

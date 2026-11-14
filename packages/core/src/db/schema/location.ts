@@ -61,7 +61,7 @@ export const location = tenantTable(
     }),
     // The nearest hospital is another location of the same organisation.
     foreignKey({
-      name: 'location_location_fk',
+      name: 'location_nearest_hospital_fk',
       columns: [t.organisationId, t.nearestHospitalId],
       foreignColumns: [t.organisationId, t.id],
     }),
