@@ -1,3 +1,6 @@
+export * from './audit-event.js';
+export * from './change-event.js';
+export * from './change-seq.js';
 export * from './department.js';
 export * from './installation.js';
 export * from './org-membership.js';

@@ -82,3 +82,12 @@ export function visibilityCheck(tableName: string, visibility: AnyPgColumn) {
     sql`${visibility} in (${sqlList(VISIBILITIES)})`,
   );
 }
+
+export const ACTOR_TYPES = [
+  'user',
+  'token',
+  'system',
+  'email',
+  'federation',
+] as const;
+export type ActorType = (typeof ACTOR_TYPES)[number];
