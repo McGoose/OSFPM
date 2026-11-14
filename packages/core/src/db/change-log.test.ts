@@ -863,6 +863,114 @@ describe.each(testTargets)('change log and write helper on $name', (target) => {
         expect(await seqsFor(database, t.organisationId, null)).toEqual([1]);
       });
 
+      it('refuses to change the parent key a resolver reads, and writes nothing', async () => {
+        const t = await seedTenant(database);
+        const ctx = contextFor(userId);
+        const projectRole = await insertRole(t, t.projectId, ctx);
+        const template = await insertRole(t, null, ctx);
+        const grantRow = await grant(t, projectRole.id, PERMISSION_KEY, ctx);
+        await expect(
+          database.db.transaction((tx) =>
+            updateRecord(
+              tx,
+              rolePermission,
+              grantRow.id,
+              1,
+              { roleId: template.id },
+              ctx,
+            ),
+          ),
+        ).rejects.toThrow(/roleId cannot be changed on role_permission/);
+
+        const addMember = (memberId: string, status: 'active' | 'invited') =>
+          database.db.transaction((tx) =>
+            insertRecord(
+              tx,
+              projectMembership,
+              {
+                organisationId: t.organisationId,
+                ownerOrgId: t.organisationId,
+                projectId: t.projectId,
+                userId: memberId,
+                status,
+              },
+              ctx,
+            ),
+          );
+        const first = await addMember(await seedUser(database), 'active');
+        const second = await addMember(await seedUser(database), 'invited');
+        const link = await database.db.transaction((tx) =>
+          insertRecord(
+            tx,
+            projectMembershipRole,
+            {
+              organisationId: t.organisationId,
+              ownerOrgId: t.organisationId,
+              membershipId: first.id,
+              roleId: template.id,
+            },
+            ctx,
+          ),
+        );
+        await expect(
+          database.db.transaction((tx) =>
+            updateRecord(
+              tx,
+              projectMembershipRole,
+              link.id,
+              1,
+              { membershipId: second.id },
+              ctx,
+            ),
+          ),
+        ).rejects.toThrow(
+          /membershipId cannot be changed on project_membership_role/,
+        );
+
+        // Neither refused update wrote a row change, an event or a seq.
+        expect(await eventsFor(database, grantRow.id)).toHaveLength(1);
+        expect(await eventsFor(database, link.id)).toHaveLength(1);
+        const [storedGrant] = await rows(
+          database,
+          sql`select role_id, version from role_permission where id = ${grantRow.id}`,
+        );
+        expect(storedGrant).toEqual({ role_id: projectRole.id, version: 1 });
+        const [storedLink] = await rows(
+          database,
+          sql`select membership_id, version from project_membership_role where id = ${link.id}`,
+        );
+        expect(storedLink).toEqual({ membership_id: first.id, version: 1 });
+        const seqs = await seqsFor(database, t.organisationId, t.projectId);
+        expect(seqs).toEqual(seqs.map((_, i) => i + 1));
+      });
+
+      it('moves a record to another parent by delete plus create', async () => {
+        const t = await seedTenant(database);
+        const ctx = contextFor(userId);
+        const projectRole = await insertRole(t, t.projectId, ctx);
+        const template = await insertRole(t, null, ctx);
+        const old = await grant(t, projectRole.id, PERMISSION_KEY, ctx);
+        await database.db.transaction((tx) =>
+          softDeleteRecord(tx, rolePermission, old.id, 1, ctx),
+        );
+        const moved = await grant(t, template.id, PERMISSION_KEY, ctx);
+        expect(
+          (await eventsFor(database, old.id)).map((e) => [
+            e.action,
+            e.projectId,
+          ]),
+        ).toEqual([
+          ['create', t.projectId],
+          ['delete', t.projectId],
+        ]);
+        expect(
+          (await eventsFor(database, moved.id)).map((e) => [
+            e.action,
+            e.projectId,
+          ]),
+        ).toEqual([['create', null]]);
+      });
+
       it('writes nothing, and uses no seq, when the parent does not exist', async () => {
         const t = await seedTenant(database);
         const ctx = contextFor(userId);

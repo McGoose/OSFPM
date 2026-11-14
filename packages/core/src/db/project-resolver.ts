@@ -13,6 +13,7 @@ export type ProjectResolver = (
 ) => Promise<string | null>;
 
 const resolvers = new WeakMap<PgTable, ProjectResolver>();
+const parentKeys = new WeakMap<PgTable, readonly string[]>();
 
 /**
  * Tells the write helper how to find the project of a table's rows. Call it
@@ -22,10 +23,15 @@ const resolvers = new WeakMap<PgTable, ProjectResolver>();
  * project's `change_seq` counter and to fill `change_event.project_id`.
  *
  * Tables with a `project_id` column need nothing: that is the default.
+ *
+ * `parentKeys` names the columns (by property key) the resolver reads. They
+ * become immutable, because changing one could move the record to another
+ * project. Moving a record to another parent is a delete plus a create.
  */
 export function registerProjectResolver(
   table: PgTable,
   resolver: ProjectResolver,
+  options: { parentKeys?: readonly string[] } = {},
 ): void {
   if (resolvers.has(table)) {
     throw new Error(
@@ -33,6 +39,12 @@ export function registerProjectResolver(
     );
   }
   resolvers.set(table, resolver);
+  parentKeys.set(table, options.parentKeys ?? []);
+}
+
+/** Columns `updateRecord` must refuse to change because the project resolver reads them. */
+export function parentKeysOf(table: PgTable): readonly string[] {
+  return parentKeys.get(table) ?? [];
 }
 
 /** The project of `row`: the registered resolver's answer, else its own `projectId`. */

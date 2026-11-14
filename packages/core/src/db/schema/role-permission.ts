@@ -45,16 +45,20 @@ export const rolePermission = tenantTable(
  * Has no `project_id`: its project is its role's. An organisation template
  * role has none, so its permissions belong to the organisation sequence.
  */
-registerProjectResolver(rolePermission, async (tx, row) => {
-  const [found] = await tx
-    .select({ projectId: role.projectId })
-    .from(role)
-    .where(
-      and(
-        eq(role.id, row.roleId as string),
-        eq(role.organisationId, row.organisationId as string),
-      ),
-    )
-    .limit(1);
-  return found?.projectId ?? null;
-});
+registerProjectResolver(
+  rolePermission,
+  async (tx, row) => {
+    const [found] = await tx
+      .select({ projectId: role.projectId })
+      .from(role)
+      .where(
+        and(
+          eq(role.id, row.roleId as string),
+          eq(role.organisationId, row.organisationId as string),
+        ),
+      )
+      .limit(1);
+    return found?.projectId ?? null;
+  },
+  { parentKeys: ['roleId'] },
+);

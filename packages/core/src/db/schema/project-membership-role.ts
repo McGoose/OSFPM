@@ -39,16 +39,20 @@ export const projectMembershipRole = tenantTable(
 );
 
 /** Has no `project_id`: its project is the one its membership belongs to. */
-registerProjectResolver(projectMembershipRole, async (tx, row) => {
-  const [found] = await tx
-    .select({ projectId: projectMembership.projectId })
-    .from(projectMembership)
-    .where(
-      and(
-        eq(projectMembership.id, row.membershipId as string),
-        eq(projectMembership.organisationId, row.organisationId as string),
-      ),
-    )
-    .limit(1);
-  return found?.projectId ?? null;
-});
+registerProjectResolver(
+  projectMembershipRole,
+  async (tx, row) => {
+    const [found] = await tx
+      .select({ projectId: projectMembership.projectId })
+      .from(projectMembership)
+      .where(
+        and(
+          eq(projectMembership.id, row.membershipId as string),
+          eq(projectMembership.organisationId, row.organisationId as string),
+        ),
+      )
+      .limit(1);
+    return found?.projectId ?? null;
+  },
+  { parentKeys: ['membershipId'] },
+);

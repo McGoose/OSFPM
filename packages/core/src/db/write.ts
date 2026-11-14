@@ -3,7 +3,7 @@ import type { AnyPgColumn, PgTable } from 'drizzle-orm/pg-core';
 import type { ActorType } from './columns.js';
 import type { SchemaDb } from './client.js';
 import { newId } from './ids.js';
-import { resolveProjectId } from './project-resolver.js';
+import { parentKeysOf, resolveProjectId } from './project-resolver.js';
 import { auditEvent, changeEvent, changeSeq } from './schema/index.js';
 import type { ChangeAction } from './schema/index.js';
 import { sensitiveColumns } from './sensitive.js';
@@ -427,6 +427,11 @@ export async function updateRecord<T extends TenantTable>(
     if (value === undefined) continue;
     if ((IMMUTABLE_KEYS as readonly string[]).includes(key)) {
       throw new Error(`${key} cannot be changed on ${getTableName(table)}`);
+    }
+    if (parentKeysOf(table).includes(key)) {
+      throw new Error(
+        `${key} cannot be changed on ${getTableName(table)}: delete the record and create a new one`,
+      );
     }
     if (!(key in getTableColumns(table))) {
       throw new Error(`Unknown column ${key} on ${getTableName(table)}`);
