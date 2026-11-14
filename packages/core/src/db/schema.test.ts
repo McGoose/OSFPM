@@ -3,7 +3,20 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from './client.js';
 import { newId } from './ids.js';
 import { migrate } from './migrate.js';
-import { installation, organisation, project, user } from './schema/index.js';
+import {
+  department,
+  installation,
+  orgMembership,
+  organisation,
+  permission,
+  project,
+  projectMembership,
+  projectMembershipRole,
+  role,
+  rolePermission,
+  settingValue,
+  user,
+} from './schema/index.js';
 import {
   createMigratedDatabase,
   failureOf,
@@ -126,9 +139,17 @@ describe.each(testTargets)('database schema on $name', (target) => {
               where table_schema = 'public' order by table_name`,
         );
         expect(tables.map((t) => t.table_name)).toEqual([
+          'department',
           'installation',
+          'org_membership',
           'organisation',
+          'permission',
           'project',
+          'project_membership',
+          'project_membership_role',
+          'role',
+          'role_permission',
+          'setting_value',
           'user',
         ]);
       } finally {
@@ -149,7 +170,17 @@ describe.each(testTargets)('database schema on $name', (target) => {
     });
 
     describe('standard columns', () => {
-      for (const table of ['organisation', 'project']) {
+      for (const table of [
+        'organisation',
+        'project',
+        'org_membership',
+        'department',
+        'role',
+        'role_permission',
+        'project_membership',
+        'project_membership_role',
+        'setting_value',
+      ]) {
         it(`${table} has every standard column with the right type and nullability`, async () => {
           const columns = await columnsOf(database, table);
           for (const [name, spec] of Object.entries(STANDARD_COLUMNS)) {
@@ -186,6 +217,13 @@ describe.each(testTargets)('database schema on $name', (target) => {
           'organisation',
           'project',
           'user',
+          'org_membership',
+          'department',
+          'role',
+          'role_permission',
+          'project_membership',
+          'project_membership_role',
+          'setting_value',
         ]) {
           const columns = await columnsOf(database, table);
           expect(columns.get('id')?.default, table).toBeNull();
@@ -414,5 +452,699 @@ describe.each(testTargets)('database schema on $name', (target) => {
           .values(userValues({ createdBy: creatorId }));
       });
     });
+
+    describe('format checks', () => {
+      const bad = async (
+        values: () => Parameters<typeof insertOrganisation>[1],
+      ) => failureOf(() => insertOrganisation(database, values()));
+
+      it.each(['gb', 'GBR', 'G', 'G1', ''])(
+        'rejects organisation country %j',
+        async (country) => {
+          const failure = await bad(() => ({ country }));
+          expect(failure).toEqual({
+            code: SQLSTATE.checkViolation,
+            constraint: 'organisation_country_check',
+          });
+        },
+      );
+
+      it.each(['gbp', 'GB', 'GBPP', 'G1P', ''])(
+        'rejects organisation base currency %j',
+        async (baseCurrency) => {
+          const failure = await bad(() => ({ baseCurrency }));
+          expect(failure).toEqual({
+            code: SQLSTATE.checkViolation,
+            constraint: 'organisation_base_currency_check',
+          });
+        },
+      );
+
+      it.each(['eur', 'EU', 'EURO', ''])(
+        'rejects project currency %j',
+        async (currency) => {
+          const tenant = await seedTenant(database);
+          const failure = await failureOf(() =>
+            database.db
+              .insert(project)
+              .values(
+                projectValues(tenant.organisationId, { code: 'C1', currency }),
+              ),
+          );
+          expect(failure).toEqual({
+            code: SQLSTATE.checkViolation,
+            constraint: 'project_currency_check',
+          });
+        },
+      );
+    });
+
+    describe('access and settings tables', () => {
+      let a: Tenant;
+      let b: Tenant;
+
+      beforeAll(async () => {
+        a = await seedTenant(database);
+        b = await seedTenant(database);
+        await database.db.insert(permission).values([
+          {
+            key: 'budget:read',
+            module: 'budget',
+            description: 'Read budgets',
+          },
+        ]);
+      });
+
+      const fkViolation = (constraint: string) => ({
+        code: SQLSTATE.foreignKeyViolation,
+        constraint,
+      });
+      const uniqueViolation = (constraint: string) => ({
+        code: SQLSTATE.uniqueViolation,
+        constraint,
+      });
+      const checkViolation = (constraint: string) => ({
+        code: SQLSTATE.checkViolation,
+        constraint,
+      });
+
+      describe('org_membership', () => {
+        it('rejects a second membership for the same user', async () => {
+          const u = await insertUser(database);
+          const values = orgMembershipValues(a.organisationId, u);
+          await database.db.insert(orgMembership).values(values);
+          const failure = await failureOf(() =>
+            database.db.insert(orgMembership).values(values),
+          );
+          expect(failure).toEqual(
+            uniqueViolation('org_membership_organisation_user_unique'),
+          );
+        });
+
+        it('rejects an unknown organisation', async () => {
+          const u = await insertUser(database);
+          const failure = await failureOf(() =>
+            database.db
+              .insert(orgMembership)
+              .values(orgMembershipValues(newId(), u)),
+          );
+          expect(failure).toEqual(
+            fkViolation('org_membership_organisation_id_fk'),
+          );
+        });
+
+        it('rejects an unknown user', async () => {
+          const failure = await failureOf(() =>
+            database.db
+              .insert(orgMembership)
+              .values(orgMembershipValues(a.organisationId, newId())),
+          );
+          expect(failure).toEqual(fkViolation('org_membership_user_id_fk'));
+        });
+
+        it('rejects an unknown role and status', async () => {
+          const u = await insertUser(database);
+          const badRole = await failureOf(() =>
+            database.db.insert(orgMembership).values({
+              ...orgMembershipValues(a.organisationId, u),
+              orgRole: 'root' as never,
+            }),
+          );
+          expect(badRole).toEqual(
+            checkViolation('org_membership_org_role_check'),
+          );
+          const badStatus = await failureOf(() =>
+            database.db.insert(orgMembership).values({
+              ...orgMembershipValues(a.organisationId, u),
+              status: 'gone' as never,
+            }),
+          );
+          expect(badStatus).toEqual(
+            checkViolation('org_membership_status_check'),
+          );
+        });
+      });
+
+      describe('duplicate keys with a NULL project', () => {
+        it('rejects a duplicate department key', async () => {
+          const values = departmentValues(a.organisationId, null, 'camera');
+          await database.db.insert(department).values(values);
+          const failure = await failureOf(() =>
+            database.db
+              .insert(department)
+              .values(departmentValues(a.organisationId, null, 'camera')),
+          );
+          expect(failure).toEqual(
+            uniqueViolation('department_organisation_project_key_unique'),
+          );
+        });
+
+        it('rejects a duplicate role key', async () => {
+          await database.db
+            .insert(role)
+            .values(roleValues(a.organisationId, null, 'director'));
+          const failure = await failureOf(() =>
+            database.db
+              .insert(role)
+              .values(roleValues(a.organisationId, null, 'director')),
+          );
+          expect(failure).toEqual(
+            uniqueViolation('role_organisation_project_key_unique'),
+          );
+        });
+
+        it('rejects a duplicate org-layer setting key', async () => {
+          await database.db
+            .insert(settingValue)
+            .values(settingValues(a.organisationId, null, 'currency'));
+          const failure = await failureOf(() =>
+            database.db
+              .insert(settingValue)
+              .values(settingValues(a.organisationId, null, 'currency')),
+          );
+          expect(failure).toEqual(
+            uniqueViolation('setting_value_organisation_project_key_unique'),
+          );
+        });
+
+        it('allows the same key in a project, in another organisation, and as a template and project copy', async () => {
+          await database.db
+            .insert(department)
+            .values(departmentValues(a.organisationId, null, 'sound'));
+          await database.db
+            .insert(department)
+            .values(departmentValues(a.organisationId, a.projectId, 'sound'));
+          await database.db
+            .insert(department)
+            .values(departmentValues(b.organisationId, null, 'sound'));
+        });
+
+        it('rejects a duplicate role_permission with no department', async () => {
+          const r = await insertRole(database, a.organisationId, 'rp-dup');
+          await database.db
+            .insert(rolePermission)
+            .values(rolePermissionValues(a.organisationId, r, null));
+          const failure = await failureOf(() =>
+            database.db
+              .insert(rolePermission)
+              .values(rolePermissionValues(a.organisationId, r, null)),
+          );
+          expect(failure).toEqual(
+            uniqueViolation(
+              'role_permission_role_permission_department_unique',
+            ),
+          );
+        });
+      });
+
+      describe('cross-organisation references', () => {
+        it('rejects a department in another organisation’s project', async () => {
+          const failure = await failureOf(() =>
+            database.db
+              .insert(department)
+              .values(departmentValues(a.organisationId, b.projectId, 'x1')),
+          );
+          expect(failure).toEqual(fkViolation('department_project_fk'));
+        });
+
+        it('rejects a role in another organisation’s project', async () => {
+          const failure = await failureOf(() =>
+            database.db
+              .insert(role)
+              .values(roleValues(a.organisationId, b.projectId, 'x1')),
+          );
+          expect(failure).toEqual(fkViolation('role_project_fk'));
+        });
+
+        it('rejects a role_permission for another organisation’s role', async () => {
+          const bRole = await insertRole(database, b.organisationId, 'x2');
+          const failure = await failureOf(() =>
+            database.db
+              .insert(rolePermission)
+              .values(rolePermissionValues(a.organisationId, bRole, null)),
+          );
+          expect(failure).toEqual(fkViolation('role_permission_role_fk'));
+        });
+
+        it('rejects a role_permission for another organisation’s department', async () => {
+          const aRole = await insertRole(database, a.organisationId, 'x3');
+          const bDept = await insertDepartment(
+            database,
+            b.organisationId,
+            'x3',
+          );
+          const failure = await failureOf(() =>
+            database.db
+              .insert(rolePermission)
+              .values(rolePermissionValues(a.organisationId, aRole, bDept)),
+          );
+          expect(failure).toEqual(fkViolation('role_permission_department_fk'));
+        });
+
+        it('rejects a project_membership on another organisation’s project', async () => {
+          const u = await insertUser(database);
+          const failure = await failureOf(() =>
+            database.db
+              .insert(projectMembership)
+              .values(
+                projectMembershipValues(a.organisationId, b.projectId, u),
+              ),
+          );
+          expect(failure).toEqual(fkViolation('project_membership_project_fk'));
+        });
+
+        it('rejects a membership role on another organisation’s membership', async () => {
+          const u = await insertUser(database);
+          const bMembership = await insertProjectMembership(
+            database,
+            b.organisationId,
+            b.projectId,
+            u,
+          );
+          const aRole = await insertRole(database, a.organisationId, 'x4');
+          const failure = await failureOf(() =>
+            database.db
+              .insert(projectMembershipRole)
+              .values(
+                membershipRoleValues(a.organisationId, bMembership, aRole),
+              ),
+          );
+          expect(failure).toEqual(
+            fkViolation('project_membership_role_membership_fk'),
+          );
+        });
+
+        it('rejects a membership role for another organisation’s role', async () => {
+          const u = await insertUser(database);
+          const aMembership = await insertProjectMembership(
+            database,
+            a.organisationId,
+            a.projectId,
+            u,
+          );
+          const bRole = await insertRole(database, b.organisationId, 'x5');
+          const failure = await failureOf(() =>
+            database.db
+              .insert(projectMembershipRole)
+              .values(
+                membershipRoleValues(a.organisationId, aMembership, bRole),
+              ),
+          );
+          expect(failure).toEqual(
+            fkViolation('project_membership_role_role_fk'),
+          );
+        });
+
+        it('rejects a project-layer setting on another organisation’s project', async () => {
+          const failure = await failureOf(() =>
+            database.db.insert(settingValue).values({
+              ...settingValues(a.organisationId, b.projectId, 'x6'),
+              layer: 'project',
+            }),
+          );
+          expect(failure).toEqual(fkViolation('setting_value_project_fk'));
+        });
+      });
+
+      describe('project memberships', () => {
+        it('rejects a second membership for the same user and project', async () => {
+          const u = await insertUser(database);
+          await insertProjectMembership(
+            database,
+            a.organisationId,
+            a.projectId,
+            u,
+          );
+          const failure = await failureOf(() =>
+            database.db
+              .insert(projectMembership)
+              .values(
+                projectMembershipValues(a.organisationId, a.projectId, u),
+              ),
+          );
+          expect(failure).toEqual(
+            uniqueViolation('project_membership_project_user_unique'),
+          );
+        });
+
+        it('rejects an unknown status', async () => {
+          const u = await insertUser(database);
+          const failure = await failureOf(() =>
+            database.db.insert(projectMembership).values({
+              ...projectMembershipValues(a.organisationId, a.projectId, u),
+              status: 'paused' as never,
+            }),
+          );
+          expect(failure).toEqual(
+            checkViolation('project_membership_status_check'),
+          );
+        });
+
+        it('rejects the same role twice on one membership', async () => {
+          const u = await insertUser(database);
+          const m = await insertProjectMembership(
+            database,
+            a.organisationId,
+            a.projectId,
+            u,
+          );
+          const r = await insertRole(database, a.organisationId, 'twice');
+          await database.db
+            .insert(projectMembershipRole)
+            .values(membershipRoleValues(a.organisationId, m, r));
+          const failure = await failureOf(() =>
+            database.db
+              .insert(projectMembershipRole)
+              .values(membershipRoleValues(a.organisationId, m, r)),
+          );
+          expect(failure).toEqual(
+            uniqueViolation('project_membership_role_membership_role_unique'),
+          );
+        });
+      });
+
+      describe('permission', () => {
+        it('rejects an unknown permission_key on role_permission', async () => {
+          const r = await insertRole(database, a.organisationId, 'unknown-key');
+          const failure = await failureOf(() =>
+            database.db.insert(rolePermission).values({
+              ...rolePermissionValues(a.organisationId, r, null),
+              permissionKey: 'budget:destroy',
+            }),
+          );
+          expect(failure).toEqual(
+            fkViolation('role_permission_permission_key_fk'),
+          );
+        });
+
+        it.each([
+          'budget',
+          'Budget:read',
+          'budget:Read',
+          ':read',
+          'budget:',
+          '1budget:read',
+          'budget:read now',
+          'budget_x:read',
+        ])('rejects malformed key %j', async (key) => {
+          const failure = await failureOf(() =>
+            database.db
+              .insert(permission)
+              .values({ key, module: 'budget', description: 'Bad key' }),
+          );
+          expect(failure).toEqual(
+            checkViolation('permission_key_format_check'),
+          );
+        });
+
+        it('accepts well-formed keys and defaults grants_sensitive to false', async () => {
+          await database.db.insert(permission).values([
+            { key: 'call-sheet:read', module: 'call-sheet', description: 'x' },
+            { key: 'crew:read:bank', module: 'crew', description: 'x' },
+          ]);
+          const [row] = await rows(
+            database,
+            sql`select grants_sensitive from permission where key = 'crew:read:bank'`,
+          );
+          expect(row).toEqual({ grants_sensitive: false });
+        });
+
+        it('has no standard columns', async () => {
+          const columns = await columnsOf(database, 'permission');
+          expect([...columns.keys()].sort()).toEqual([
+            'description',
+            'grants_sensitive',
+            'key',
+            'module',
+          ]);
+        });
+      });
+
+      describe('setting_value', () => {
+        it('rejects the org layer with a project', async () => {
+          const failure = await failureOf(() =>
+            database.db.insert(settingValue).values({
+              ...settingValues(a.organisationId, a.projectId, 'y1'),
+              layer: 'org',
+            }),
+          );
+          expect(failure).toEqual(
+            checkViolation('setting_value_layer_project_check'),
+          );
+        });
+
+        it('rejects the project layer without a project', async () => {
+          const failure = await failureOf(() =>
+            database.db.insert(settingValue).values({
+              ...settingValues(a.organisationId, null, 'y2'),
+              layer: 'project',
+            }),
+          );
+          expect(failure).toEqual(
+            checkViolation('setting_value_layer_project_check'),
+          );
+        });
+
+        it('rejects an unknown layer', async () => {
+          const failure = await failureOf(() =>
+            database.db.insert(settingValue).values({
+              ...settingValues(a.organisationId, null, 'y3'),
+              layer: 'install' as never,
+            }),
+          );
+          expect(failure.constraint).toBe('setting_value_layer_check');
+        });
+
+        it('stores json values and keeps org and project layers apart', async () => {
+          await database.db.insert(settingValue).values({
+            ...settingValues(a.organisationId, null, 'shared-key'),
+            value: { nested: [1, 2] },
+          });
+          await database.db.insert(settingValue).values({
+            ...settingValues(a.organisationId, a.projectId, 'shared-key'),
+            layer: 'project',
+          });
+          const [row] = await rows(
+            database,
+            sql`select value from setting_value
+                where organisation_id = ${a.organisationId}
+                  and project_id is null and key = 'shared-key'`,
+          );
+          expect(row).toEqual({ value: { nested: [1, 2] } });
+        });
+
+        it('rejects a null value', async () => {
+          const failure = await failureOf(() =>
+            database.db.insert(settingValue).values({
+              ...settingValues(a.organisationId, null, 'y4'),
+              value: null,
+            }),
+          );
+          expect(failure.code).toBe('23502');
+        });
+      });
+
+      describe('defaults', () => {
+        it('uses private visibility for memberships and settings, project elsewhere', async () => {
+          const expected: Record<string, string> = {
+            org_membership: 'private',
+            setting_value: 'private',
+            department: 'project',
+            role: 'project',
+            role_permission: 'project',
+            project_membership: 'project',
+            project_membership_role: 'project',
+          };
+          for (const [table, visibility] of Object.entries(expected)) {
+            const columns = await columnsOf(database, table);
+            expect(columns.get('visibility')?.default, table).toContain(
+              `'${visibility}'`,
+            );
+          }
+        });
+
+        it('defaults role.is_default and department.sort_order', async () => {
+          const r = await insertRole(database, a.organisationId, 'defaults');
+          const d = await insertDepartment(
+            database,
+            a.organisationId,
+            'defaults',
+          );
+          const [row] = await rows(
+            database,
+            sql`select
+                  (select is_default from role where id = ${r}) as is_default,
+                  (select sort_order from department where id = ${d}) as sort_order`,
+          );
+          expect(row).toEqual({ is_default: false, sort_order: 0 });
+        });
+      });
+    });
   });
 });
+
+type Tenant = { organisationId: string; projectId: string };
+
+async function insertOrganisation(
+  database: Database,
+  overrides: Partial<typeof organisation.$inferInsert> = {},
+) {
+  const values = organisationValues(overrides);
+  await database.db.insert(organisation).values(values);
+  return values.id;
+}
+
+async function seedTenant(database: Database): Promise<Tenant> {
+  const organisationId = await insertOrganisation(database);
+  const [row] = await database.db
+    .insert(project)
+    .values(projectValues(organisationId))
+    .returning({ id: project.id });
+  return { organisationId, projectId: row!.id };
+}
+
+async function insertUser(database: Database) {
+  const [row] = await database.db
+    .insert(user)
+    .values(userValues())
+    .returning({ id: user.id });
+  return row!.id;
+}
+
+function orgMembershipValues(organisationId: string, userId: string) {
+  return {
+    organisationId,
+    ownerOrgId: organisationId,
+    originServer: newId(),
+    userId,
+    orgRole: 'member',
+    status: 'active',
+  } satisfies typeof orgMembership.$inferInsert;
+}
+
+function departmentValues(
+  organisationId: string,
+  projectId: string | null,
+  key: string,
+) {
+  return {
+    organisationId,
+    ownerOrgId: organisationId,
+    originServer: newId(),
+    projectId,
+    key,
+    name: key,
+  } satisfies typeof department.$inferInsert;
+}
+
+function roleValues(
+  organisationId: string,
+  projectId: string | null,
+  key: string,
+) {
+  return {
+    organisationId,
+    ownerOrgId: organisationId,
+    originServer: newId(),
+    projectId,
+    key,
+    name: key,
+  } satisfies typeof role.$inferInsert;
+}
+
+function rolePermissionValues(
+  organisationId: string,
+  roleId: string,
+  departmentId: string | null,
+) {
+  return {
+    organisationId,
+    ownerOrgId: organisationId,
+    originServer: newId(),
+    roleId,
+    permissionKey: 'budget:read',
+    departmentId,
+  } satisfies typeof rolePermission.$inferInsert;
+}
+
+function projectMembershipValues(
+  organisationId: string,
+  projectId: string,
+  userId: string,
+) {
+  return {
+    organisationId,
+    ownerOrgId: organisationId,
+    originServer: newId(),
+    projectId,
+    userId,
+    status: 'active',
+  } satisfies typeof projectMembership.$inferInsert;
+}
+
+function membershipRoleValues(
+  organisationId: string,
+  membershipId: string,
+  roleId: string,
+) {
+  return {
+    organisationId,
+    ownerOrgId: organisationId,
+    originServer: newId(),
+    membershipId,
+    roleId,
+  } satisfies typeof projectMembershipRole.$inferInsert;
+}
+
+function settingValues(
+  organisationId: string,
+  projectId: string | null,
+  key: string,
+) {
+  return {
+    organisationId,
+    ownerOrgId: organisationId,
+    originServer: newId(),
+    layer: projectId === null ? 'org' : 'project',
+    projectId,
+    key,
+    value: { enabled: true },
+  } satisfies typeof settingValue.$inferInsert;
+}
+
+async function insertRole(
+  database: Database,
+  organisationId: string,
+  key: string,
+) {
+  const [row] = await database.db
+    .insert(role)
+    .values(roleValues(organisationId, null, key))
+    .returning({ id: role.id });
+  return row!.id;
+}
+
+async function insertDepartment(
+  database: Database,
+  organisationId: string,
+  key: string,
+) {
+  const [row] = await database.db
+    .insert(department)
+    .values(departmentValues(organisationId, null, key))
+    .returning({ id: department.id });
+  return row!.id;
+}
+
+async function insertProjectMembership(
+  database: Database,
+  organisationId: string,
+  projectId: string,
+  userId: string,
+) {
+  const [row] = await database.db
+    .insert(projectMembership)
+    .values(projectMembershipValues(organisationId, projectId, userId))
+    .returning({ id: projectMembership.id });
+  return row!.id;
+}
