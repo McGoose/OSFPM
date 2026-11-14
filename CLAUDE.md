@@ -63,3 +63,4 @@ Read-only reference at tag `prototype-final`. Port only what a prompt names.
 - Lint: `pnpm lint`
 - Format: `pnpm format` (check only: `pnpm format:check`)
 - Typecheck: `pnpm typecheck`
+- Node and pnpm versions: `.nvmrc` and `packageManager` in root `package.json` are the only source; don't repeat version numbers elsewhere.
