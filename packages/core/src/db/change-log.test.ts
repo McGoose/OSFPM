@@ -1,19 +1,25 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { sql } from 'drizzle-orm';
-import { pgTable, text, uuid } from 'drizzle-orm/pg-core';
+import { text, uuid } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { APPEND_ONLY_SQLSTATE, appendOnlyMigrationSql } from './append-only.js';
 import type { Database } from './client.js';
-import { standardColumns } from './columns.js';
+import { standardColumns, tenantTable } from './columns.js';
 import { newId } from './ids.js';
 import { MIGRATIONS_FOLDER } from './migrate.js';
+import { registerProjectResolver } from './project-resolver.js';
 import {
   auditEvent,
   changeEvent,
   changeSeq,
   organisation,
+  permission,
   project,
+  projectMembership,
+  projectMembershipRole,
+  role,
+  rolePermission,
   user,
 } from './schema/index.js';
 import { markSensitive, sensitiveColumns } from './sensitive.js';
@@ -25,7 +31,9 @@ import {
 } from './test-support.js';
 import {
   insertRecord,
+  MissingActingUserError,
   RecordNotFoundError,
+  RecordStateError,
   RecordWriteError,
   recordAudit,
   restoreRecord,
@@ -36,11 +44,8 @@ import {
 } from './write.js';
 
 /** A stand-in tenant table. No real table has sensitive columns yet. */
-const dummyRecord = pgTable('dummy_record', {
-  ...standardColumns(
-    () => user.id,
-    () => organisation.id,
-  ),
+const dummyRecord = tenantTable('dummy_record', () => organisation.id, {
+  ...standardColumns(() => user.id),
   projectId: uuid('project_id'),
   title: text('title').notNull(),
   secretNote: text('secret_note'),
@@ -144,7 +149,9 @@ const ORIGIN = newId();
 
 function contextFor(
   actorId: string | null,
-  overrides: Partial<WriteContext> = {},
+  overrides: Partial<
+    Pick<WriteContext, 'requestId' | 'originServer' | 'clock'>
+  > = {},
 ): WriteContext {
   let tick = 0;
   return {
@@ -443,6 +450,694 @@ describe.each(testTargets)('change log and write helper on $name', (target) => {
         projectId: t.projectId,
         seq: 1,
         changedFields: ['title'],
+      });
+    });
+
+    describe('actor attribution', () => {
+      let owner: string;
+      let approver: string;
+      let bystander: string;
+      beforeAll(async () => {
+        owner = await seedUser(database);
+        approver = await seedUser(database);
+        bystander = await seedUser(database);
+      });
+
+      const tokenId = newId();
+      const draftId = newId();
+      const peerId = newId();
+
+      // [label, actor, onBehalfOfUserId, expected created_by/updated_by/deleted_by]
+      const cases = (): [
+        string,
+        WriteContext['actor'],
+        string,
+        string | null,
+      ][] => [
+        ['user', { type: 'user', id: userId }, bystander, userId],
+        ['token', { type: 'token', id: tokenId }, owner, owner],
+        ['email', { type: 'email', id: draftId }, approver, approver],
+        ['system', { type: 'system', id: null }, bystander, null],
+        ['federation', { type: 'federation', id: peerId }, bystander, null],
+      ];
+
+      it('requires onBehalfOfUserId, by type, for token and email actors', () => {
+        const base = { originServer: ORIGIN, clock: () => new Date() };
+        // @ts-expect-error a token write must say whose behalf it is made on
+        const token: WriteContext = {
+          ...base,
+          actor: { type: 'token', id: null },
+        };
+        // @ts-expect-error an email write must say who approved the draft
+        const email: WriteContext = {
+          ...base,
+          actor: { type: 'email', id: null },
+        };
+        const system: WriteContext = {
+          ...base,
+          actor: { type: 'system', id: null },
+        };
+        expect([token, email, system]).toHaveLength(3);
+      });
+
+      it('forbids onBehalfOfUserId, by type, for user, system and federation actors', () => {
+        const base = { originServer: ORIGIN, clock: () => new Date() };
+        const onBehalfOfUserId = 'someone';
+        // @ts-expect-error the actor is the user, so there is nobody else
+        const user: WriteContext = {
+          ...base,
+          onBehalfOfUserId,
+          actor: { type: 'user', id: null },
+        };
+        // @ts-expect-error the system acts for no user
+        const system: WriteContext = {
+          ...base,
+          onBehalfOfUserId,
+          actor: { type: 'system', id: null },
+        };
+        // @ts-expect-error a federated peer acts for no local user
+        const federation: WriteContext = {
+          ...base,
+          onBehalfOfUserId,
+          actor: { type: 'federation', id: null },
+        };
+        // Leaving it out stays fine.
+        const plain: WriteContext = {
+          ...base,
+          actor: { type: 'user', id: null },
+        };
+        expect([user, system, federation, plain]).toHaveLength(4);
+      });
+
+      it.each([
+        ['token', undefined],
+        ['token', null],
+        ['email', undefined],
+        ['email', ''],
+      ] as const)(
+        'rejects every write of a %s actor with onBehalfOfUserId %j, and writes nothing',
+        async (type, missing) => {
+          const t = await seedTenant(database);
+          const good = contextFor(userId);
+          const created = await database.db.transaction((tx) =>
+            insertRecord(
+              tx,
+              dummyRecord,
+              dummyValues(t.organisationId, t.projectId),
+              good,
+            ),
+          );
+          const deleted = await database.db.transaction((tx) =>
+            softDeleteRecord(tx, dummyRecord, created.id, 1, good),
+          );
+          const live = await database.db.transaction((tx) =>
+            insertRecord(
+              tx,
+              dummyRecord,
+              dummyValues(t.organisationId, t.projectId),
+              good,
+            ),
+          );
+          const bad = {
+            ...contextFor(null),
+            actor: { type, id: newId() },
+            onBehalfOfUserId: missing,
+          } as unknown as WriteContext;
+
+          const state = async () => ({
+            seqs: await seqsFor(database, t.organisationId, t.projectId),
+            rows: await rows(
+              database,
+              sql`select id, version, updated_by, deleted_at from dummy_record
+                  where organisation_id = ${t.organisationId} order by id`,
+            ),
+          });
+          const before = await state();
+          const attempts = [
+            () =>
+              database.db.transaction((tx) =>
+                insertRecord(
+                  tx,
+                  dummyRecord,
+                  dummyValues(t.organisationId, t.projectId),
+                  bad,
+                ),
+              ),
+            () =>
+              database.db.transaction((tx) =>
+                updateRecord(
+                  tx,
+                  dummyRecord,
+                  live.id,
+                  1,
+                  { title: 'Revised' },
+                  bad,
+                ),
+              ),
+            () =>
+              database.db.transaction((tx) =>
+                softDeleteRecord(tx, dummyRecord, live.id, 1, bad),
+              ),
+            () =>
+              database.db.transaction((tx) =>
+                restoreRecord(
+                  tx,
+                  dummyRecord,
+                  created.id,
+                  deleted.version,
+                  bad,
+                ),
+              ),
+          ];
+          for (const attempt of attempts) {
+            let thrown: unknown;
+            try {
+              await attempt();
+            } catch (error) {
+              thrown = error;
+            }
+            expect(thrown).toBeInstanceOf(MissingActingUserError);
+            expect(thrown).toMatchObject({ actorType: type });
+          }
+          expect(await state()).toEqual(before);
+        },
+      );
+
+      it.each(['user', 'token', 'email', 'system', 'federation'])(
+        '%s: fills the user columns as specified and keeps the exact actor on every event',
+        async (label) => {
+          const [, actor, onBehalfOfUserId, expectedUser] = cases().find(
+            ([name]) => name === label,
+          )!;
+          const t = await seedTenant(database);
+          // Cast: the table also passes an ignored onBehalfOfUserId for the actor
+          // types whose context type does not require one.
+          const ctx = {
+            ...contextFor(null),
+            actor,
+            onBehalfOfUserId,
+          } as WriteContext;
+
+          const created = await database.db.transaction((tx) =>
+            insertRecord(
+              tx,
+              dummyRecord,
+              dummyValues(t.organisationId, t.projectId),
+              ctx,
+            ),
+          );
+          expect(created.createdBy).toBe(expectedUser);
+          expect(created.updatedBy).toBe(expectedUser);
+          expect(created.deletedBy).toBeNull();
+
+          const updated = await database.db.transaction((tx) =>
+            updateRecord(
+              tx,
+              dummyRecord,
+              created.id,
+              1,
+              { title: 'Revised' },
+              ctx,
+            ),
+          );
+          expect(updated.createdBy).toBe(expectedUser);
+          expect(updated.updatedBy).toBe(expectedUser);
+
+          const deleted = await database.db.transaction((tx) =>
+            softDeleteRecord(tx, dummyRecord, created.id, 2, ctx),
+          );
+          expect(deleted.deletedBy).toBe(expectedUser);
+          expect(deleted.updatedBy).toBe(expectedUser);
+
+          const restored = await database.db.transaction((tx) =>
+            restoreRecord(tx, dummyRecord, created.id, 3, ctx),
+          );
+          expect(restored.deletedBy).toBeNull();
+          expect(restored.updatedBy).toBe(expectedUser);
+
+          const events = await eventsFor(database, created.id);
+          expect(events).toHaveLength(4);
+          for (const event of events) {
+            expect(event.actorType).toBe(actor.type);
+            expect(event.actorId).toBe(actor.id);
+          }
+        },
+      );
+    });
+
+    describe('record state errors', () => {
+      async function snapshot(
+        t: { organisationId: string; projectId: string },
+        id: string,
+      ) {
+        const [row] = await rows(
+          database,
+          sql`select * from dummy_record where id = ${id}`,
+        );
+        const [counter] = await rows(
+          database,
+          sql`select last_seq from change_seq
+              where organisation_id = ${t.organisationId} and project_id = ${t.projectId}`,
+        );
+        return {
+          row,
+          lastSeq: counter!.last_seq,
+          events: await eventsFor(database, id),
+        };
+      }
+
+      async function createAndDelete() {
+        const t = await seedTenant(database);
+        const ctx = contextFor(userId);
+        const created = await database.db.transaction((tx) =>
+          insertRecord(
+            tx,
+            dummyRecord,
+            dummyValues(t.organisationId, t.projectId, {
+              secretNote: SECRET,
+            }),
+            ctx,
+          ),
+        );
+        const deleted = await database.db.transaction((tx) =>
+          softDeleteRecord(tx, dummyRecord, created.id, 1, ctx),
+        );
+        return { t, ctx, created, deleted };
+      }
+
+      it('rejects deleting a deleted record with RecordStateError and writes nothing', async () => {
+        const { t, ctx, created, deleted } = await createAndDelete();
+        const before = await snapshot(t, created.id);
+
+        let thrown: unknown;
+        try {
+          await database.db.transaction((tx) =>
+            softDeleteRecord(tx, dummyRecord, created.id, deleted.version, ctx),
+          );
+        } catch (error) {
+          thrown = error;
+        }
+        expect(thrown).toBeInstanceOf(RecordStateError);
+        expect(thrown).toMatchObject({
+          entityType: 'dummy_record',
+          entityId: created.id,
+          operation: 'delete',
+        });
+        expect(await snapshot(t, created.id)).toEqual(before);
+        expect(before.events.map((e) => e.action)).toEqual([
+          'create',
+          'delete',
+        ]);
+      });
+
+      it('rejects restoring a live record with RecordStateError and writes nothing', async () => {
+        const t = await seedTenant(database);
+        const ctx = contextFor(userId);
+        const created = await database.db.transaction((tx) =>
+          insertRecord(
+            tx,
+            dummyRecord,
+            dummyValues(t.organisationId, t.projectId),
+            ctx,
+          ),
+        );
+        const before = await snapshot(t, created.id);
+
+        let thrown: unknown;
+        try {
+          await database.db.transaction((tx) =>
+            restoreRecord(tx, dummyRecord, created.id, created.version, ctx),
+          );
+        } catch (error) {
+          thrown = error;
+        }
+        expect(thrown).toBeInstanceOf(RecordStateError);
+        expect(thrown).toMatchObject({
+          entityType: 'dummy_record',
+          entityId: created.id,
+          operation: 'restore',
+        });
+        expect(await snapshot(t, created.id)).toEqual(before);
+        expect(before.events).toHaveLength(1);
+      });
+
+      it('uses no seq: the next write in the same transaction gets the next number', async () => {
+        const { t, ctx, created, deleted } = await createAndDelete();
+        const next = await database.db.transaction(async (tx) => {
+          await expect(
+            softDeleteRecord(tx, dummyRecord, created.id, deleted.version, ctx),
+          ).rejects.toBeInstanceOf(RecordStateError);
+          const other = await insertRecord(
+            tx,
+            dummyRecord,
+            dummyValues(t.organisationId, t.projectId),
+            ctx,
+          );
+          await expect(
+            restoreRecord(tx, dummyRecord, other.id, other.version, ctx),
+          ).rejects.toBeInstanceOf(RecordStateError);
+          return restoreRecord(
+            tx,
+            dummyRecord,
+            created.id,
+            deleted.version,
+            ctx,
+          );
+        });
+        expect(next.deletedAt).toBeNull();
+        // create 1, delete 2, the other record's create 3, restore 4: the two
+        // refused calls left no gap.
+        expect(await seqsFor(database, t.organisationId, t.projectId)).toEqual([
+          1, 2, 3, 4,
+        ]);
+      });
+
+      it('reports a stale version before the state', async () => {
+        const { ctx, created } = await createAndDelete();
+        await expect(
+          database.db.transaction((tx) =>
+            softDeleteRecord(tx, dummyRecord, created.id, 1, ctx),
+          ),
+        ).rejects.toBeInstanceOf(VersionConflictError);
+      });
+
+      it('keeps record values out of the error', async () => {
+        const { ctx, created, deleted } = await createAndDelete();
+        const failure = await database.db
+          .transaction((tx) =>
+            softDeleteRecord(tx, dummyRecord, created.id, deleted.version, ctx),
+          )
+          .catch((error: unknown) => error as Error);
+        expect(failure).toBeInstanceOf(RecordStateError);
+        const text = JSON.stringify({
+          message: (failure as Error).message,
+          ...(failure as object),
+        });
+        expect(text).not.toContain(SECRET);
+        expect(text).not.toContain('Call sheet');
+      });
+    });
+
+    describe('project of child records', () => {
+      const PERMISSION_KEY = 'budget:read';
+      const OTHER_PERMISSION_KEY = 'budget:write';
+
+      beforeAll(async () => {
+        await database.db.insert(permission).values([
+          { key: PERMISSION_KEY, module: 'budget', description: 'Read' },
+          { key: OTHER_PERMISSION_KEY, module: 'budget', description: 'Write' },
+        ]);
+      });
+
+      const insertRole = (
+        t: { organisationId: string },
+        projectId: string | null,
+        ctx: WriteContext,
+      ) =>
+        database.db.transaction((tx) =>
+          insertRecord(
+            tx,
+            role,
+            {
+              organisationId: t.organisationId,
+              ownerOrgId: t.organisationId,
+              projectId,
+              key: 'line-producer',
+              name: 'Line producer',
+            },
+            ctx,
+          ),
+        );
+
+      const grant = (
+        t: { organisationId: string },
+        roleId: string,
+        permissionKey: string,
+        ctx: WriteContext,
+      ) =>
+        database.db.transaction((tx) =>
+          insertRecord(
+            tx,
+            rolePermission,
+            {
+              organisationId: t.organisationId,
+              ownerOrgId: t.organisationId,
+              roleId,
+              permissionKey,
+            },
+            ctx,
+          ),
+        );
+
+      it("puts a project role's permission in that project's sequence, for every action", async () => {
+        const t = await seedTenant(database);
+        const ctx = contextFor(userId);
+        const projectRole = await insertRole(t, t.projectId, ctx);
+        const grantRow = await grant(t, projectRole.id, PERMISSION_KEY, ctx);
+        const updated = await database.db.transaction((tx) =>
+          updateRecord(
+            tx,
+            rolePermission,
+            grantRow.id,
+            1,
+            { permissionKey: OTHER_PERMISSION_KEY },
+            ctx,
+          ),
+        );
+        const deleted = await database.db.transaction((tx) =>
+          softDeleteRecord(tx, rolePermission, grantRow.id, 2, ctx),
+        );
+        await database.db.transaction((tx) =>
+          restoreRecord(tx, rolePermission, grantRow.id, deleted.version, ctx),
+        );
+        expect(updated.version).toBe(2);
+        const events = await eventsFor(database, grantRow.id);
+        expect(events.map((e) => [e.action, e.projectId, e.seq])).toEqual([
+          ['create', t.projectId, 2],
+          ['update', t.projectId, 3],
+          ['delete', t.projectId, 4],
+          ['restore', t.projectId, 5],
+        ]);
+        expect(await seqsFor(database, t.organisationId, t.projectId)).toEqual([
+          1, 2, 3, 4, 5,
+        ]);
+        expect(await seqsFor(database, t.organisationId, null)).toEqual([]);
+      });
+
+      it("puts an organisation template role's permission in the organisation sequence", async () => {
+        const t = await seedTenant(database);
+        const ctx = contextFor(userId);
+        const template = await insertRole(t, null, ctx);
+        const grantRow = await grant(t, template.id, PERMISSION_KEY, ctx);
+        await database.db.transaction((tx) =>
+          softDeleteRecord(tx, rolePermission, grantRow.id, 1, ctx),
+        );
+        const events = await eventsFor(database, grantRow.id);
+        expect(events.map((e) => [e.action, e.projectId, e.seq])).toEqual([
+          ['create', null, 2],
+          ['delete', null, 3],
+        ]);
+        expect(await seqsFor(database, t.organisationId, null)).toEqual([
+          1, 2, 3,
+        ]);
+        expect(await seqsFor(database, t.organisationId, t.projectId)).toEqual(
+          [],
+        );
+      });
+
+      it('puts a membership role in the project of its membership', async () => {
+        const t = await seedTenant(database);
+        const ctx = contextFor(userId);
+        const member = await seedUser(database);
+        const membership = await database.db.transaction((tx) =>
+          insertRecord(
+            tx,
+            projectMembership,
+            {
+              organisationId: t.organisationId,
+              ownerOrgId: t.organisationId,
+              projectId: t.projectId,
+              userId: member,
+              status: 'active',
+            },
+            ctx,
+          ),
+        );
+        // An organisation template role: the role's own project is no help,
+        // so the project can only come from the membership.
+        const template = await insertRole(t, null, ctx);
+        const link = await database.db.transaction((tx) =>
+          insertRecord(
+            tx,
+            projectMembershipRole,
+            {
+              organisationId: t.organisationId,
+              ownerOrgId: t.organisationId,
+              membershipId: membership.id,
+              roleId: template.id,
+            },
+            ctx,
+          ),
+        );
+        await database.db.transaction((tx) =>
+          softDeleteRecord(tx, projectMembershipRole, link.id, 1, ctx),
+        );
+        const events = await eventsFor(database, link.id);
+        expect(events.map((e) => [e.action, e.projectId, e.seq])).toEqual([
+          ['create', t.projectId, 2],
+          ['delete', t.projectId, 3],
+        ]);
+        expect(await seqsFor(database, t.organisationId, t.projectId)).toEqual([
+          1, 2, 3,
+        ]);
+        // Only the template role itself is in the organisation sequence.
+        expect(await seqsFor(database, t.organisationId, null)).toEqual([1]);
+      });
+
+      it('refuses to change the parent key a resolver reads, and writes nothing', async () => {
+        const t = await seedTenant(database);
+        const ctx = contextFor(userId);
+        const projectRole = await insertRole(t, t.projectId, ctx);
+        const template = await insertRole(t, null, ctx);
+        const grantRow = await grant(t, projectRole.id, PERMISSION_KEY, ctx);
+        await expect(
+          database.db.transaction((tx) =>
+            updateRecord(
+              tx,
+              rolePermission,
+              grantRow.id,
+              1,
+              { roleId: template.id },
+              ctx,
+            ),
+          ),
+        ).rejects.toThrow(/roleId cannot be changed on role_permission/);
+
+        const addMember = (memberId: string, status: 'active' | 'invited') =>
+          database.db.transaction((tx) =>
+            insertRecord(
+              tx,
+              projectMembership,
+              {
+                organisationId: t.organisationId,
+                ownerOrgId: t.organisationId,
+                projectId: t.projectId,
+                userId: memberId,
+                status,
+              },
+              ctx,
+            ),
+          );
+        const first = await addMember(await seedUser(database), 'active');
+        const second = await addMember(await seedUser(database), 'invited');
+        const link = await database.db.transaction((tx) =>
+          insertRecord(
+            tx,
+            projectMembershipRole,
+            {
+              organisationId: t.organisationId,
+              ownerOrgId: t.organisationId,
+              membershipId: first.id,
+              roleId: template.id,
+            },
+            ctx,
+          ),
+        );
+        await expect(
+          database.db.transaction((tx) =>
+            updateRecord(
+              tx,
+              projectMembershipRole,
+              link.id,
+              1,
+              { membershipId: second.id },
+              ctx,
+            ),
+          ),
+        ).rejects.toThrow(
+          /membershipId cannot be changed on project_membership_role/,
+        );
+
+        // Neither refused update wrote a row change, an event or a seq.
+        expect(await eventsFor(database, grantRow.id)).toHaveLength(1);
+        expect(await eventsFor(database, link.id)).toHaveLength(1);
+        const [storedGrant] = await rows(
+          database,
+          sql`select role_id, version from role_permission where id = ${grantRow.id}`,
+        );
+        expect(storedGrant).toEqual({ role_id: projectRole.id, version: 1 });
+        const [storedLink] = await rows(
+          database,
+          sql`select membership_id, version from project_membership_role where id = ${link.id}`,
+        );
+        expect(storedLink).toEqual({ membership_id: first.id, version: 1 });
+        const seqs = await seqsFor(database, t.organisationId, t.projectId);
+        expect(seqs).toEqual(seqs.map((_, i) => i + 1));
+      });
+
+      it('moves a record to another parent by delete plus create', async () => {
+        const t = await seedTenant(database);
+        const ctx = contextFor(userId);
+        const projectRole = await insertRole(t, t.projectId, ctx);
+        const template = await insertRole(t, null, ctx);
+        const old = await grant(t, projectRole.id, PERMISSION_KEY, ctx);
+        await database.db.transaction((tx) =>
+          softDeleteRecord(tx, rolePermission, old.id, 1, ctx),
+        );
+        const moved = await grant(t, template.id, PERMISSION_KEY, ctx);
+        expect(
+          (await eventsFor(database, old.id)).map((e) => [
+            e.action,
+            e.projectId,
+          ]),
+        ).toEqual([
+          ['create', t.projectId],
+          ['delete', t.projectId],
+        ]);
+        expect(
+          (await eventsFor(database, moved.id)).map((e) => [
+            e.action,
+            e.projectId,
+          ]),
+        ).toEqual([['create', null]]);
+      });
+
+      it('writes nothing, and uses no seq, when the parent does not exist', async () => {
+        const t = await seedTenant(database);
+        const ctx = contextFor(userId);
+        const id = newId();
+        let thrown: unknown;
+        try {
+          await database.db.transaction((tx) =>
+            insertRecord(
+              tx,
+              rolePermission,
+              {
+                id,
+                organisationId: t.organisationId,
+                ownerOrgId: t.organisationId,
+                roleId: newId(),
+                permissionKey: PERMISSION_KEY,
+              },
+              ctx,
+            ),
+          );
+        } catch (error) {
+          thrown = error;
+        }
+        expect(thrown).toBeInstanceOf(RecordWriteError);
+        expect(thrown).toMatchObject({
+          code: SQLSTATE.foreignKeyViolation,
+          constraint: 'role_permission_role_fk',
+        });
+        expect(await eventsFor(database, id)).toHaveLength(0);
+        expect(await seqsFor(database, t.organisationId, null)).toEqual([]);
+      });
+
+      it('refuses a second resolver for the same table', () => {
+        expect(() =>
+          registerProjectResolver(rolePermission, () => Promise.resolve(null)),
+        ).toThrow(/already registered for role_permission/);
       });
     });
 
@@ -863,6 +1558,67 @@ describe.each(testTargets)('change log and write helper on $name', (target) => {
         code: SQLSTATE.foreignKeyViolation,
         constraint: 'audit_event_project_fk',
       });
+    });
+
+    it('rejects an audit_event with a project but no organisation', async () => {
+      // The composite project foreign key does not apply when organisation_id
+      // is NULL, so only the CHECK stops this.
+      const failure = await failureOf(() =>
+        database.db.insert(auditEvent).values({
+          organisationId: null,
+          projectId: a.projectId,
+          category: 'x',
+          action: 'y',
+          actorType: 'system',
+          occurredAt: new Date(),
+        }),
+      );
+      expect(failure).toEqual({
+        code: SQLSTATE.checkViolation,
+        constraint: 'audit_event_project_requires_organisation_check',
+      });
+    });
+
+    it('rejects the same through recordAudit, and stores nothing', async () => {
+      const before = await rows(
+        database,
+        sql`select count(*)::int as n from audit_event where category = 'no-org-project'`,
+      );
+      let thrown: unknown;
+      try {
+        await recordAudit(database.db, {
+          projectId: a.projectId,
+          category: 'no-org-project',
+          action: 'y',
+          actor: { type: 'system', id: null },
+        });
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(RecordWriteError);
+      expect(thrown).toMatchObject({
+        code: SQLSTATE.checkViolation,
+        constraint: 'audit_event_project_requires_organisation_check',
+      });
+      const after = await rows(
+        database,
+        sql`select count(*)::int as n from audit_event where category = 'no-org-project'`,
+      );
+      expect(after).toEqual(before);
+    });
+
+    it('still allows a project event with its organisation, an organisation event, and an install event', async () => {
+      const base = {
+        category: 'x',
+        action: 'y',
+        actorType: 'system' as const,
+        occurredAt: new Date(),
+      };
+      await database.db.insert(auditEvent).values([
+        { ...base, organisationId: a.organisationId, projectId: a.projectId },
+        { ...base, organisationId: a.organisationId, projectId: null },
+        { ...base, organisationId: null, projectId: null },
+      ]);
     });
 
     it('rejects a change_seq that points at another organisation’s project', async () => {

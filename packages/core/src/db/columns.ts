@@ -1,11 +1,16 @@
 import { sql, type SQL } from 'drizzle-orm';
+import type { BuildExtraConfigColumns } from 'drizzle-orm';
 import {
   check,
+  foreignKey,
   integer,
+  pgTable,
   text,
   timestamp,
   uuid,
   type AnyPgColumn,
+  type PgColumnBuilderBase,
+  type PgTableExtraConfigValue,
 } from 'drizzle-orm/pg-core';
 import { newId } from './ids.js';
 
@@ -53,20 +58,17 @@ export function baseColumns(userId: UserIdRef) {
 }
 
 /**
- * The full standard column set. `organisation_id` always references
- * `organisation.id`, so every table built from this helper is tenant-checked.
+ * The full standard column set. `organisation_id` carries no foreign key here:
+ * `tenantTable` adds it, so every tenant table names it the same way.
  * `visibility` defaults to `project`.
  */
 export function standardColumns(
   userId: UserIdRef,
-  organisationId: OrganisationIdRef,
   options: { defaultVisibility?: Visibility } = {},
 ) {
   return {
     ...baseColumns(userId),
-    organisationId: uuid('organisation_id')
-      .notNull()
-      .references(organisationId),
+    organisationId: uuid('organisation_id').notNull(),
     ownerOrgId: uuid('owner_org_id').notNull(),
     visibility: text('visibility')
       .$type<Visibility>()
@@ -75,8 +77,62 @@ export function standardColumns(
   };
 }
 
-/** CHECK constraint for the `visibility` column of a standard table. */
-export function visibilityCheck(tableName: string, visibility: AnyPgColumn) {
+/** Columns a tenant table must have: the ones `standardColumns` returns. */
+type TenantColumns = Record<string, PgColumnBuilderBase> &
+  ReturnType<typeof standardColumns>;
+
+const tenantTableRegistry = new Set<string>();
+
+/** Names of all tables defined through `tenantTable`. */
+export function tenantTableNames(): ReadonlySet<string> {
+  return tenantTableRegistry;
+}
+
+/**
+ * Defines a tenant table: one built from `standardColumns`. Adds the foreign
+ * key from `organisation_id` to `organisation.id`, named
+ * `<table>_organisation_fk`, so the name never depends on generated defaults
+ * and stays within PostgreSQL's 63-character limit. It also adds the
+ * `<table>_visibility_check` CHECK, so tables do not repeat it. Every tenant table goes
+ * through this wrapper; use plain `pgTable` only for install-level tables.
+ *
+ * `organisationId` is lazy so table modules need no import cycle.
+ */
+export function tenantTable<
+  TName extends string,
+  TColumns extends TenantColumns,
+>(
+  name: TName,
+  organisationId: OrganisationIdRef,
+  columns: TColumns,
+  extraConfig?: (
+    self: BuildExtraConfigColumns<TName, TColumns, 'pg'>,
+  ) => PgTableExtraConfigValue[],
+) {
+  tenantTableRegistry.add(name);
+  return pgTable(name, columns, (self) => [
+    foreignKey({
+      name: organisationForeignKeyName(name),
+      columns: [
+        (self as unknown as { organisationId: AnyPgColumn }).organisationId,
+      ],
+      foreignColumns: [organisationId()],
+    }),
+    visibilityCheck(
+      name,
+      (self as unknown as { visibility: AnyPgColumn }).visibility,
+    ),
+    ...(extraConfig?.(self) ?? []),
+  ]);
+}
+
+/** Name of the foreign key from a tenant table to its organisation. */
+export function organisationForeignKeyName(tableName: string): string {
+  return `${tableName}_organisation_fk`;
+}
+
+/** CHECK constraint for the `visibility` column; `tenantTable` adds it to every tenant table. */
+function visibilityCheck(tableName: string, visibility: AnyPgColumn) {
   return check(
     `${tableName}_visibility_check`,
     sql`${visibility} in (${sqlList(VISIBILITIES)})`,

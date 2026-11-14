@@ -1,26 +1,22 @@
 import { sql } from 'drizzle-orm';
 import {
   check,
-  pgTable,
   text,
   uniqueIndex,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
-import { sqlList, standardColumns, visibilityCheck } from '../columns.js';
+import { sqlList, standardColumns, tenantTable } from '../columns.js';
 import { user } from './user.js';
 
 export const ORGANISATION_STATUSES = ['active', 'suspended'] as const;
 export type OrganisationStatus = (typeof ORGANISATION_STATUSES)[number];
 
 /** The tenant. Its own `organisation_id` is always its `id`. */
-export const organisation = pgTable(
+export const organisation = tenantTable(
   'organisation',
+  (): AnyPgColumn => organisation.id,
   {
-    ...standardColumns(
-      () => user.id,
-      (): AnyPgColumn => organisation.id,
-      { defaultVisibility: 'private' },
-    ),
+    ...standardColumns(() => user.id, { defaultVisibility: 'private' }),
     slug: text('slug').notNull(),
     name: text('name').notNull(),
     legalName: text('legal_name'),
@@ -49,6 +45,5 @@ export const organisation = pgTable(
       'organisation_status_check',
       sql`${t.status} in (${sqlList(ORGANISATION_STATUSES)})`,
     ),
-    visibilityCheck('organisation', t.visibility),
   ],
 );

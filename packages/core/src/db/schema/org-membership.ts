@@ -1,13 +1,6 @@
 import { sql } from 'drizzle-orm';
-import {
-  check,
-  foreignKey,
-  pgTable,
-  text,
-  unique,
-  uuid,
-} from 'drizzle-orm/pg-core';
-import { sqlList, standardColumns, visibilityCheck } from '../columns.js';
+import { check, foreignKey, text, unique, uuid } from 'drizzle-orm/pg-core';
+import { sqlList, standardColumns, tenantTable } from '../columns.js';
 import { organisation } from './organisation.js';
 import { user } from './user.js';
 
@@ -28,14 +21,11 @@ export const ORG_MEMBERSHIP_STATUSES = [
 export type OrgMembershipStatus = (typeof ORG_MEMBERSHIP_STATUSES)[number];
 
 /** A user's place in the organisation. */
-export const orgMembership = pgTable(
+export const orgMembership = tenantTable(
   'org_membership',
+  () => organisation.id,
   {
-    ...standardColumns(
-      () => user.id,
-      () => organisation.id,
-      { defaultVisibility: 'private' },
-    ),
+    ...standardColumns(() => user.id, { defaultVisibility: 'private' }),
     userId: uuid('user_id').notNull(),
     orgRole: text('org_role').$type<OrgRole>().notNull(),
     status: text('status').$type<OrgMembershipStatus>().notNull(),
@@ -58,6 +48,5 @@ export const orgMembership = pgTable(
       'org_membership_status_check',
       sql`${t.status} in (${sqlList(ORG_MEMBERSHIP_STATUSES)})`,
     ),
-    visibilityCheck('org_membership', t.visibility),
   ],
 );

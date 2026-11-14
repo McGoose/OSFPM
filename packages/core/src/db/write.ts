@@ -3,7 +3,8 @@ import type { AnyPgColumn, PgTable } from 'drizzle-orm/pg-core';
 import type { ActorType } from './columns.js';
 import type { SchemaDb } from './client.js';
 import { newId } from './ids.js';
-import { auditEvent, changeEvent, changeSeq, project } from './schema/index.js';
+import { parentKeysOf, resolveProjectId } from './project-resolver.js';
+import { auditEvent, changeEvent, changeSeq } from './schema/index.js';
 import type { ChangeAction } from './schema/index.js';
 import { sensitiveColumns } from './sensitive.js';
 
@@ -17,19 +18,57 @@ import { sensitiveColumns } from './sensitive.js';
  * failed call leaves no row, no event and no used `seq`, even if the caller
  * catches the error and carries on.
  *
+ * A `token` or `email` context without `onBehalfOfUserId` throws
+ * `MissingActingUserError` before anything is written.
+ *
+ * Deleting a deleted record, or restoring one that is not deleted, throws
+ * `RecordStateError` and writes nothing. The version is checked first, so a
+ * stale `expectedVersion` throws `VersionConflictError` instead.
+ *
  * Event content: `create` stores the whole row in `after`; `update`, `delete`
  * and `restore` store only the changed fields in `before` and `after`. Values
  * of sensitive columns (see `markSensitive`) are never stored; their names stay
  * in `changed_fields`. Errors never carry row values.
  */
 
-export type WriteContext = {
-  readonly actor: { readonly type: ActorType; readonly id: string | null };
+/** Actors that act for a user: a token for its owner, an email for its approver. */
+type ActorForUser = 'token' | 'email';
+
+type ContextBase = {
   readonly requestId?: string | null;
   /** The server doing the write. */
   readonly originServer: string;
   readonly clock: () => Date;
 };
+
+/**
+ * Who is writing. `actor` is who really made the change and is logged as is on
+ * every `change_event`.
+ *
+ * `onBehalfOfUserId` is the user a `token` or `email` write is made for: the
+ * token's owner, or the user who approved the email draft. It fills
+ * `created_by`, `updated_by` and `deleted_by`, which reference `user`, and the
+ * type requires it for those two actor types and forbids it for the others:
+ * for `user` the actor is the user, for `system` and `federation` there is no
+ * user, so those columns are the actor's user or NULL.
+ */
+export type WriteContext = ContextBase &
+  (
+    | {
+        readonly actor: {
+          readonly type: ActorForUser;
+          readonly id: string | null;
+        };
+        readonly onBehalfOfUserId: string;
+      }
+    | {
+        readonly actor: {
+          readonly type: Exclude<ActorType, ActorForUser>;
+          readonly id: string | null;
+        };
+        readonly onBehalfOfUserId?: never;
+      }
+  );
 
 /** A transaction handle. Typed as the shared database base so both drivers fit. */
 export type Tx = SchemaDb;
@@ -95,6 +134,37 @@ export class RecordNotFoundError extends Error {
 }
 
 /**
+ * The record is in the wrong state for this operation: it was already deleted,
+ * or it is not deleted so there is nothing to restore. Nothing was written.
+ */
+export class RecordStateError extends Error {
+  constructor(
+    readonly entityType: string,
+    readonly entityId: string,
+    readonly operation: 'delete' | 'restore',
+  ) {
+    super(
+      operation === 'delete'
+        ? `Cannot delete ${entityType} ${entityId}: it is already deleted`
+        : `Cannot restore ${entityType} ${entityId}: it is not deleted`,
+    );
+    this.name = 'RecordStateError';
+  }
+}
+
+/**
+ * A `token` or `email` write came without `onBehalfOfUserId`. The type forbids
+ * this, so it only happens when a caller bypasses the types. Nothing was
+ * written.
+ */
+export class MissingActingUserError extends Error {
+  constructor(readonly actorType: ActorType) {
+    super(`A ${actorType} write needs onBehalfOfUserId`);
+    this.name = 'MissingActingUserError';
+  }
+}
+
+/**
  * A database error with the values stripped. Drivers and Drizzle put query
  * parameters and offending values in messages and `detail`, so the original
  * error is not kept; only the SQLSTATE and constraint name survive.
@@ -148,6 +218,8 @@ async function guarded<R>(
     if (
       error instanceof VersionConflictError ||
       error instanceof RecordNotFoundError ||
+      error instanceof RecordStateError ||
+      error instanceof MissingActingUserError ||
       error instanceof RecordWriteError
     ) {
       throw error;
@@ -160,12 +232,6 @@ async function guarded<R>(
       found?.constraint,
     );
   }
-}
-
-/** Project a record belongs to; `null` means the organisation-level sequence. */
-function projectIdOf(table: PgTable, row: Row): string | null {
-  if (table === (project as PgTable)) return row.id as string;
-  return typeof row.projectId === 'string' ? row.projectId : null;
 }
 
 /** Takes the next number. Holds the counter row until the transaction ends. */
@@ -210,6 +276,7 @@ async function logChange(
   ctx: WriteContext,
   event: {
     seq: number;
+    projectId: string | null;
     row: Row;
     action: ChangeAction;
     changedKeys: readonly string[];
@@ -219,7 +286,7 @@ async function logChange(
   const { row, changedKeys } = event;
   await tx.insert(changeEvent).values({
     organisationId: row.organisationId as string,
-    projectId: projectIdOf(table, row),
+    projectId: event.projectId,
     seq: event.seq,
     entityType: getTableName(table),
     entityId: row.id as string,
@@ -236,9 +303,26 @@ async function logChange(
   });
 }
 
-/** `created_by` and the like reference `user`, so only user actors fill them. */
-const userId = (ctx: WriteContext) =>
-  ctx.actor.type === 'user' ? ctx.actor.id : null;
+/**
+ * The user for `created_by` and the like, which reference `user`. A `user`
+ * actor is that user; a `token` or `email` actor is covered by whoever it acts
+ * on behalf of; `system` and `federation` have no user. The event keeps the
+ * exact actor either way.
+ */
+function attributedUserId(ctx: WriteContext): string | null {
+  switch (ctx.actor.type) {
+    case 'user':
+      return ctx.actor.id;
+    case 'token':
+    case 'email':
+      if (!ctx.onBehalfOfUserId)
+        throw new MissingActingUserError(ctx.actor.type);
+      return ctx.onBehalfOfUserId;
+    case 'system':
+    case 'federation':
+      return null;
+  }
+}
 
 async function loadRow(tx: Tx, table: TenantTable, id: string): Promise<Row> {
   const [row] = await tx.select().from(table).where(eq(table.id, id)).limit(1);
@@ -255,6 +339,7 @@ export function insertRecord<T extends TenantTable>(
 ): Promise<T['$inferSelect']> {
   return guarded(table, 'insert', () =>
     tx.transaction(async (inner) => {
+      attributedUserId(ctx); // refuses a missing acting user before any write
       const now = ctx.clock();
       const full = {
         ...values,
@@ -265,15 +350,16 @@ export function insertRecord<T extends TenantTable>(
         version: 1,
         createdAt: now,
         updatedAt: now,
-        createdBy: userId(ctx),
-        updatedBy: userId(ctx),
+        createdBy: attributedUserId(ctx),
+        updatedBy: attributedUserId(ctx),
         deletedAt: null,
         deletedBy: null,
       } as Row;
+      const projectId = await resolveProjectId(inner, table, full);
       const seq = await nextSeq(
         inner,
         full.organisationId as string,
-        projectIdOf(table, full),
+        projectId,
       );
       const [row] = await inner
         .insert(table)
@@ -281,6 +367,7 @@ export function insertRecord<T extends TenantTable>(
         .returning();
       await logChange(inner, table, ctx, {
         seq,
+        projectId,
         row: row as Row,
         action: 'create',
         changedKeys: Object.keys(getTableColumns(table)),
@@ -306,11 +393,19 @@ function modifyRecord<T extends TenantTable>(
 ): Promise<T['$inferSelect']> {
   return guarded(table, action, () =>
     tx.transaction(async (inner) => {
+      attributedUserId(ctx); // refuses a missing acting user before any write
       const before = await loadRow(inner, table, id);
       const entityType = getTableName(table);
       const actual = before.version as number;
       if (actual !== expectedVersion) {
         throw new VersionConflictError(entityType, id, expectedVersion, actual);
+      }
+      // Checked before the counter is touched, so a refused call uses no seq.
+      if (action === 'delete' && before.deletedAt != null) {
+        throw new RecordStateError(entityType, id, 'delete');
+      }
+      if (action === 'restore' && before.deletedAt == null) {
+        throw new RecordStateError(entityType, id, 'restore');
       }
       const changedKeys = Object.keys(change).filter(
         (key) => !same(before[key], change[key]),
@@ -318,10 +413,13 @@ function modifyRecord<T extends TenantTable>(
       // Seq is taken before the row is locked, so every writer in a project
       // queues on the counter first and multi-record transactions cannot
       // deadlock on each other's rows.
+      // The project is resolved once, from the stored row, and used for both
+      // the counter and the event so the two always agree.
+      const projectId = await resolveProjectId(inner, table, before);
       const seq = await nextSeq(
         inner,
         before.organisationId as string,
-        projectIdOf(table, before),
+        projectId,
       );
       const now = ctx.clock();
       const updated = (await inner
@@ -330,7 +428,7 @@ function modifyRecord<T extends TenantTable>(
           ...change,
           version: sql`${table.version} + 1`,
           updatedAt: now,
-          updatedBy: userId(ctx),
+          updatedBy: attributedUserId(ctx),
         } as never)
         .where(and(eq(table.id, id), eq(table.version, expectedVersion)))
         .returning()) as Row[];
@@ -347,6 +445,7 @@ function modifyRecord<T extends TenantTable>(
       }
       await logChange(inner, table, ctx, {
         seq,
+        projectId,
         row,
         action,
         changedKeys,
@@ -372,6 +471,11 @@ export async function updateRecord<T extends TenantTable>(
     if ((IMMUTABLE_KEYS as readonly string[]).includes(key)) {
       throw new Error(`${key} cannot be changed on ${getTableName(table)}`);
     }
+    if (parentKeysOf(table).includes(key)) {
+      throw new Error(
+        `${key} cannot be changed on ${getTableName(table)}: delete the record and create a new one`,
+      );
+    }
     if (!(key in getTableColumns(table))) {
       throw new Error(`Unknown column ${key} on ${getTableName(table)}`);
     }
@@ -381,7 +485,7 @@ export async function updateRecord<T extends TenantTable>(
 }
 
 /** Marks a record deleted and logs a `delete` event. */
-export function softDeleteRecord<T extends TenantTable>(
+export async function softDeleteRecord<T extends TenantTable>(
   tx: Tx,
   table: T,
   id: string,
@@ -394,7 +498,7 @@ export function softDeleteRecord<T extends TenantTable>(
     id,
     expectedVersion,
     'delete',
-    { deletedAt: ctx.clock(), deletedBy: userId(ctx) },
+    { deletedAt: ctx.clock(), deletedBy: attributedUserId(ctx) },
     ctx,
   );
 }

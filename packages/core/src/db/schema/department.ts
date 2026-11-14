@@ -1,24 +1,15 @@
-import {
-  foreignKey,
-  integer,
-  pgTable,
-  text,
-  unique,
-  uuid,
-} from 'drizzle-orm/pg-core';
-import { standardColumns, visibilityCheck } from '../columns.js';
+import { foreignKey, integer, text, unique, uuid } from 'drizzle-orm/pg-core';
+import { standardColumns, tenantTable } from '../columns.js';
 import { project } from './project.js';
 import { organisation } from './organisation.js';
 import { user } from './user.js';
 
 /** A department. `project_id` NULL means an organisation-wide template. */
-export const department = pgTable(
+export const department = tenantTable(
   'department',
+  () => organisation.id,
   {
-    ...standardColumns(
-      () => user.id,
-      () => organisation.id,
-    ),
+    ...standardColumns(() => user.id),
     projectId: uuid('project_id'),
     key: text('key').notNull(),
     name: text('name').notNull(),
@@ -34,6 +25,5 @@ export const department = pgTable(
       .on(t.organisationId, t.projectId, t.key)
       .nullsNotDistinct(),
     unique('department_organisation_id_id_unique').on(t.organisationId, t.id),
-    visibilityCheck('department', t.visibility),
   ],
 );

@@ -57,6 +57,10 @@ export const auditEvent = pgTable(
       t.occurredAt,
     ),
     check(
+      'audit_event_project_requires_organisation_check',
+      sql`${t.projectId} is null or ${t.organisationId} is not null`,
+    ),
+    check(
       'audit_event_actor_type_check',
       sql`${t.actorType} in (${sqlList(ACTOR_TYPES)})`,
     ),

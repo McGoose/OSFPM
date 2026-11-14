@@ -1,8 +1,11 @@
-import { sql } from 'drizzle-orm';
+import { getTableName, is, sql } from 'drizzle-orm';
+import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from './client.js';
+import { organisationForeignKeyName, tenantTableNames } from './columns.js';
 import { newId } from './ids.js';
 import { migrate } from './migrate.js';
+import * as schemaModule from './schema/index.js';
 import {
   department,
   installation,
@@ -126,6 +129,91 @@ function userValues(overrides: Partial<typeof user.$inferInsert> = {}) {
   } satisfies typeof user.$inferInsert;
 }
 
+const NAME_LIMIT = 63;
+
+const schemaTables = Object.values(schemaModule).filter((value) =>
+  is(value, PgTable),
+);
+
+/** Every named constraint and index the schema declares, with its table. */
+function declaredNames() {
+  return schemaTables.flatMap((table) => {
+    const config = getTableConfig(table);
+    const names = [
+      ...config.foreignKeys.map((fk) => fk.getName()),
+      ...config.uniqueConstraints.map((u) => u.getName()),
+      ...config.checks.map((c) => c.name),
+      ...config.indexes.map((i) => i.config.name),
+      ...config.primaryKeys.map((pk) => pk.getName()),
+    ];
+    return names
+      .filter((name): name is string => typeof name === 'string')
+      .map((name) => ({ table: config.name, name }));
+  });
+}
+
+describe('constraint names in the schema', () => {
+  it('finds the tables it is meant to check', () => {
+    expect(schemaTables.length).toBeGreaterThanOrEqual(15);
+    expect(declaredNames().length).toBeGreaterThan(50);
+  });
+
+  it(`are all ${NAME_LIMIT} characters or fewer`, () => {
+    const tooLong = declaredNames().filter(
+      ({ name }) => name.length > NAME_LIMIT,
+    );
+    expect(tooLong).toEqual([]);
+  });
+
+  it('give every table with an organisation_id an organisation FK named <table>_organisation_fk', () => {
+    const withOrganisation = schemaTables.filter((table) =>
+      getTableConfig(table).columns.some((c) => c.name === 'organisation_id'),
+    );
+    expect(withOrganisation.length).toBeGreaterThanOrEqual(12);
+    for (const table of withOrganisation) {
+      const config = getTableConfig(table);
+      const found = config.foreignKeys.filter((fk) => {
+        const ref = fk.reference();
+        return (
+          ref.columns.length === 1 &&
+          ref.columns[0]!.name === 'organisation_id' &&
+          getTableName(ref.foreignTable) === 'organisation' &&
+          ref.foreignColumns[0]!.name === 'id'
+        );
+      });
+      expect(
+        found.map((fk) => fk.getName()),
+        config.name,
+      ).toEqual([organisationForeignKeyName(config.name)]);
+    }
+  });
+
+  it('give every tenant table one <table>_visibility_check, from tenantTable', () => {
+    const tenant = schemaTables.filter((table) =>
+      tenantTableNames().has(getTableName(table)),
+    );
+    expect(tenant.length).toBeGreaterThanOrEqual(9);
+    for (const table of tenant) {
+      const name = getTableName(table);
+      const checks = getTableConfig(table)
+        .checks.map((c) => c.name)
+        .filter((n) => n.endsWith('_visibility_check'));
+      expect(checks, name).toEqual([`${name}_visibility_check`]);
+    }
+  });
+
+  it('define every table with the standard columns through tenantTable', () => {
+    const standard = schemaTables
+      .filter((table) =>
+        getTableConfig(table).columns.some((c) => c.name === 'owner_org_id'),
+      )
+      .map((table) => getTableName(table))
+      .sort();
+    expect(standard.length).toBeGreaterThanOrEqual(9);
+    expect([...tenantTableNames()].sort()).toEqual(standard);
+  });
+});
+
 describe.each(testTargets)('database schema on $name', (target) => {
   describe('migrations', () => {
     it('apply to an empty database, and re-running is a no-op', async () => {
@@ -155,6 +243,49 @@ describe.each(testTargets)('database schema on $name', (target) => {
           'setting_value',
           'user',
         ]);
+      } finally {
+        await cleanup();
+      }
+    });
+    it('names every tenant table’s organisation foreign key <table>_organisation_fk', async () => {
+      const { database, cleanup } = await target.create();
+      try {
+        await migrate(database);
+        const found = await rows(
+          database,
+          sql`select conrelid::regclass::text as table_name, conname
+              from pg_constraint
+              where contype = 'f' and confrelid = 'organisation'::regclass
+                and conkey = array[(
+                  select attnum from pg_attribute
+                  where attrelid = conrelid and attname = 'organisation_id'
+                )]`,
+        );
+        // Sorted here, not in SQL: the database collation orders names with
+        // underscores differently from JavaScript.
+        const byTable = (a: Row, b: Row) =>
+          (a.table_name as string) < (b.table_name as string) ? -1 : 1;
+        const expected = [...tenantTableNames()].map((table) => ({
+          table_name: table,
+          conname: organisationForeignKeyName(table),
+        }));
+        const tenant = new Set(tenantTableNames());
+        expect(
+          found.filter((r) => tenant.has(r.table_name as string)).sort(byTable),
+        ).toEqual(expected.sort(byTable));
+        const names = await rows(
+          database,
+          sql`select conname from pg_constraint
+              where connamespace = 'public'::regnamespace`,
+        );
+        expect(
+          names.filter((r) => (r.conname as string).length > NAME_LIMIT),
+        ).toEqual([]);
+        expect(
+          names.filter((r) =>
+            (r.conname as string).includes('_organisation_id_organisation_id_'),
+          ),
+        ).toEqual([]);
       } finally {
         await cleanup();
       }
@@ -552,7 +683,7 @@ describe.each(testTargets)('database schema on $name', (target) => {
               .values(orgMembershipValues(newId(), u)),
           );
           expect(failure).toEqual(
-            fkViolation('org_membership_organisation_id_organisation_id_fk'),
+            fkViolation('org_membership_organisation_fk'),
           );
         });
 
@@ -669,24 +800,20 @@ describe.each(testTargets)('database schema on $name', (target) => {
               .values(departmentValues(unknown, null, 'camera')),
           );
           expect(department_).toEqual(
-            fkViolation('department_organisation_id_organisation_id_fk'),
+            fkViolation('department_organisation_fk'),
           );
           const role_ = await failureOf(() =>
             database.db
               .insert(role)
               .values(roleValues(unknown, null, 'director')),
           );
-          expect(role_).toEqual(
-            fkViolation('role_organisation_id_organisation_id_fk'),
-          );
+          expect(role_).toEqual(fkViolation('role_organisation_fk'));
           const setting = await failureOf(() =>
             database.db
               .insert(settingValue)
               .values(settingValues(unknown, null, 'currency')),
           );
-          expect(setting).toEqual(
-            fkViolation('setting_value_organisation_id_organisation_id_fk'),
-          );
+          expect(setting).toEqual(fkViolation('setting_value_organisation_fk'));
         });
 
         it('gives every table with an organisation_id column a foreign key to organisation', async () => {

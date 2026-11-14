@@ -1,13 +1,7 @@
 import { sql } from 'drizzle-orm';
-import {
-  boolean,
-  check,
-  date,
-  pgTable,
-  text,
-  unique,
-} from 'drizzle-orm/pg-core';
-import { sqlList, standardColumns, visibilityCheck } from '../columns.js';
+import { boolean, check, date, text, unique } from 'drizzle-orm/pg-core';
+import { sqlList, standardColumns, tenantTable } from '../columns.js';
+import { registerProjectResolver } from '../project-resolver.js';
 import { organisation } from './organisation.js';
 import { user } from './user.js';
 
@@ -31,13 +25,11 @@ export const PROJECT_STATUSES = [
 ] as const;
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 
-export const project = pgTable(
+export const project = tenantTable(
   'project',
+  () => organisation.id,
   {
-    ...standardColumns(
-      () => user.id,
-      () => organisation.id,
-    ),
+    ...standardColumns(() => user.id),
     code: text('code').notNull(),
     title: text('title').notNull(),
     format: text('format').$type<ProjectFormat>().notNull(),
@@ -62,6 +54,10 @@ export const project = pgTable(
       sql`${t.status} in (${sqlList(PROJECT_STATUSES)})`,
     ),
     check('project_currency_check', sql`${t.currency} ~ '^[A-Z]{3}$'`),
-    visibilityCheck('project', t.visibility),
   ],
+);
+
+/** A project's own changes belong to its own sequence. */
+registerProjectResolver(project, (_tx, row) =>
+  Promise.resolve(row.id as string),
 );
