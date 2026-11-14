@@ -18,6 +18,9 @@ import { sensitiveColumns } from './sensitive.js';
  * failed call leaves no row, no event and no used `seq`, even if the caller
  * catches the error and carries on.
  *
+ * A `token` or `email` context without `onBehalfOfUserId` throws
+ * `MissingActingUserError` before anything is written.
+ *
  * Deleting a deleted record, or restoring one that is not deleted, throws
  * `RecordStateError` and writes nothing. The version is checked first, so a
  * stale `expectedVersion` throws `VersionConflictError` instead.
@@ -150,6 +153,18 @@ export class RecordStateError extends Error {
 }
 
 /**
+ * A `token` or `email` write came without `onBehalfOfUserId`. The type forbids
+ * this, so it only happens when a caller bypasses the types. Nothing was
+ * written.
+ */
+export class MissingActingUserError extends Error {
+  constructor(readonly actorType: ActorType) {
+    super(`A ${actorType} write needs onBehalfOfUserId`);
+    this.name = 'MissingActingUserError';
+  }
+}
+
+/**
  * A database error with the values stripped. Drivers and Drizzle put query
  * parameters and offending values in messages and `detail`, so the original
  * error is not kept; only the SQLSTATE and constraint name survive.
@@ -204,6 +219,7 @@ async function guarded<R>(
       error instanceof VersionConflictError ||
       error instanceof RecordNotFoundError ||
       error instanceof RecordStateError ||
+      error instanceof MissingActingUserError ||
       error instanceof RecordWriteError
     ) {
       throw error;
@@ -299,7 +315,9 @@ function attributedUserId(ctx: WriteContext): string | null {
       return ctx.actor.id;
     case 'token':
     case 'email':
-      return ctx.onBehalfOfUserId ?? null;
+      if (!ctx.onBehalfOfUserId)
+        throw new MissingActingUserError(ctx.actor.type);
+      return ctx.onBehalfOfUserId;
     case 'system':
     case 'federation':
       return null;
@@ -321,6 +339,7 @@ export function insertRecord<T extends TenantTable>(
 ): Promise<T['$inferSelect']> {
   return guarded(table, 'insert', () =>
     tx.transaction(async (inner) => {
+      attributedUserId(ctx); // refuses a missing acting user before any write
       const now = ctx.clock();
       const full = {
         ...values,
@@ -374,6 +393,7 @@ function modifyRecord<T extends TenantTable>(
 ): Promise<T['$inferSelect']> {
   return guarded(table, action, () =>
     tx.transaction(async (inner) => {
+      attributedUserId(ctx); // refuses a missing acting user before any write
       const before = await loadRow(inner, table, id);
       const entityType = getTableName(table);
       const actual = before.version as number;
@@ -465,7 +485,7 @@ export async function updateRecord<T extends TenantTable>(
 }
 
 /** Marks a record deleted and logs a `delete` event. */
-export function softDeleteRecord<T extends TenantTable>(
+export async function softDeleteRecord<T extends TenantTable>(
   tx: Tx,
   table: T,
   id: string,

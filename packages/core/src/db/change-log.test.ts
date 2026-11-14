@@ -31,6 +31,7 @@ import {
 } from './test-support.js';
 import {
   insertRecord,
+  MissingActingUserError,
   RecordNotFoundError,
   RecordStateError,
   RecordWriteError,
@@ -498,6 +499,100 @@ describe.each(testTargets)('change log and write helper on $name', (target) => {
         };
         expect([token, email, system]).toHaveLength(3);
       });
+
+      it.each([
+        ['token', undefined],
+        ['token', null],
+        ['email', undefined],
+        ['email', ''],
+      ] as const)(
+        'rejects every write of a %s actor with onBehalfOfUserId %j, and writes nothing',
+        async (type, missing) => {
+          const t = await seedTenant(database);
+          const good = contextFor(userId);
+          const created = await database.db.transaction((tx) =>
+            insertRecord(
+              tx,
+              dummyRecord,
+              dummyValues(t.organisationId, t.projectId),
+              good,
+            ),
+          );
+          const deleted = await database.db.transaction((tx) =>
+            softDeleteRecord(tx, dummyRecord, created.id, 1, good),
+          );
+          const live = await database.db.transaction((tx) =>
+            insertRecord(
+              tx,
+              dummyRecord,
+              dummyValues(t.organisationId, t.projectId),
+              good,
+            ),
+          );
+          const bad = {
+            ...contextFor(null),
+            actor: { type, id: newId() },
+            onBehalfOfUserId: missing,
+          } as unknown as WriteContext;
+
+          const state = async () => ({
+            seqs: await seqsFor(database, t.organisationId, t.projectId),
+            rows: await rows(
+              database,
+              sql`select id, version, updated_by, deleted_at from dummy_record
+                  where organisation_id = ${t.organisationId} order by id`,
+            ),
+          });
+          const before = await state();
+          const attempts = [
+            () =>
+              database.db.transaction((tx) =>
+                insertRecord(
+                  tx,
+                  dummyRecord,
+                  dummyValues(t.organisationId, t.projectId),
+                  bad,
+                ),
+              ),
+            () =>
+              database.db.transaction((tx) =>
+                updateRecord(
+                  tx,
+                  dummyRecord,
+                  live.id,
+                  1,
+                  { title: 'Revised' },
+                  bad,
+                ),
+              ),
+            () =>
+              database.db.transaction((tx) =>
+                softDeleteRecord(tx, dummyRecord, live.id, 1, bad),
+              ),
+            () =>
+              database.db.transaction((tx) =>
+                restoreRecord(
+                  tx,
+                  dummyRecord,
+                  created.id,
+                  deleted.version,
+                  bad,
+                ),
+              ),
+          ];
+          for (const attempt of attempts) {
+            let thrown: unknown;
+            try {
+              await attempt();
+            } catch (error) {
+              thrown = error;
+            }
+            expect(thrown).toBeInstanceOf(MissingActingUserError);
+            expect(thrown).toMatchObject({ actorType: type });
+          }
+          expect(await state()).toEqual(before);
+        },
+      );
 
       it.each(['user', 'token', 'email', 'system', 'federation'])(
         '%s: fills the user columns as specified and keeps the exact actor on every event',
