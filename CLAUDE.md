@@ -46,6 +46,7 @@ Only the fictional demo production _The Last Withdrawal_ or invented data. Never
 - Ask before any change not listed in the prompt, and before adding any dependency the prompt does not name.
 - Read only the files a task needs; do not explore the repo for context.
 - Open the PR; never merge it.
+- After a PR merges: GitHub deletes the remote branch automatically; delete the local branch with `git branch -d`.
 - Report back after every prompt: what was done, anything surprising, and rules you think are missing (as questions, not edits).
 
 ## Prototype
