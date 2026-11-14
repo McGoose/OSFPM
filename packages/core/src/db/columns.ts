@@ -21,7 +21,7 @@ export function sqlList(values: readonly string[]): SQL {
   return sql.raw(values.map((v) => `'${v}'`).join(', '));
 }
 
-const timestamptz = (name: string) =>
+export const timestamptz = (name: string) =>
   timestamp(name, { withTimezone: true, mode: 'date' });
 
 /** Lazily resolves `user.id`, so table modules need no import cycle. */

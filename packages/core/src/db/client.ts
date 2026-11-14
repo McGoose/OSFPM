@@ -8,6 +8,7 @@ import {
   type NodePgDatabase,
 } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
+import * as schema from './schema/index.js';
 
 /**
  * Database configuration. The driver is always chosen explicitly by the
@@ -24,13 +25,13 @@ export type DbConfig =
 
 export type PostgresDb = {
   readonly driver: 'postgres';
-  readonly db: NodePgDatabase;
+  readonly db: NodePgDatabase<typeof schema>;
   readonly close: () => Promise<void>;
 };
 
 export type PgliteDb = {
   readonly driver: 'pglite';
-  readonly db: PgliteDatabase;
+  readonly db: PgliteDatabase<typeof schema>;
   readonly close: () => Promise<void>;
 };
 
@@ -50,7 +51,7 @@ export function createDatabase(config: DbConfig): Database {
       const pool = new pg.Pool({ connectionString: config.url });
       return {
         driver: 'postgres',
-        db: drizzlePg({ client: pool }),
+        db: drizzlePg({ client: pool, schema }),
         close: () => pool.end(),
       };
     }
@@ -59,7 +60,7 @@ export function createDatabase(config: DbConfig): Database {
         'client' in config ? config.client : new PGlite(config.dataDir);
       return {
         driver: 'pglite',
-        db: drizzlePglite({ client }),
+        db: drizzlePglite({ client, schema }),
         close: () => client.close(),
       };
     }
