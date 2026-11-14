@@ -48,9 +48,9 @@ type ContextBase = {
  * `onBehalfOfUserId` is the user a `token` or `email` write is made for: the
  * token's owner, or the user who approved the email draft. It fills
  * `created_by`, `updated_by` and `deleted_by`, which reference `user`, and the
- * type requires it for those two actor types. For `user` (the actor is the
- * user), `system` and `federation` (no user) it is ignored and those columns
- * are the actor's user or NULL.
+ * type requires it for those two actor types and forbids it for the others:
+ * for `user` the actor is the user, for `system` and `federation` there is no
+ * user, so those columns are the actor's user or NULL.
  */
 export type WriteContext = ContextBase &
   (
@@ -66,7 +66,7 @@ export type WriteContext = ContextBase &
           readonly type: Exclude<ActorType, ActorForUser>;
           readonly id: string | null;
         };
-        readonly onBehalfOfUserId?: string | null;
+        readonly onBehalfOfUserId?: never;
       }
   );
 

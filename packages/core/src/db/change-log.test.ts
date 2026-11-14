@@ -500,6 +500,35 @@ describe.each(testTargets)('change log and write helper on $name', (target) => {
         expect([token, email, system]).toHaveLength(3);
       });
 
+      it('forbids onBehalfOfUserId, by type, for user, system and federation actors', () => {
+        const base = { originServer: ORIGIN, clock: () => new Date() };
+        const onBehalfOfUserId = 'someone';
+        // @ts-expect-error the actor is the user, so there is nobody else
+        const user: WriteContext = {
+          ...base,
+          onBehalfOfUserId,
+          actor: { type: 'user', id: null },
+        };
+        // @ts-expect-error the system acts for no user
+        const system: WriteContext = {
+          ...base,
+          onBehalfOfUserId,
+          actor: { type: 'system', id: null },
+        };
+        // @ts-expect-error a federated peer acts for no local user
+        const federation: WriteContext = {
+          ...base,
+          onBehalfOfUserId,
+          actor: { type: 'federation', id: null },
+        };
+        // Leaving it out stays fine.
+        const plain: WriteContext = {
+          ...base,
+          actor: { type: 'user', id: null },
+        };
+        expect([user, system, federation, plain]).toHaveLength(4);
+      });
+
       it.each([
         ['token', undefined],
         ['token', null],
