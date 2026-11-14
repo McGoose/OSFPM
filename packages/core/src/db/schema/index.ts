@@ -8,4 +8,5 @@ export * from './project-membership.js';
 export * from './project.js';
 export * from './role-permission.js';
 export * from './role.js';
+export * from './setting-value.js';
 export * from './user.js';
