@@ -1,8 +1,10 @@
 export * from './audit-event.js';
+export * from './block.js';
 export * from './change-event.js';
 export * from './change-seq.js';
 export * from './company.js';
 export * from './department.js';
+export * from './episode.js';
 export * from './installation.js';
 export * from './location.js';
 export * from './org-membership.js';
@@ -20,4 +22,5 @@ export * from './project.js';
 export * from './role-permission.js';
 export * from './role.js';
 export * from './setting-value.js';
+export * from './unit.js';
 export * from './user.js';
