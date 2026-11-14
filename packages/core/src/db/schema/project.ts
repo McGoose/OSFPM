@@ -3,7 +3,6 @@ import {
   boolean,
   check,
   date,
-  foreignKey,
   pgTable,
   text,
   unique,
@@ -35,7 +34,10 @@ export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 export const project = pgTable(
   'project',
   {
-    ...standardColumns(() => user.id),
+    ...standardColumns(
+      () => user.id,
+      () => organisation.id,
+    ),
     code: text('code').notNull(),
     title: text('title').notNull(),
     format: text('format').$type<ProjectFormat>().notNull(),
@@ -48,11 +50,6 @@ export const project = pgTable(
     involvesMinors: boolean('involves_minors').notNull().default(false),
   },
   (t) => [
-    foreignKey({
-      name: 'project_organisation_id_fk',
-      columns: [t.organisationId],
-      foreignColumns: [organisation.id],
-    }),
     unique('project_organisation_code_unique').on(t.organisationId, t.code),
     // Target for composite tenant foreign keys in later tables.
     unique('project_organisation_id_id_unique').on(t.organisationId, t.id),

@@ -1,5 +1,11 @@
 import { sql } from 'drizzle-orm';
-import { check, pgTable, text, uniqueIndex } from 'drizzle-orm/pg-core';
+import {
+  check,
+  pgTable,
+  text,
+  uniqueIndex,
+  type AnyPgColumn,
+} from 'drizzle-orm/pg-core';
 import { sqlList, standardColumns, visibilityCheck } from '../columns.js';
 import { user } from './user.js';
 
@@ -10,7 +16,11 @@ export type OrganisationStatus = (typeof ORGANISATION_STATUSES)[number];
 export const organisation = pgTable(
   'organisation',
   {
-    ...standardColumns(() => user.id, { defaultVisibility: 'private' }),
+    ...standardColumns(
+      () => user.id,
+      (): AnyPgColumn => organisation.id,
+      { defaultVisibility: 'private' },
+    ),
     slug: text('slug').notNull(),
     name: text('name').notNull(),
     legalName: text('legal_name'),

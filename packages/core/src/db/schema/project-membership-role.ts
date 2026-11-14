@@ -2,6 +2,7 @@ import { foreignKey, pgTable, unique, uuid } from 'drizzle-orm/pg-core';
 import { standardColumns, visibilityCheck } from '../columns.js';
 import { projectMembership } from './project-membership.js';
 import { role } from './role.js';
+import { organisation } from './organisation.js';
 import { user } from './user.js';
 
 /**
@@ -11,7 +12,10 @@ import { user } from './user.js';
 export const projectMembershipRole = pgTable(
   'project_membership_role',
   {
-    ...standardColumns(() => user.id),
+    ...standardColumns(
+      () => user.id,
+      () => organisation.id,
+    ),
     membershipId: uuid('membership_id').notNull(),
     roleId: uuid('role_id').notNull(),
   },

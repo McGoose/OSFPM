@@ -139,6 +139,9 @@ describe.each(testTargets)('database schema on $name', (target) => {
               where table_schema = 'public' order by table_name`,
         );
         expect(tables.map((t) => t.table_name)).toEqual([
+          'audit_event',
+          'change_event',
+          'change_seq',
           'department',
           'installation',
           'org_membership',
@@ -549,7 +552,7 @@ describe.each(testTargets)('database schema on $name', (target) => {
               .values(orgMembershipValues(newId(), u)),
           );
           expect(failure).toEqual(
-            fkViolation('org_membership_organisation_id_fk'),
+            fkViolation('org_membership_organisation_id_organisation_id_fk'),
           );
         });
 
@@ -654,6 +657,57 @@ describe.each(testTargets)('database schema on $name', (target) => {
               'role_permission_role_permission_department_unique',
             ),
           );
+        });
+      });
+
+      describe('organisation references', () => {
+        it('rejects an organisation-wide template row with an unknown organisation', async () => {
+          const unknown = newId();
+          const department_ = await failureOf(() =>
+            database.db
+              .insert(department)
+              .values(departmentValues(unknown, null, 'camera')),
+          );
+          expect(department_).toEqual(
+            fkViolation('department_organisation_id_organisation_id_fk'),
+          );
+          const role_ = await failureOf(() =>
+            database.db
+              .insert(role)
+              .values(roleValues(unknown, null, 'director')),
+          );
+          expect(role_).toEqual(
+            fkViolation('role_organisation_id_organisation_id_fk'),
+          );
+          const setting = await failureOf(() =>
+            database.db
+              .insert(settingValue)
+              .values(settingValues(unknown, null, 'currency')),
+          );
+          expect(setting).toEqual(
+            fkViolation('setting_value_organisation_id_organisation_id_fk'),
+          );
+        });
+
+        it('gives every table with an organisation_id column a foreign key to organisation', async () => {
+          const missing = await rows(
+            database,
+            sql`select c.table_name
+                from information_schema.columns c
+                where c.table_schema = 'public' and c.column_name = 'organisation_id'
+                  and not exists (
+                    select 1 from pg_constraint k
+                    where k.contype = 'f'
+                      and k.conrelid = format('public.%I', c.table_name)::regclass
+                      and k.confrelid = 'public.organisation'::regclass
+                      and array_length(k.conkey, 1) = 1
+                      and k.conkey[1] = (
+                        select attnum from pg_attribute
+                        where attrelid = k.conrelid and attname = 'organisation_id'
+                      )
+                  )`,
+          );
+          expect(missing).toEqual([]);
         });
       });
 

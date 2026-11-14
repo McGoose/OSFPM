@@ -10,6 +10,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { sqlList, standardColumns, visibilityCheck } from '../columns.js';
 import { project } from './project.js';
+import { organisation } from './organisation.js';
 import { user } from './user.js';
 
 export const SETTING_LAYERS = ['org', 'project'] as const;
@@ -22,7 +23,11 @@ export type SettingLayer = (typeof SETTING_LAYERS)[number];
 export const settingValue = pgTable(
   'setting_value',
   {
-    ...standardColumns(() => user.id, { defaultVisibility: 'private' }),
+    ...standardColumns(
+      () => user.id,
+      () => organisation.id,
+      { defaultVisibility: 'private' },
+    ),
     layer: text('layer').$type<SettingLayer>().notNull(),
     projectId: uuid('project_id'),
     key: text('key').notNull(),

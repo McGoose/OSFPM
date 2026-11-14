@@ -10,6 +10,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { sqlList, standardColumns, visibilityCheck } from '../columns.js';
 import { project } from './project.js';
+import { organisation } from './organisation.js';
 import { user } from './user.js';
 
 export const PROJECT_MEMBERSHIP_STATUSES = [
@@ -24,7 +25,10 @@ export type ProjectMembershipStatus =
 export const projectMembership = pgTable(
   'project_membership',
   {
-    ...standardColumns(() => user.id),
+    ...standardColumns(
+      () => user.id,
+      () => organisation.id,
+    ),
     projectId: uuid('project_id').notNull(),
     userId: uuid('user_id').notNull(),
     status: text('status').$type<ProjectMembershipStatus>().notNull(),
