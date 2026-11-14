@@ -10,7 +10,7 @@ Every client, including the future web app, uses the same public API.
 ## Stack
 
 - TypeScript (strict) on Node.js LTS.
-- PostgreSQL 16+, and SQLite for small installs; same schema through Drizzle ORM.
+- PostgreSQL 16 or later for standard installs and PGlite for small installs, one Drizzle schema and one migration set.
 - Zod is the single source for validation, types and OpenAPI.
 - HTTP framework and web UI are not chosen yet: do not add either until a prompt says so.
 
@@ -61,7 +61,8 @@ Read-only reference at tag `prototype-final`. Port only what a prompt names.
 ## Commands
 
 - Install: `pnpm install`
-- Test: `pnpm test`
+- Test: `pnpm test` (PGlite only)
+- Test on PostgreSQL too: `DATABASE_URL=postgres://user:pass@host:5432/postgres pnpm test`; tests create and drop their own throwaway databases.
 - Lint: `pnpm lint`
 - Format: `pnpm format` (check only: `pnpm format:check`)
 - Typecheck: `pnpm typecheck`

@@ -1,0 +1,39 @@
+import { sql } from 'drizzle-orm';
+import { check, pgTable, text, uniqueIndex } from 'drizzle-orm/pg-core';
+import { sqlList, standardColumns, visibilityCheck } from '../columns.js';
+import { user } from './user.js';
+
+export const ORGANISATION_STATUSES = ['active', 'suspended'] as const;
+export type OrganisationStatus = (typeof ORGANISATION_STATUSES)[number];
+
+/** The tenant. Its own `organisation_id` is always its `id`. */
+export const organisation = pgTable(
+  'organisation',
+  {
+    ...standardColumns(() => user.id, { defaultVisibility: 'private' }),
+    slug: text('slug').notNull(),
+    name: text('name').notNull(),
+    legalName: text('legal_name'),
+    /** ISO 3166-1 alpha-2 */
+    country: text('country').notNull(),
+    /** BCP 47 */
+    defaultLocale: text('default_locale').notNull(),
+    /** IANA time zone */
+    defaultTimezone: text('default_timezone').notNull(),
+    /** ISO 4217 */
+    baseCurrency: text('base_currency').notNull(),
+    status: text('status').$type<OrganisationStatus>().notNull(),
+  },
+  (t) => [
+    uniqueIndex('organisation_slug_unique').on(t.slug),
+    check(
+      'organisation_is_own_tenant_check',
+      sql`${t.organisationId} = ${t.id}`,
+    ),
+    check(
+      'organisation_status_check',
+      sql`${t.status} in (${sqlList(ORGANISATION_STATUSES)})`,
+    ),
+    visibilityCheck('organisation', t.visibility),
+  ],
+);

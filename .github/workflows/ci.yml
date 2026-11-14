@@ -13,6 +13,19 @@ jobs:
   check:
     name: Format, lint, typecheck and test
     runs-on: ubuntu-latest
+    services:
+      # PostgreSQL 16 is the minimum supported version.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -38,5 +51,8 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Test
+      - name: Test (PostgreSQL 16 and PGlite)
         run: pnpm test
+        env:
+          # Throwaway CI service; not a secret.
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
