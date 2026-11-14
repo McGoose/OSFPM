@@ -43,6 +43,13 @@
       "when": 1794695063277,
       "tag": "0005_organisation_fk_names",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794695248147,
+      "tag": "0006_audit_event_project_requires_organisation",
+      "breakpoints": true
     }
   ]
 }

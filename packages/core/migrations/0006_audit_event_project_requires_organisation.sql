@@ -1,0 +1,1 @@
+ALTER TABLE "audit_event" ADD CONSTRAINT "audit_event_project_requires_organisation_check" CHECK ("audit_event"."project_id" is null or "audit_event"."organisation_id" is not null);

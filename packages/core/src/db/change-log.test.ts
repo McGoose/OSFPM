@@ -1167,6 +1167,67 @@ describe.each(testTargets)('change log and write helper on $name', (target) => {
       });
     });
 
+    it('rejects an audit_event with a project but no organisation', async () => {
+      // The composite project foreign key does not apply when organisation_id
+      // is NULL, so only the CHECK stops this.
+      const failure = await failureOf(() =>
+        database.db.insert(auditEvent).values({
+          organisationId: null,
+          projectId: a.projectId,
+          category: 'x',
+          action: 'y',
+          actorType: 'system',
+          occurredAt: new Date(),
+        }),
+      );
+      expect(failure).toEqual({
+        code: SQLSTATE.checkViolation,
+        constraint: 'audit_event_project_requires_organisation_check',
+      });
+    });
+
+    it('rejects the same through recordAudit, and stores nothing', async () => {
+      const before = await rows(
+        database,
+        sql`select count(*)::int as n from audit_event where category = 'no-org-project'`,
+      );
+      let thrown: unknown;
+      try {
+        await recordAudit(database.db, {
+          projectId: a.projectId,
+          category: 'no-org-project',
+          action: 'y',
+          actor: { type: 'system', id: null },
+        });
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(RecordWriteError);
+      expect(thrown).toMatchObject({
+        code: SQLSTATE.checkViolation,
+        constraint: 'audit_event_project_requires_organisation_check',
+      });
+      const after = await rows(
+        database,
+        sql`select count(*)::int as n from audit_event where category = 'no-org-project'`,
+      );
+      expect(after).toEqual(before);
+    });
+
+    it('still allows a project event with its organisation, an organisation event, and an install event', async () => {
+      const base = {
+        category: 'x',
+        action: 'y',
+        actorType: 'system' as const,
+        occurredAt: new Date(),
+      };
+      await database.db.insert(auditEvent).values([
+        { ...base, organisationId: a.organisationId, projectId: a.projectId },
+        { ...base, organisationId: a.organisationId, projectId: null },
+        { ...base, organisationId: null, projectId: null },
+      ]);
+    });
+
     it('rejects a change_seq that points at another organisation’s project', async () => {
       const failure = await failureOf(() =>
         database.db.insert(changeSeq).values({
