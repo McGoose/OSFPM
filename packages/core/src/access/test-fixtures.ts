@@ -1,7 +1,9 @@
+import { and, eq, isNull } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
 import {
   department,
+  orgMembership,
   organisation,
   permission,
   person,
@@ -12,6 +14,8 @@ import {
   role,
   rolePermission,
   user,
+  type OrgMembershipStatus,
+  type OrgRole,
   type ProjectMembershipStatus,
   type ProjectPersonEngagement,
   type ProjectPersonStatus,
@@ -243,4 +247,64 @@ export async function grantOnProject(
     roleId: r!.id,
   });
   return { membershipId: m!.id, roleId: r!.id };
+}
+
+/**
+ * Makes `userId` a member of the organisation with `orgRole`, and gives the
+ * organisation template role of that key (one per organisation, reused) the
+ * given permission keys. The keys must already be in the catalogue.
+ */
+export async function grantOnOrganisation(
+  database: Database,
+  organisationId: string,
+  userId: string,
+  orgRole: OrgRole,
+  keys: readonly string[],
+  options: { status?: OrgMembershipStatus; deleted?: boolean } = {},
+): Promise<{ membershipId: string; roleId: string }> {
+  const [existing] = await database.db
+    .select()
+    .from(role)
+    .where(
+      and(
+        eq(role.organisationId, organisationId),
+        eq(role.key, orgRole),
+        isNull(role.projectId),
+      ),
+    );
+  const roleRow =
+    existing ??
+    (
+      await database.db
+        .insert(role)
+        .values({
+          ...base(organisationId),
+          projectId: null,
+          key: orgRole,
+          name: `Organisation ${orgRole}`,
+        })
+        .returning()
+    )[0]!;
+  for (const key of keys) {
+    await database.db
+      .insert(rolePermission)
+      .values({
+        ...base(organisationId),
+        roleId: roleRow.id,
+        permissionKey: key,
+        departmentId: null,
+      })
+      .onConflictDoNothing();
+  }
+  const [m] = await database.db
+    .insert(orgMembership)
+    .values({
+      ...base(organisationId),
+      userId,
+      orgRole,
+      status: options.status ?? 'active',
+      deletedAt: options.deleted ? new Date() : null,
+    })
+    .returning();
+  return { membershipId: m!.id, roleId: roleRow.id };
 }
