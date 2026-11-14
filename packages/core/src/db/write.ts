@@ -356,15 +356,21 @@ export function insertRecord<T extends TenantTable>(
         deletedBy: null,
       } as Row;
       const projectId = await resolveProjectId(inner, table, full);
-      const seq = await nextSeq(
-        inner,
-        full.organisationId as string,
-        projectId,
-      );
+      // A new project is its own project, and `change_seq` references it, so
+      // its counter can only be taken once the row exists. Nothing else
+      // writes to a project that is not committed yet, so the order does not
+      // matter for locking.
+      const ownsSequence = projectId !== null && projectId === full.id;
+      let seq = ownsSequence
+        ? 0
+        : await nextSeq(inner, full.organisationId as string, projectId);
       const [row] = await inner
         .insert(table)
         .values(full as never)
         .returning();
+      if (ownsSequence) {
+        seq = await nextSeq(inner, full.organisationId as string, projectId);
+      }
       await logChange(inner, table, ctx, {
         seq,
         projectId,
