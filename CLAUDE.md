@@ -10,7 +10,7 @@ Every client, including the future web app, uses the same public API.
 ## Stack
 
 - TypeScript (strict) on Node.js LTS.
-- PostgreSQL for standard installs and PGlite for small installs, one Drizzle schema and one migration set.
+- PostgreSQL 16 or later for standard installs and PGlite for small installs, one Drizzle schema and one migration set.
 - Zod is the single source for validation, types and OpenAPI.
 - HTTP framework and web UI are not chosen yet: do not add either until a prompt says so.
 
