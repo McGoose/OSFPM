@@ -19,6 +19,7 @@ export * from './project-membership-role.js';
 export * from './project-membership.js';
 export * from './project-person.js';
 export * from './project.js';
+export * from './retention-class.js';
 export * from './role-permission.js';
 export * from './role.js';
 export * from './setting-value.js';

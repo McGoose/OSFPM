@@ -85,6 +85,20 @@
       "when": 1794699363312,
       "tag": "0011_project_key_dates",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1794700326882,
+      "tag": "0012_retention_classes",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1794700327835,
+      "tag": "0013_seed_retention_classes",
+      "breakpoints": true
     }
   ]
 }

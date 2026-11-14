@@ -248,6 +248,7 @@ describe.each(testTargets)('database schema on $name', (target) => {
           'project_membership',
           'project_membership_role',
           'project_person',
+          'retention_class',
           'role',
           'role_permission',
           'setting_value',
