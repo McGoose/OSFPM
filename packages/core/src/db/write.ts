@@ -28,21 +28,44 @@ import { sensitiveColumns } from './sensitive.js';
  * in `changed_fields`. Errors never carry row values.
  */
 
-export type WriteContext = {
-  /** Who really made the change. Logged as is on every `change_event`. */
-  readonly actor: { readonly type: ActorType; readonly id: string | null };
-  /**
-   * The user a `token` or `email` write is made for: the token's owner, or the
-   * user who approved the email draft. It fills `created_by`, `updated_by` and
-   * `deleted_by`, which reference `user`. Ignored for `user` (the actor is the
-   * user), `system` and `federation` (no user, so those columns stay NULL).
-   */
-  readonly onBehalfOfUserId?: string | null;
+/** Actors that act for a user: a token for its owner, an email for its approver. */
+type ActorForUser = 'token' | 'email';
+
+type ContextBase = {
   readonly requestId?: string | null;
   /** The server doing the write. */
   readonly originServer: string;
   readonly clock: () => Date;
 };
+
+/**
+ * Who is writing. `actor` is who really made the change and is logged as is on
+ * every `change_event`.
+ *
+ * `onBehalfOfUserId` is the user a `token` or `email` write is made for: the
+ * token's owner, or the user who approved the email draft. It fills
+ * `created_by`, `updated_by` and `deleted_by`, which reference `user`, and the
+ * type requires it for those two actor types. For `user` (the actor is the
+ * user), `system` and `federation` (no user) it is ignored and those columns
+ * are the actor's user or NULL.
+ */
+export type WriteContext = ContextBase &
+  (
+    | {
+        readonly actor: {
+          readonly type: ActorForUser;
+          readonly id: string | null;
+        };
+        readonly onBehalfOfUserId: string;
+      }
+    | {
+        readonly actor: {
+          readonly type: Exclude<ActorType, ActorForUser>;
+          readonly id: string | null;
+        };
+        readonly onBehalfOfUserId?: string | null;
+      }
+  );
 
 /** A transaction handle. Typed as the shared database base so both drivers fit. */
 export type Tx = SchemaDb;

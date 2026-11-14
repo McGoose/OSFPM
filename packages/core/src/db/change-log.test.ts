@@ -148,7 +148,9 @@ const ORIGIN = newId();
 
 function contextFor(
   actorId: string | null,
-  overrides: Partial<WriteContext> = {},
+  overrides: Partial<
+    Pick<WriteContext, 'requestId' | 'originServer' | 'clock'>
+  > = {},
 ): WriteContext {
   let tick = 0;
   return {
@@ -468,7 +470,7 @@ describe.each(testTargets)('change log and write helper on $name', (target) => {
       const cases = (): [
         string,
         WriteContext['actor'],
-        string | null | undefined,
+        string,
         string | null,
       ][] => [
         ['user', { type: 'user', id: userId }, bystander, userId],
@@ -476,36 +478,41 @@ describe.each(testTargets)('change log and write helper on $name', (target) => {
         ['email', { type: 'email', id: draftId }, approver, approver],
         ['system', { type: 'system', id: null }, bystander, null],
         ['federation', { type: 'federation', id: peerId }, bystander, null],
-        [
-          'token with no owner given',
-          { type: 'token', id: tokenId },
-          null,
-          null,
-        ],
-        [
-          'email with no approver given',
-          { type: 'email', id: draftId },
-          undefined,
-          null,
-        ],
       ];
 
-      it.each([
-        'user',
-        'token',
-        'email',
-        'system',
-        'federation',
-        'token with no owner given',
-        'email with no approver given',
-      ])(
+      it('requires onBehalfOfUserId, by type, for token and email actors', () => {
+        const base = { originServer: ORIGIN, clock: () => new Date() };
+        // @ts-expect-error a token write must say whose behalf it is made on
+        const token: WriteContext = {
+          ...base,
+          actor: { type: 'token', id: null },
+        };
+        // @ts-expect-error an email write must say who approved the draft
+        const email: WriteContext = {
+          ...base,
+          actor: { type: 'email', id: null },
+        };
+        const system: WriteContext = {
+          ...base,
+          actor: { type: 'system', id: null },
+        };
+        expect([token, email, system]).toHaveLength(3);
+      });
+
+      it.each(['user', 'token', 'email', 'system', 'federation'])(
         '%s: fills the user columns as specified and keeps the exact actor on every event',
         async (label) => {
           const [, actor, onBehalfOfUserId, expectedUser] = cases().find(
             ([name]) => name === label,
           )!;
           const t = await seedTenant(database);
-          const ctx = contextFor(null, { actor, onBehalfOfUserId });
+          // Cast: the table also passes an ignored onBehalfOfUserId for the actor
+          // types whose context type does not require one.
+          const ctx = {
+            ...contextFor(null),
+            actor,
+            onBehalfOfUserId,
+          } as WriteContext;
 
           const created = await database.db.transaction((tx) =>
             insertRecord(
