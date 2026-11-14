@@ -6,6 +6,7 @@ import {
   tenantTable,
   visibilityCheck,
 } from '../columns.js';
+import { registerProjectResolver } from '../project-resolver.js';
 import { organisation } from './organisation.js';
 import { user } from './user.js';
 
@@ -60,4 +61,9 @@ export const project = tenantTable(
     check('project_currency_check', sql`${t.currency} ~ '^[A-Z]{3}$'`),
     visibilityCheck('project', t.visibility),
   ],
+);
+
+/** A project's own changes belong to its own sequence. */
+registerProjectResolver(project, (_tx, row) =>
+  Promise.resolve(row.id as string),
 );

@@ -1,5 +1,7 @@
+import { and, eq } from 'drizzle-orm';
 import { foreignKey, text, unique, uuid } from 'drizzle-orm/pg-core';
 import { standardColumns, tenantTable, visibilityCheck } from '../columns.js';
+import { registerProjectResolver } from '../project-resolver.js';
 import { department } from './department.js';
 import { permission } from './permission.js';
 import { role } from './role.js';
@@ -38,3 +40,21 @@ export const rolePermission = tenantTable(
     visibilityCheck('role_permission', t.visibility),
   ],
 );
+
+/**
+ * Has no `project_id`: its project is its role's. An organisation template
+ * role has none, so its permissions belong to the organisation sequence.
+ */
+registerProjectResolver(rolePermission, async (tx, row) => {
+  const [found] = await tx
+    .select({ projectId: role.projectId })
+    .from(role)
+    .where(
+      and(
+        eq(role.id, row.roleId as string),
+        eq(role.organisationId, row.organisationId as string),
+      ),
+    )
+    .limit(1);
+  return found?.projectId ?? null;
+});

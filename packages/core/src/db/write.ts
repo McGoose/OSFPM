@@ -3,7 +3,8 @@ import type { AnyPgColumn, PgTable } from 'drizzle-orm/pg-core';
 import type { ActorType } from './columns.js';
 import type { SchemaDb } from './client.js';
 import { newId } from './ids.js';
-import { auditEvent, changeEvent, changeSeq, project } from './schema/index.js';
+import { resolveProjectId } from './project-resolver.js';
+import { auditEvent, changeEvent, changeSeq } from './schema/index.js';
 import type { ChangeAction } from './schema/index.js';
 import { sensitiveColumns } from './sensitive.js';
 
@@ -162,12 +163,6 @@ async function guarded<R>(
   }
 }
 
-/** Project a record belongs to; `null` means the organisation-level sequence. */
-function projectIdOf(table: PgTable, row: Row): string | null {
-  if (table === (project as PgTable)) return row.id as string;
-  return typeof row.projectId === 'string' ? row.projectId : null;
-}
-
 /** Takes the next number. Holds the counter row until the transaction ends. */
 async function nextSeq(
   tx: Tx,
@@ -210,6 +205,7 @@ async function logChange(
   ctx: WriteContext,
   event: {
     seq: number;
+    projectId: string | null;
     row: Row;
     action: ChangeAction;
     changedKeys: readonly string[];
@@ -219,7 +215,7 @@ async function logChange(
   const { row, changedKeys } = event;
   await tx.insert(changeEvent).values({
     organisationId: row.organisationId as string,
-    projectId: projectIdOf(table, row),
+    projectId: event.projectId,
     seq: event.seq,
     entityType: getTableName(table),
     entityId: row.id as string,
@@ -270,10 +266,11 @@ export function insertRecord<T extends TenantTable>(
         deletedAt: null,
         deletedBy: null,
       } as Row;
+      const projectId = await resolveProjectId(inner, table, full);
       const seq = await nextSeq(
         inner,
         full.organisationId as string,
-        projectIdOf(table, full),
+        projectId,
       );
       const [row] = await inner
         .insert(table)
@@ -281,6 +278,7 @@ export function insertRecord<T extends TenantTable>(
         .returning();
       await logChange(inner, table, ctx, {
         seq,
+        projectId,
         row: row as Row,
         action: 'create',
         changedKeys: Object.keys(getTableColumns(table)),
@@ -318,10 +316,13 @@ function modifyRecord<T extends TenantTable>(
       // Seq is taken before the row is locked, so every writer in a project
       // queues on the counter first and multi-record transactions cannot
       // deadlock on each other's rows.
+      // The project is resolved once, from the stored row, and used for both
+      // the counter and the event so the two always agree.
+      const projectId = await resolveProjectId(inner, table, before);
       const seq = await nextSeq(
         inner,
         before.organisationId as string,
-        projectIdOf(table, before),
+        projectId,
       );
       const now = ctx.clock();
       const updated = (await inner
@@ -347,6 +348,7 @@ function modifyRecord<T extends TenantTable>(
       }
       await logChange(inner, table, ctx, {
         seq,
+        projectId,
         row,
         action,
         changedKeys,

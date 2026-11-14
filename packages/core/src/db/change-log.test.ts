@@ -8,12 +8,18 @@ import type { Database } from './client.js';
 import { standardColumns, tenantTable } from './columns.js';
 import { newId } from './ids.js';
 import { MIGRATIONS_FOLDER } from './migrate.js';
+import { registerProjectResolver } from './project-resolver.js';
 import {
   auditEvent,
   changeEvent,
   changeSeq,
   organisation,
+  permission,
   project,
+  projectMembership,
+  projectMembershipRole,
+  role,
+  rolePermission,
   user,
 } from './schema/index.js';
 import { markSensitive, sensitiveColumns } from './sensitive.js';
@@ -440,6 +446,201 @@ describe.each(testTargets)('change log and write helper on $name', (target) => {
         projectId: t.projectId,
         seq: 1,
         changedFields: ['title'],
+      });
+    });
+
+    describe('project of child records', () => {
+      const PERMISSION_KEY = 'budget:read';
+      const OTHER_PERMISSION_KEY = 'budget:write';
+
+      beforeAll(async () => {
+        await database.db.insert(permission).values([
+          { key: PERMISSION_KEY, module: 'budget', description: 'Read' },
+          { key: OTHER_PERMISSION_KEY, module: 'budget', description: 'Write' },
+        ]);
+      });
+
+      const insertRole = (
+        t: { organisationId: string },
+        projectId: string | null,
+        ctx: WriteContext,
+      ) =>
+        database.db.transaction((tx) =>
+          insertRecord(
+            tx,
+            role,
+            {
+              organisationId: t.organisationId,
+              ownerOrgId: t.organisationId,
+              projectId,
+              key: 'line-producer',
+              name: 'Line producer',
+            },
+            ctx,
+          ),
+        );
+
+      const grant = (
+        t: { organisationId: string },
+        roleId: string,
+        permissionKey: string,
+        ctx: WriteContext,
+      ) =>
+        database.db.transaction((tx) =>
+          insertRecord(
+            tx,
+            rolePermission,
+            {
+              organisationId: t.organisationId,
+              ownerOrgId: t.organisationId,
+              roleId,
+              permissionKey,
+            },
+            ctx,
+          ),
+        );
+
+      it("puts a project role's permission in that project's sequence, for every action", async () => {
+        const t = await seedTenant(database);
+        const ctx = contextFor(userId);
+        const projectRole = await insertRole(t, t.projectId, ctx);
+        const grantRow = await grant(t, projectRole.id, PERMISSION_KEY, ctx);
+        const updated = await database.db.transaction((tx) =>
+          updateRecord(
+            tx,
+            rolePermission,
+            grantRow.id,
+            1,
+            { permissionKey: OTHER_PERMISSION_KEY },
+            ctx,
+          ),
+        );
+        const deleted = await database.db.transaction((tx) =>
+          softDeleteRecord(tx, rolePermission, grantRow.id, 2, ctx),
+        );
+        await database.db.transaction((tx) =>
+          restoreRecord(tx, rolePermission, grantRow.id, deleted.version, ctx),
+        );
+        expect(updated.version).toBe(2);
+        const events = await eventsFor(database, grantRow.id);
+        expect(events.map((e) => [e.action, e.projectId, e.seq])).toEqual([
+          ['create', t.projectId, 2],
+          ['update', t.projectId, 3],
+          ['delete', t.projectId, 4],
+          ['restore', t.projectId, 5],
+        ]);
+        expect(await seqsFor(database, t.organisationId, t.projectId)).toEqual([
+          1, 2, 3, 4, 5,
+        ]);
+        expect(await seqsFor(database, t.organisationId, null)).toEqual([]);
+      });
+
+      it("puts an organisation template role's permission in the organisation sequence", async () => {
+        const t = await seedTenant(database);
+        const ctx = contextFor(userId);
+        const template = await insertRole(t, null, ctx);
+        const grantRow = await grant(t, template.id, PERMISSION_KEY, ctx);
+        await database.db.transaction((tx) =>
+          softDeleteRecord(tx, rolePermission, grantRow.id, 1, ctx),
+        );
+        const events = await eventsFor(database, grantRow.id);
+        expect(events.map((e) => [e.action, e.projectId, e.seq])).toEqual([
+          ['create', null, 2],
+          ['delete', null, 3],
+        ]);
+        expect(await seqsFor(database, t.organisationId, null)).toEqual([
+          1, 2, 3,
+        ]);
+        expect(await seqsFor(database, t.organisationId, t.projectId)).toEqual(
+          [],
+        );
+      });
+
+      it('puts a membership role in the project of its membership', async () => {
+        const t = await seedTenant(database);
+        const ctx = contextFor(userId);
+        const member = await seedUser(database);
+        const membership = await database.db.transaction((tx) =>
+          insertRecord(
+            tx,
+            projectMembership,
+            {
+              organisationId: t.organisationId,
+              ownerOrgId: t.organisationId,
+              projectId: t.projectId,
+              userId: member,
+              status: 'active',
+            },
+            ctx,
+          ),
+        );
+        // An organisation template role: the role's own project is no help,
+        // so the project can only come from the membership.
+        const template = await insertRole(t, null, ctx);
+        const link = await database.db.transaction((tx) =>
+          insertRecord(
+            tx,
+            projectMembershipRole,
+            {
+              organisationId: t.organisationId,
+              ownerOrgId: t.organisationId,
+              membershipId: membership.id,
+              roleId: template.id,
+            },
+            ctx,
+          ),
+        );
+        await database.db.transaction((tx) =>
+          softDeleteRecord(tx, projectMembershipRole, link.id, 1, ctx),
+        );
+        const events = await eventsFor(database, link.id);
+        expect(events.map((e) => [e.action, e.projectId, e.seq])).toEqual([
+          ['create', t.projectId, 2],
+          ['delete', t.projectId, 3],
+        ]);
+        expect(await seqsFor(database, t.organisationId, t.projectId)).toEqual([
+          1, 2, 3,
+        ]);
+        // Only the template role itself is in the organisation sequence.
+        expect(await seqsFor(database, t.organisationId, null)).toEqual([1]);
+      });
+
+      it('writes nothing, and uses no seq, when the parent does not exist', async () => {
+        const t = await seedTenant(database);
+        const ctx = contextFor(userId);
+        const id = newId();
+        let thrown: unknown;
+        try {
+          await database.db.transaction((tx) =>
+            insertRecord(
+              tx,
+              rolePermission,
+              {
+                id,
+                organisationId: t.organisationId,
+                ownerOrgId: t.organisationId,
+                roleId: newId(),
+                permissionKey: PERMISSION_KEY,
+              },
+              ctx,
+            ),
+          );
+        } catch (error) {
+          thrown = error;
+        }
+        expect(thrown).toBeInstanceOf(RecordWriteError);
+        expect(thrown).toMatchObject({
+          code: SQLSTATE.foreignKeyViolation,
+          constraint: 'role_permission_role_fk',
+        });
+        expect(await eventsFor(database, id)).toHaveLength(0);
+        expect(await seqsFor(database, t.organisationId, null)).toEqual([]);
+      });
+
+      it('refuses a second resolver for the same table', () => {
+        expect(() =>
+          registerProjectResolver(rolePermission, () => Promise.resolve(null)),
+        ).toThrow(/already registered for role_permission/);
       });
     });
 
