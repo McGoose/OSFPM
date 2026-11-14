@@ -35,7 +35,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 
 ## Test data
 
-Only the fictional demo production *The Last Withdrawal* or invented data. Never real people's data.
+Only the fictional demo production _The Last Withdrawal_ or invented data. Never real people's data.
 
 ## Workflow
 
