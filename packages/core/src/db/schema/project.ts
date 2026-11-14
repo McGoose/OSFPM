@@ -64,6 +64,7 @@ export const project = pgTable(
       'project_status_check',
       sql`${t.status} in (${sqlList(PROJECT_STATUSES)})`,
     ),
+    check('project_currency_check', sql`${t.currency} ~ '^[A-Z]{3}$'`),
     visibilityCheck('project', t.visibility),
   ],
 );

@@ -1,0 +1,3 @@
+ALTER TABLE "organisation" ADD CONSTRAINT "organisation_country_check" CHECK ("organisation"."country" ~ '^[A-Z]{2}$');--> statement-breakpoint
+ALTER TABLE "organisation" ADD CONSTRAINT "organisation_base_currency_check" CHECK ("organisation"."base_currency" ~ '^[A-Z]{3}$');--> statement-breakpoint
+ALTER TABLE "project" ADD CONSTRAINT "project_currency_check" CHECK ("project"."currency" ~ '^[A-Z]{3}$');

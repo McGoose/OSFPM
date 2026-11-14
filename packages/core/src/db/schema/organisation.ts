@@ -30,6 +30,11 @@ export const organisation = pgTable(
       'organisation_is_own_tenant_check',
       sql`${t.organisationId} = ${t.id}`,
     ),
+    check('organisation_country_check', sql`${t.country} ~ '^[A-Z]{2}$'`),
+    check(
+      'organisation_base_currency_check',
+      sql`${t.baseCurrency} ~ '^[A-Z]{3}$'`,
+    ),
     check(
       'organisation_status_check',
       sql`${t.status} in (${sqlList(ORGANISATION_STATUSES)})`,
