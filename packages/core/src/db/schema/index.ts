@@ -6,6 +6,7 @@ export * from './company.js';
 export * from './department.js';
 export * from './episode.js';
 export * from './installation.js';
+export * from './legal-hold.js';
 export * from './location.js';
 export * from './org-membership.js';
 export * from './organisation.js';

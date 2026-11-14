@@ -106,6 +106,13 @@
       "when": 1794700412248,
       "tag": "0014_retention_class_foreign_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1794700548744,
+      "tag": "0015_legal_hold",
+      "breakpoints": true
     }
   ]
 }

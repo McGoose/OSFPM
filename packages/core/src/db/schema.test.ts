@@ -239,6 +239,7 @@ describe.each(testTargets)('database schema on $name', (target) => {
           'department',
           'episode',
           'installation',
+          'legal_hold',
           'location',
           'org_membership',
           'organisation',
@@ -459,6 +460,7 @@ describe.each(testTargets)('database schema on $name', (target) => {
       it('never generates ids in the database', async () => {
         for (const table of [
           'installation',
+          'legal_hold',
           'organisation',
           'project',
           'user',
