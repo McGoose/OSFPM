@@ -14,8 +14,8 @@ import {
 type Row = Record<string, unknown>;
 
 async function rows(database: Database, query: ReturnType<typeof sql>) {
-  const result = await database.db.execute(query);
-  return result.rows as Row[];
+  const result = (await database.db.execute(query)) as { rows: Row[] };
+  return result.rows;
 }
 
 type ColumnSpec = { type: string; nullable: boolean };

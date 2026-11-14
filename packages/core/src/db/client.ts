@@ -7,6 +7,7 @@ import {
   drizzle as drizzlePg,
   type NodePgDatabase,
 } from 'drizzle-orm/node-postgres';
+import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import pg from 'pg';
 import * as schema from './schema/index.js';
 
@@ -35,7 +36,18 @@ export type PgliteDb = {
   readonly close: () => Promise<void>;
 };
 
-export type Database = PostgresDb | PgliteDb;
+/**
+ * The PostgreSQL base class both Drizzle instances extend. Code that only
+ * runs queries should depend on this, not on a driver-specific type.
+ */
+export type SchemaDb = PgDatabase<PgQueryResultHKT, typeof schema>;
+
+/** A database handle of either driver, with queries typed on the shared base. */
+export type Database = {
+  readonly driver: 'postgres' | 'pglite';
+  readonly db: SchemaDb;
+  readonly close: () => Promise<void>;
+};
 
 export function createDatabase(config: {
   driver: 'postgres';
@@ -45,7 +57,7 @@ export function createDatabase(
   config: Extract<DbConfig, { driver: 'pglite' }>,
 ): PgliteDb;
 export function createDatabase(config: DbConfig): Database;
-export function createDatabase(config: DbConfig): Database {
+export function createDatabase(config: DbConfig): PostgresDb | PgliteDb {
   switch (config.driver) {
     case 'postgres': {
       const pool = new pg.Pool({ connectionString: config.url });
