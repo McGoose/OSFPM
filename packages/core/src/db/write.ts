@@ -18,6 +18,10 @@ import { sensitiveColumns } from './sensitive.js';
  * failed call leaves no row, no event and no used `seq`, even if the caller
  * catches the error and carries on.
  *
+ * Deleting a deleted record, or restoring one that is not deleted, throws
+ * `RecordStateError` and writes nothing. The version is checked first, so a
+ * stale `expectedVersion` throws `VersionConflictError` instead.
+ *
  * Event content: `create` stores the whole row in `after`; `update`, `delete`
  * and `restore` store only the changed fields in `before` and `after`. Values
  * of sensitive columns (see `markSensitive`) are never stored; their names stay
@@ -104,6 +108,25 @@ export class RecordNotFoundError extends Error {
 }
 
 /**
+ * The record is in the wrong state for this operation: it was already deleted,
+ * or it is not deleted so there is nothing to restore. Nothing was written.
+ */
+export class RecordStateError extends Error {
+  constructor(
+    readonly entityType: string,
+    readonly entityId: string,
+    readonly operation: 'delete' | 'restore',
+  ) {
+    super(
+      operation === 'delete'
+        ? `Cannot delete ${entityType} ${entityId}: it is already deleted`
+        : `Cannot restore ${entityType} ${entityId}: it is not deleted`,
+    );
+    this.name = 'RecordStateError';
+  }
+}
+
+/**
  * A database error with the values stripped. Drivers and Drizzle put query
  * parameters and offending values in messages and `detail`, so the original
  * error is not kept; only the SQLSTATE and constraint name survive.
@@ -157,6 +180,7 @@ async function guarded<R>(
     if (
       error instanceof VersionConflictError ||
       error instanceof RecordNotFoundError ||
+      error instanceof RecordStateError ||
       error instanceof RecordWriteError
     ) {
       throw error;
@@ -332,6 +356,13 @@ function modifyRecord<T extends TenantTable>(
       const actual = before.version as number;
       if (actual !== expectedVersion) {
         throw new VersionConflictError(entityType, id, expectedVersion, actual);
+      }
+      // Checked before the counter is touched, so a refused call uses no seq.
+      if (action === 'delete' && before.deletedAt != null) {
+        throw new RecordStateError(entityType, id, 'delete');
+      }
+      if (action === 'restore' && before.deletedAt == null) {
+        throw new RecordStateError(entityType, id, 'restore');
       }
       const changedKeys = Object.keys(change).filter(
         (key) => !same(before[key], change[key]),

@@ -32,6 +32,7 @@ import {
 import {
   insertRecord,
   RecordNotFoundError,
+  RecordStateError,
   RecordWriteError,
   recordAudit,
   restoreRecord,
@@ -551,6 +552,159 @@ describe.each(testTargets)('change log and write helper on $name', (target) => {
           }
         },
       );
+    });
+
+    describe('record state errors', () => {
+      async function snapshot(
+        t: { organisationId: string; projectId: string },
+        id: string,
+      ) {
+        const [row] = await rows(
+          database,
+          sql`select * from dummy_record where id = ${id}`,
+        );
+        const [counter] = await rows(
+          database,
+          sql`select last_seq from change_seq
+              where organisation_id = ${t.organisationId} and project_id = ${t.projectId}`,
+        );
+        return {
+          row,
+          lastSeq: counter!.last_seq,
+          events: await eventsFor(database, id),
+        };
+      }
+
+      async function createAndDelete() {
+        const t = await seedTenant(database);
+        const ctx = contextFor(userId);
+        const created = await database.db.transaction((tx) =>
+          insertRecord(
+            tx,
+            dummyRecord,
+            dummyValues(t.organisationId, t.projectId, {
+              secretNote: SECRET,
+            }),
+            ctx,
+          ),
+        );
+        const deleted = await database.db.transaction((tx) =>
+          softDeleteRecord(tx, dummyRecord, created.id, 1, ctx),
+        );
+        return { t, ctx, created, deleted };
+      }
+
+      it('rejects deleting a deleted record with RecordStateError and writes nothing', async () => {
+        const { t, ctx, created, deleted } = await createAndDelete();
+        const before = await snapshot(t, created.id);
+
+        let thrown: unknown;
+        try {
+          await database.db.transaction((tx) =>
+            softDeleteRecord(tx, dummyRecord, created.id, deleted.version, ctx),
+          );
+        } catch (error) {
+          thrown = error;
+        }
+        expect(thrown).toBeInstanceOf(RecordStateError);
+        expect(thrown).toMatchObject({
+          entityType: 'dummy_record',
+          entityId: created.id,
+          operation: 'delete',
+        });
+        expect(await snapshot(t, created.id)).toEqual(before);
+        expect(before.events.map((e) => e.action)).toEqual([
+          'create',
+          'delete',
+        ]);
+      });
+
+      it('rejects restoring a live record with RecordStateError and writes nothing', async () => {
+        const t = await seedTenant(database);
+        const ctx = contextFor(userId);
+        const created = await database.db.transaction((tx) =>
+          insertRecord(
+            tx,
+            dummyRecord,
+            dummyValues(t.organisationId, t.projectId),
+            ctx,
+          ),
+        );
+        const before = await snapshot(t, created.id);
+
+        let thrown: unknown;
+        try {
+          await database.db.transaction((tx) =>
+            restoreRecord(tx, dummyRecord, created.id, created.version, ctx),
+          );
+        } catch (error) {
+          thrown = error;
+        }
+        expect(thrown).toBeInstanceOf(RecordStateError);
+        expect(thrown).toMatchObject({
+          entityType: 'dummy_record',
+          entityId: created.id,
+          operation: 'restore',
+        });
+        expect(await snapshot(t, created.id)).toEqual(before);
+        expect(before.events).toHaveLength(1);
+      });
+
+      it('uses no seq: the next write in the same transaction gets the next number', async () => {
+        const { t, ctx, created, deleted } = await createAndDelete();
+        const next = await database.db.transaction(async (tx) => {
+          await expect(
+            softDeleteRecord(tx, dummyRecord, created.id, deleted.version, ctx),
+          ).rejects.toBeInstanceOf(RecordStateError);
+          const other = await insertRecord(
+            tx,
+            dummyRecord,
+            dummyValues(t.organisationId, t.projectId),
+            ctx,
+          );
+          await expect(
+            restoreRecord(tx, dummyRecord, other.id, other.version, ctx),
+          ).rejects.toBeInstanceOf(RecordStateError);
+          return restoreRecord(
+            tx,
+            dummyRecord,
+            created.id,
+            deleted.version,
+            ctx,
+          );
+        });
+        expect(next.deletedAt).toBeNull();
+        // create 1, delete 2, the other record's create 3, restore 4: the two
+        // refused calls left no gap.
+        expect(await seqsFor(database, t.organisationId, t.projectId)).toEqual([
+          1, 2, 3, 4,
+        ]);
+      });
+
+      it('reports a stale version before the state', async () => {
+        const { ctx, created } = await createAndDelete();
+        await expect(
+          database.db.transaction((tx) =>
+            softDeleteRecord(tx, dummyRecord, created.id, 1, ctx),
+          ),
+        ).rejects.toBeInstanceOf(VersionConflictError);
+      });
+
+      it('keeps record values out of the error', async () => {
+        const { ctx, created, deleted } = await createAndDelete();
+        const failure = await database.db
+          .transaction((tx) =>
+            softDeleteRecord(tx, dummyRecord, created.id, deleted.version, ctx),
+          )
+          .catch((error: unknown) => error as Error);
+        expect(failure).toBeInstanceOf(RecordStateError);
+        const text = JSON.stringify({
+          message: (failure as Error).message,
+          ...(failure as object),
+        });
+        expect(text).not.toContain(SECRET);
+        expect(text).not.toContain('Call sheet');
+      });
     });
 
     describe('project of child records', () => {
