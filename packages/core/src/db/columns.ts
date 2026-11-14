@@ -27,6 +27,9 @@ export const timestamptz = (name: string) =>
 /** Lazily resolves `user.id`, so table modules need no import cycle. */
 export type UserIdRef = () => AnyPgColumn;
 
+/** Lazily resolves `organisation.id`, for the same reason as `UserIdRef`. */
+export type OrganisationIdRef = () => AnyPgColumn;
+
 /**
  * Columns every table carries, except the `organisation_id`, `owner_org_id`
  * and `visibility` trio, which install-level tables such as `user` omit.
@@ -49,14 +52,21 @@ export function baseColumns(userId: UserIdRef) {
   };
 }
 
-/** The full standard column set. `visibility` defaults to `project`. */
+/**
+ * The full standard column set. `organisation_id` always references
+ * `organisation.id`, so every table built from this helper is tenant-checked.
+ * `visibility` defaults to `project`.
+ */
 export function standardColumns(
   userId: UserIdRef,
+  organisationId: OrganisationIdRef,
   options: { defaultVisibility?: Visibility } = {},
 ) {
   return {
     ...baseColumns(userId),
-    organisationId: uuid('organisation_id').notNull(),
+    organisationId: uuid('organisation_id')
+      .notNull()
+      .references(organisationId),
     ownerOrgId: uuid('owner_org_id').notNull(),
     visibility: text('visibility')
       .$type<Visibility>()

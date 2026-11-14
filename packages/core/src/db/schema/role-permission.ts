@@ -3,13 +3,17 @@ import { standardColumns, visibilityCheck } from '../columns.js';
 import { department } from './department.js';
 import { permission } from './permission.js';
 import { role } from './role.js';
+import { organisation } from './organisation.js';
 import { user } from './user.js';
 
 /** Grants a permission to a role, optionally limited to one department. */
 export const rolePermission = pgTable(
   'role_permission',
   {
-    ...standardColumns(() => user.id),
+    ...standardColumns(
+      () => user.id,
+      () => organisation.id,
+    ),
     roleId: uuid('role_id').notNull(),
     permissionKey: text('permission_key').notNull(),
     departmentId: uuid('department_id'),

@@ -31,17 +31,16 @@ export type OrgMembershipStatus = (typeof ORG_MEMBERSHIP_STATUSES)[number];
 export const orgMembership = pgTable(
   'org_membership',
   {
-    ...standardColumns(() => user.id, { defaultVisibility: 'private' }),
+    ...standardColumns(
+      () => user.id,
+      () => organisation.id,
+      { defaultVisibility: 'private' },
+    ),
     userId: uuid('user_id').notNull(),
     orgRole: text('org_role').$type<OrgRole>().notNull(),
     status: text('status').$type<OrgMembershipStatus>().notNull(),
   },
   (t) => [
-    foreignKey({
-      name: 'org_membership_organisation_id_fk',
-      columns: [t.organisationId],
-      foreignColumns: [organisation.id],
-    }),
     foreignKey({
       name: 'org_membership_user_id_fk',
       columns: [t.userId],

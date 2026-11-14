@@ -8,13 +8,17 @@ import {
 } from 'drizzle-orm/pg-core';
 import { standardColumns, visibilityCheck } from '../columns.js';
 import { project } from './project.js';
+import { organisation } from './organisation.js';
 import { user } from './user.js';
 
 /** A department. `project_id` NULL means an organisation-wide template. */
 export const department = pgTable(
   'department',
   {
-    ...standardColumns(() => user.id),
+    ...standardColumns(
+      () => user.id,
+      () => organisation.id,
+    ),
     projectId: uuid('project_id'),
     key: text('key').notNull(),
     name: text('name').notNull(),
