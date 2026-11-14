@@ -2,7 +2,4 @@
 pnpm-lock.yaml
 
 # Documents that predate this tooling; left as they are.
-docs/
-CLAUDE.md
-README.md
 SECURITY.md
