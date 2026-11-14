@@ -57,6 +57,13 @@
       "when": 1794696692464,
       "tag": "0007_library",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1794697485834,
+      "tag": "0008_sensitive_data",
+      "breakpoints": true
     }
   ]
 }
