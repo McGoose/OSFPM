@@ -1,4 +1,4 @@
-import { sql, type SQL } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import type { BuildExtraConfigColumns } from 'drizzle-orm';
 import {
   check,
@@ -13,6 +13,10 @@ import {
   type PgTableExtraConfigValue,
 } from 'drizzle-orm/pg-core';
 import { newId } from './ids.js';
+import { retentionClass } from './schema/retention-class.js';
+import { sqlList } from './sql-list.js';
+
+export { sqlList };
 
 export const VISIBILITIES = [
   'private',
@@ -20,11 +24,6 @@ export const VISIBILITIES = [
   'shared-with-partners',
 ] as const;
 export type Visibility = (typeof VISIBILITIES)[number];
-
-/** SQL list of allowed values, e.g. `'a', 'b'`, for use in CHECK constraints. */
-export function sqlList(values: readonly string[]): SQL {
-  return sql.raw(values.map((v) => `'${v}'`).join(', '));
-}
 
 export const timestamptz = (name: string) =>
   timestamp(name, { withTimezone: true, mode: 'date' });
@@ -53,8 +52,29 @@ export function baseColumns(userId: UserIdRef) {
     updatedBy: uuid('updated_by').references(userId),
     deletedAt: timestamptz('deleted_at'),
     deletedBy: uuid('deleted_by').references(userId),
-    retentionClass: text('retention_class'),
+    retentionClass: text('retention_class').notNull().default('standard'),
   };
+}
+
+/** Name of the foreign key from a table's `retention_class` to `retention_class.key`. */
+export function retentionClassForeignKeyName(tableName: string): string {
+  return `${tableName}_retention_class_fk`;
+}
+
+/**
+ * The foreign key every table with a `retention_class` column carries.
+ * `tenantTable` adds it to tenant tables; install-level tables built from
+ * `baseColumns` add it themselves.
+ */
+export function retentionClassForeignKey(
+  tableName: string,
+  column: AnyPgColumn,
+) {
+  return foreignKey({
+    name: retentionClassForeignKeyName(tableName),
+    columns: [column],
+    foreignColumns: [retentionClass.key],
+  });
 }
 
 /**
@@ -92,7 +112,9 @@ export function tenantTableNames(): ReadonlySet<string> {
  * Defines a tenant table: one built from `standardColumns`. Adds the foreign
  * key from `organisation_id` to `organisation.id`, named
  * `<table>_organisation_fk`, so the name never depends on generated defaults
- * and stays within PostgreSQL's 63-character limit. It also adds the
+ * and stays within PostgreSQL's 63-character limit. It also adds the foreign
+ * key from `retention_class` to `retention_class.key`, named
+ * `<table>_retention_class_fk`, and the
  * `<table>_visibility_check` CHECK, so tables do not repeat it. Every tenant table goes
  * through this wrapper; use plain `pgTable` only for install-level tables.
  *
@@ -118,6 +140,10 @@ export function tenantTable<
       ],
       foreignColumns: [organisationId()],
     }),
+    retentionClassForeignKey(
+      name,
+      (self as unknown as { retentionClass: AnyPgColumn }).retentionClass,
+    ),
     visibilityCheck(
       name,
       (self as unknown as { visibility: AnyPgColumn }).visibility,

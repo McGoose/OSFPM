@@ -99,6 +99,13 @@
       "when": 1794700327835,
       "tag": "0013_seed_retention_classes",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1794700412248,
+      "tag": "0014_retention_class_foreign_keys",
+      "breakpoints": true
     }
   ]
 }

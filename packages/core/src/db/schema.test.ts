@@ -2,7 +2,11 @@ import { getTableName, is, sql } from 'drizzle-orm';
 import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from './client.js';
-import { organisationForeignKeyName, tenantTableNames } from './columns.js';
+import {
+  organisationForeignKeyName,
+  retentionClassForeignKeyName,
+  tenantTableNames,
+} from './columns.js';
 import { newId } from './ids.js';
 import { migrate } from './migrate.js';
 import * as schemaModule from './schema/index.js';
@@ -50,7 +54,7 @@ const STANDARD_COLUMNS: Record<string, ColumnSpec> = {
   updated_by: { type: 'uuid', nullable: true },
   deleted_at: { type: TIMESTAMPTZ, nullable: true },
   deleted_by: { type: 'uuid', nullable: true },
-  retention_class: { type: 'text', nullable: true },
+  retention_class: { type: 'text', nullable: false },
 };
 
 const USER_OMITTED = ['organisation_id', 'owner_org_id', 'visibility'];
@@ -298,6 +302,58 @@ describe.each(testTargets)('database schema on $name', (target) => {
             (r.conname as string).includes('_organisation_id_organisation_id_'),
           ),
         ).toEqual([]);
+      } finally {
+        await cleanup();
+      }
+    });
+    it('links every retention_class column to retention_class(key) and defaults it to standard', async () => {
+      const { database, cleanup } = await target.create();
+      try {
+        await migrate(database);
+        const withColumn = await rows(
+          database,
+          sql`select c.table_name, c.is_nullable, c.column_default
+              from information_schema.columns c
+              join information_schema.tables t
+                on t.table_schema = c.table_schema
+               and t.table_name = c.table_name
+              where c.table_schema = 'public'
+                and c.column_name = 'retention_class'
+                and t.table_type = 'BASE TABLE'`,
+        );
+        // Every tenant table and `user` carry the column; nothing else does.
+        expect(withColumn.map((r) => r.table_name as string).sort()).toEqual(
+          [...tenantTableNames(), 'user'].sort(),
+        );
+        for (const column of withColumn) {
+          expect(column.is_nullable).toBe('NO');
+          expect(column.column_default).toBe("'standard'::text");
+        }
+        const links = await rows(
+          database,
+          sql`select (select relname from pg_class where oid = conrelid) as table_name,
+                     conname
+              from pg_constraint
+              where contype = 'f' and confrelid = 'retention_class'::regclass
+                and confkey = array[(
+                  select attnum from pg_attribute
+                  where attrelid = confrelid and attname = 'key'
+                )]
+                and conkey = array[(
+                  select attnum from pg_attribute
+                  where attrelid = conrelid and attname = 'retention_class'
+                )]`,
+        );
+        const byTable = (a: Row, b: Row) =>
+          (a.table_name as string) < (b.table_name as string) ? -1 : 1;
+        expect(links.sort(byTable)).toEqual(
+          withColumn
+            .map((r) => ({
+              table_name: r.table_name,
+              conname: retentionClassForeignKeyName(r.table_name as string),
+            }))
+            .sort(byTable),
+        );
       } finally {
         await cleanup();
       }

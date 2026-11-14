@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { check, pgTable, text } from 'drizzle-orm/pg-core';
-import { sqlList } from '../columns.js';
+import { sqlList } from '../sql-list.js';
 
 /** The event a retention period counts from. */
 export const RETENTION_ANCHORS = [
