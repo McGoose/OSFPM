@@ -20,7 +20,7 @@ Please include:
 - The OSFPM version or commit, and how it was deployed (Docker, npm, other)
 - Any logs, screenshots or requests that help
 
-**Never include real personal data** of crew, cast or anyone else in a report. Use the demo production (`node seed.js`) or invented data.
+**Never include real personal data** of crew, cast or anyone else in a report. Use the demo production _The Last Withdrawal_ or invented data.
 
 ---
 
@@ -28,12 +28,12 @@ Please include:
 
 OSFPM is maintained by a small team, so these are honest targets rather than guarantees:
 
-| Step | Target |
-|---|---|
-| We acknowledge your report | Within 7 days |
-| We confirm the issue and its severity | Within 14 days |
+| Step                                                   | Target                                  |
+| ------------------------------------------------------ | --------------------------------------- |
+| We acknowledge your report                             | Within 7 days                           |
+| We confirm the issue and its severity                  | Within 14 days                          |
 | We release a fix for critical and high-severity issues | As fast as possible, aiming for 30 days |
-| We release a fix for other issues | Within 90 days |
+| We release a fix for other issues                      | Within 90 days                          |
 
 We will keep you updated, agree a disclosure date with you, and publish a GitHub Security Advisory when the fix is out. If you would like, we will credit you by name in the advisory and the changelog.
 
@@ -45,10 +45,10 @@ There is no paid bug bounty. OSFPM is free, community software.
 
 OSFPM is pre-1.0. Only the **latest release** and the `main` branch receive security fixes.
 
-| Version | Supported |
-|---|---|
-| Latest release | ✅ |
-| `main` branch | ✅ |
+| Version        | Supported         |
+| -------------- | ----------------- |
+| Latest release | ✅                |
+| `main` branch  | ✅                |
 | Anything older | ❌ Please upgrade |
 
 Once 1.0 ships, this table will list which release lines are supported and for how long.
@@ -95,7 +95,7 @@ If you are unsure whether something is allowed, ask us first.
 OSFPM is self-hosted, so the operator is responsible for the server it runs on. At minimum:
 
 - **Use HTTPS.** Never expose OSFPM over plain HTTP on the internet.
-- **Set a strong, unique `JWT_SECRET`.** Never use an example or default value.
+- **Set strong, unique values for every secret** the installation asks for. Never use an example or default value.
 - **Keep OSFPM updated.** Watch this repository's releases and security advisories.
 - **Back up the database**, keep backups encrypted, and test restoring them.
 - **Limit admin accounts** to the people who need them.

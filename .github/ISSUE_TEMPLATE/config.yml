@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/McGoose/OSFPM/security
+    about: Never report security issues in public issues. Use private vulnerability reporting on the Security tab.
