@@ -64,6 +64,13 @@
       "when": 1794697485834,
       "tag": "0008_sensitive_data",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1794698195945,
+      "tag": "0009_erase_sensitive_values_on_delete",
+      "breakpoints": true
     }
   ]
 }

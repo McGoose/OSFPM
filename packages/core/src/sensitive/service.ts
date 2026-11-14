@@ -306,7 +306,7 @@ export async function readSensitive<C extends SensitiveCategory>(
     action: 'read',
   });
   const row = await findRow(tx, personId, category, { includeDeleted: false });
-  if (!row) return null;
+  if (!row || row.payload === null) return null;
   return { ...metaOf(row), payload: row.payload as SensitivePayload<C> };
 }
 
@@ -387,16 +387,22 @@ export async function writeSensitive<C extends SensitiveCategory>(
         wc,
       );
     }
-    let version = existing.version;
     if (existing.deletedAt !== null) {
-      await restoreRecord(inner, personSensitive, existing.id, version, wc);
-      version += 1;
+      // One write: a deleted row has no payload, so restore and refill together.
+      return restoreRecord(
+        inner,
+        personSensitive,
+        existing.id,
+        existing.version,
+        wc,
+        fields,
+      );
     }
     return updateRecord(
       inner,
       personSensitive,
       existing.id,
-      version,
+      existing.version,
       fields,
       wc,
     );
@@ -407,7 +413,7 @@ export async function writeSensitive<C extends SensitiveCategory>(
 }
 
 /**
- * Soft-deletes one category of a person's sensitive data, under the same rule
+ * Deletes one category of a person's sensitive data (soft delete that also erases the payload), under the same rule
  * as `writeSensitive`. Throws `RecordNotFoundError` when there is nothing to
  * delete. A staff delete notifies the person.
  */
@@ -434,6 +440,7 @@ export async function deleteSensitive(
     existing.id,
     existing.version,
     writeContext(ctx),
+    { payload: null }, // erased in the same write; the table CHECK requires it
   );
   if (via === 'staff') await notifyStaffChange(ctx, personId, category);
 }

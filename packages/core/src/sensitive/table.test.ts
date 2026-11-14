@@ -1,4 +1,4 @@
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from '../db/client.js';
 import { organisationForeignKeyName } from '../db/columns.js';
@@ -132,7 +132,7 @@ describe.each(testTargets)('person_sensitive on $name', (target) => {
     }
     expect(columns.get('visibility')!.column_default).toBe(`'private'::text`);
     const nullable = (name: string) => columns.get(name)!.is_nullable === 'YES';
-    expect(nullable('payload')).toBe(false);
+    expect(nullable('payload')).toBe(true); // only deleted rows, by CHECK
     expect(nullable('key_id')).toBe(true);
     expect(nullable('consent_recorded_at')).toBe(true);
     expect(nullable('consent_text_version')).toBe(true);
@@ -236,12 +236,35 @@ describe.each(testTargets)('person_sensitive on $name', (target) => {
     );
   });
 
-  it('rejects a null payload', async () => {
+  it('rejects a null payload on a live row', async () => {
     const failure = await failureOf(() =>
       database.db
         .insert(personSensitive)
-        .values(valid(b, { category: 'identity', payload: null as never })),
+        .values(valid(b, { category: 'identity', payload: null })),
     );
-    expect(failure.code).toBe('23502');
+    expect(failure).toEqual(
+      violation(SQLSTATE.checkViolation, 'person_sensitive_payload_check'),
+    );
+  });
+
+  it('allows a null payload only on a deleted row', async () => {
+    await database.db.insert(personSensitive).values(
+      valid(b, {
+        category: 'identity',
+        payload: null,
+        deletedAt: new Date(),
+      }),
+    );
+    const live = await database.db
+      .insert(personSensitive)
+      .values(valid(b, { category: 'medical' }))
+      .returning();
+    const failure = await failureOf(() =>
+      database.db
+        .update(personSensitive)
+        .set({ payload: null })
+        .where(eq(personSensitive.id, live[0]!.id)),
+    );
+    expect(failure.constraint).toBe('person_sensitive_payload_check');
   });
 });

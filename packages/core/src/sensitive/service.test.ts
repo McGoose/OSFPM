@@ -926,6 +926,80 @@ describe.each(testTargets)('sensitive data service on $name', (target) => {
       expect(row?.deleted_at).toBeNull();
     });
 
+    it('erases the values: a deleted row holds a null payload and nothing else sensitive', async () => {
+      const self = await seedUser(database);
+      const personId = await newPerson({ userId: self });
+      const c = ctxFor(self);
+      for (const category of ['identity', 'emergency'] as const) {
+        await writeSensitive(
+          db(),
+          c,
+          personId,
+          category,
+          VALID_PAYLOADS[category],
+          OPTIONS,
+        );
+        await deleteSensitive(db(), c, personId, category);
+      }
+      const { rows } = (await db().execute(
+        sql`select * from person_sensitive where person_id = ${personId}`,
+      )) as { rows: Row[] };
+      expect(rows).toHaveLength(2);
+      for (const row of rows) {
+        expect(row.payload).toBeNull();
+        expect(row.deleted_at).not.toBeNull();
+        expect(row.deleted_by).toBe(self);
+        expect(row.category).toBeTruthy();
+        expectNoValues(row, 'deleted row');
+      }
+      const { rows: events } = await changesOf(personId);
+      const deletes = events.filter((e) => e.action === 'delete');
+      expect(deletes).toHaveLength(2);
+      for (const event of deletes) {
+        expect(event.changed_fields as string[]).toContain('payload');
+        expectNoValues({ b: event.before, a: event.after }, 'delete event');
+      }
+    });
+
+    it('erases the values of a staff delete too, and a later write restores the row with fresh data', async () => {
+      const personId = await newPerson();
+      await writeSensitive(
+        db(),
+        ctxFor(editorAll),
+        personId,
+        'medical',
+        VALID_PAYLOADS.medical,
+        { legalBasis: 'contract' },
+      );
+      await deleteSensitive(db(), ctxFor(editorAll), personId, 'medical');
+      const { rows } = (await db().execute(
+        sql`select payload from person_sensitive where person_id = ${personId}`,
+      )) as { rows: Row[] };
+      expect(rows).toEqual([{ payload: null }]);
+
+      await writeSensitive(
+        db(),
+        ctxFor(editorAll),
+        personId,
+        'medical',
+        { conditions: 'Hay fever' },
+        { legalBasis: 'contract' },
+      );
+      const read = await readSensitive(
+        db(),
+        ctxFor(editorAll),
+        personId,
+        'medical',
+      );
+      expect(read?.payload).toEqual({ conditions: 'Hay fever' });
+      const { rows: events } = await changesOf(personId);
+      expect(events.map((e) => e.action)).toEqual([
+        'create',
+        'delete',
+        'restore',
+      ]);
+    });
+
     it('is allowed with the edit permission and refused with only the read permission', async () => {
       const personId = await newPerson();
       await writeSensitive(

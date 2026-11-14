@@ -48,6 +48,8 @@ export type PersonSensitiveEnteredByKind =
 /**
  * Sensitive personal data of one person, one row per category. The `payload`
  * is plain JSON for now; `key_id` is reserved for later end-to-end encryption.
+ * Deleting a row erases its payload in the same write; category, who and when
+ * stay for the audit trail until a retention job purges the row.
  * Only the sensitive data service reads or writes this table.
  */
 export const personSensitive = tenantTable(
@@ -57,7 +59,8 @@ export const personSensitive = tenantTable(
     ...standardColumns(() => user.id, { defaultVisibility: 'private' }),
     personId: uuid('person_id').notNull(),
     category: text('category').$type<PersonSensitiveCategory>().notNull(),
-    payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
+    /** NULL only on a deleted row: deleting erases the values (see the CHECK). */
+    payload: jsonb('payload').$type<Record<string, unknown>>(),
     keyId: text('key_id'),
     legalBasis: text('legal_basis')
       .$type<PersonSensitiveLegalBasis>()
@@ -84,6 +87,10 @@ export const personSensitive = tenantTable(
     unique('person_sensitive_person_category_unique').on(
       t.personId,
       t.category,
+    ),
+    check(
+      'person_sensitive_payload_check',
+      sql`${t.payload} is not null or ${t.deletedAt} is not null`,
     ),
     check(
       'person_sensitive_category_check',

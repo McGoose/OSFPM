@@ -1,0 +1,2 @@
+ALTER TABLE "person_sensitive" ALTER COLUMN "payload" DROP NOT NULL;--> statement-breakpoint
+ALTER TABLE "person_sensitive" ADD CONSTRAINT "person_sensitive_payload_check" CHECK ("person_sensitive"."payload" is not null or "person_sensitive"."deleted_at" is not null);
