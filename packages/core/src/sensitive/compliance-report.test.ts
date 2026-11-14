@@ -14,6 +14,7 @@ import {
   type SeedOrganisation,
 } from '../access/test-fixtures.js';
 import type { Database } from '../db/client.js';
+import type { ProjectPersonStatus } from '../db/schema/index.js';
 import { newId } from '../db/ids.js';
 import {
   auditEvent,
@@ -47,6 +48,7 @@ describe.each(testTargets)('compliance report on $name', (target) => {
   let s: SeedOrganisation;
   let projectB: string;
   let soundId: string;
+  let artId: string;
   let reporter: string;
   let readerOnly: string;
   let reporterOnB: string;
@@ -65,6 +67,7 @@ describe.each(testTargets)('compliance report on $name', (target) => {
       deletedRecord?: boolean;
       projectId?: string;
       engagements?: number;
+      status?: ProjectPersonStatus;
     } = {},
   ) {
     const self = await seedUser(database);
@@ -84,6 +87,7 @@ describe.each(testTargets)('compliance report on $name', (target) => {
           departmentId: options.departmentId ?? null,
           engagement: i === 0 ? 'crew' : 'cast',
           characterName: i === 0 ? null : `Double ${i}`,
+          ...(options.status ? { status: options.status } : {}),
         },
       );
     }
@@ -111,6 +115,7 @@ describe.each(testTargets)('compliance report on $name', (target) => {
     s = await seedOrganisation(database);
     projectB = await seedProject(database, s.organisationId);
     soundId = await seedDepartment(database, s.organisationId, 'sound');
+    artId = await seedDepartment(database, s.organisationId, 'art');
     await ensurePermissions(
       database,
       SENSITIVE_PERMISSIONS.map((p) => p.key),
@@ -175,6 +180,24 @@ describe.each(testTargets)('compliance report on $name', (target) => {
         compliance: { citizenships: ['GB'] },
         deletedRecord: true,
       });
+      // Released people worked on the production: they count.
+      await addPerson('Jules Released', {
+        departmentId: soundId,
+        status: 'released',
+        compliance: { taxResidency: 'FR', citizenships: ['FR'] },
+      });
+      // Proposed people have not joined yet: they do not count, and a
+      // department with only proposed people does not appear.
+      await addPerson('Ivy Proposed', {
+        departmentId: s.departmentId,
+        status: 'proposed',
+        compliance: { taxResidency: 'GB', citizenships: ['GB'] },
+      });
+      await addPerson('Lee Proposed', {
+        departmentId: artId,
+        status: 'proposed',
+        compliance: { taxResidency: 'GB', citizenships: ['GB'] },
+      });
       // Engaged on another project only: must not appear.
       await addPerson('Harper Elsewhere', {
         projectId: projectB,
@@ -196,9 +219,9 @@ describe.each(testTargets)('compliance report on $name', (target) => {
       });
       expect(byName.sound).toMatchObject({
         departmentId: soundId,
-        engagedPeople: 2,
-        taxResidency: { FR: 1, unknown: 1 },
-        citizenship: { FR: 1, unknown: 1 },
+        engagedPeople: 3,
+        taxResidency: { FR: 2, unknown: 1 },
+        citizenship: { FR: 2, unknown: 1 },
       });
       expect(byName.none).toMatchObject({
         departmentId: null,

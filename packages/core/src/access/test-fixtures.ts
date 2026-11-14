@@ -14,6 +14,7 @@ import {
   user,
   type ProjectMembershipStatus,
   type ProjectPersonEngagement,
+  type ProjectPersonStatus,
 } from '../db/schema/index.js';
 
 /**
@@ -155,6 +156,7 @@ export async function engagePerson(
     engagement?: ProjectPersonEngagement;
     departmentId?: string | null;
     characterName?: string | null;
+    status?: ProjectPersonStatus;
   } = {},
 ): Promise<string> {
   const [row] = await database.db
@@ -166,7 +168,7 @@ export async function engagePerson(
       engagement: options.engagement ?? 'crew',
       departmentId: options.departmentId ?? null,
       characterName: options.characterName ?? null,
-      status: 'confirmed',
+      status: options.status ?? 'confirmed',
     })
     .returning();
   return row!.id;

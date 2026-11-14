@@ -474,7 +474,7 @@ export type ComplianceDepartmentReport = {
   /** `null` for people engaged with no department. */
   readonly departmentId: string | null;
   readonly departmentName: string | null;
-  /** People engaged on the project in this department, each counted once. */
+  /** Confirmed or released people in this department, each counted once. */
   readonly engagedPeople: number;
   /** One count per tax-residency country, plus `unknown`. */
   readonly taxResidency: ComplianceCounts;
@@ -493,6 +493,9 @@ export type ComplianceReport = {
 
 const UNKNOWN = 'unknown';
 
+/** Engagement statuses that count as having worked on the production. */
+const ENGAGED_STATUSES = ['confirmed', 'released'] as const;
+
 function increment(counts: ComplianceCounts, key: string) {
   counts[key] = (counts[key] ?? 0) + 1;
 }
@@ -500,8 +503,9 @@ function increment(counts: ComplianceCounts, key: string) {
 /**
  * Counts, per department, how many engaged people have each tax-residency and
  * citizenship country on record, and how many have none. The result holds
- * counts only: no person ids, no names, no payloads. People engaged on the
- * project at all count, whatever their engagement status.
+ * counts only: no person ids, no names, no payloads. Only people whose
+ * engagement is `confirmed` or `released` count, that is, people who worked on
+ * the production; `proposed` ones do not.
  *
  * Needs `compliance:report` on the project. A denial is audited as
  * `sensitive.denied` and throws `ComplianceReportDeniedError`; an allowed
@@ -567,6 +571,7 @@ export async function complianceReport(
       and(
         eq(projectPerson.organisationId, found.organisationId),
         eq(projectPerson.projectId, projectId),
+        inArray(projectPerson.status, [...ENGAGED_STATUSES]),
         isNull(projectPerson.deletedAt),
       ),
     );
