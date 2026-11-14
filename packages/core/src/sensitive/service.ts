@@ -1,8 +1,10 @@
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { hasProjectPermission } from '../access/project-permission.js';
 import {
+  department,
   person,
   personSensitive,
+  project,
   projectPerson,
   type PersonSensitiveLegalBasis,
 } from '../db/schema/index.js';
@@ -16,7 +18,11 @@ import {
   type Tx,
   type WriteContext,
 } from '../db/write.js';
-import { editPermissionKey, readPermissionKey } from './permissions.js';
+import {
+  COMPLIANCE_REPORT_PERMISSION,
+  editPermissionKey,
+  readPermissionKey,
+} from './permissions.js';
 import {
   isSensitiveCategory,
   payloadSchemas,
@@ -444,4 +450,202 @@ function notifyStaffChange(
     category,
     changedByUserId: ctx.userId,
   });
+}
+
+/** The caller may not see the compliance report. Carries no values. */
+export class ComplianceReportDeniedError extends Error {
+  constructor() {
+    super('Access to the compliance report denied');
+    this.name = 'ComplianceReportDeniedError';
+  }
+}
+
+/** Country code (or `unknown`) to a number of people. */
+export type ComplianceCounts = Record<string, number>;
+
+export type ComplianceDepartmentReport = {
+  /** `null` for people engaged with no department. */
+  readonly departmentId: string | null;
+  readonly departmentName: string | null;
+  /** People engaged on the project in this department, each counted once. */
+  readonly engagedPeople: number;
+  /** One count per tax-residency country, plus `unknown`. */
+  readonly taxResidency: ComplianceCounts;
+  /**
+   * One count per citizenship country, plus `unknown` for people with none on
+   * record. A person with two citizenships counts under both, so these counts
+   * can add up to more than `engagedPeople`.
+   */
+  readonly citizenship: ComplianceCounts;
+};
+
+export type ComplianceReport = {
+  readonly projectId: string;
+  readonly departments: readonly ComplianceDepartmentReport[];
+};
+
+const UNKNOWN = 'unknown';
+
+function increment(counts: ComplianceCounts, key: string) {
+  counts[key] = (counts[key] ?? 0) + 1;
+}
+
+/**
+ * Counts, per department, how many engaged people have each tax-residency and
+ * citizenship country on record, and how many have none. The result holds
+ * counts only: no person ids, no names, no payloads. People engaged on the
+ * project at all count, whatever their engagement status.
+ *
+ * Needs `compliance:report` on the project. A denial is audited as
+ * `sensitive.denied` and throws `ComplianceReportDeniedError`; an allowed
+ * report writes one `compliance.report` audit event.
+ */
+export async function complianceReport(
+  tx: Tx,
+  ctx: SensitiveContext,
+  projectId: string,
+): Promise<ComplianceReport> {
+  const [found] = await tx
+    .select({ organisationId: project.organisationId })
+    .from(project)
+    .where(and(eq(project.id, projectId), isNull(project.deletedAt)))
+    .limit(1);
+  const allowed =
+    found !== undefined &&
+    (await hasProjectPermission(
+      tx,
+      ctx.userId,
+      projectId,
+      COMPLIANCE_REPORT_PERMISSION,
+    ));
+  const audit = {
+    actor: { type: 'user', id: ctx.userId } as const,
+    organisationId: found?.organisationId ?? null,
+    projectId: found ? projectId : null,
+    targetType: 'project',
+    targetId: projectId,
+    details: { report: 'compliance' },
+    requestId: ctx.requestId ?? null,
+    occurredAt: ctx.clock(),
+  };
+  if (!found || !allowed) {
+    await recordAudit(tx, {
+      ...audit,
+      category: 'sensitive.denied',
+      action: 'report',
+    });
+    throw new ComplianceReportDeniedError();
+  }
+  await recordAudit(tx, {
+    ...audit,
+    category: 'compliance.report',
+    action: 'read',
+  });
+
+  const engaged = await tx
+    .selectDistinct({
+      personId: projectPerson.personId,
+      departmentId: projectPerson.departmentId,
+    })
+    .from(projectPerson)
+    .innerJoin(
+      person,
+      and(
+        eq(person.organisationId, projectPerson.organisationId),
+        eq(person.id, projectPerson.personId),
+        isNull(person.deletedAt),
+      ),
+    )
+    .where(
+      and(
+        eq(projectPerson.organisationId, found.organisationId),
+        eq(projectPerson.projectId, projectId),
+        isNull(projectPerson.deletedAt),
+      ),
+    );
+  if (engaged.length === 0) return { projectId, departments: [] };
+
+  const records = await tx
+    .select({
+      personId: personSensitive.personId,
+      payload: personSensitive.payload,
+    })
+    .from(personSensitive)
+    .where(
+      and(
+        eq(personSensitive.organisationId, found.organisationId),
+        eq(personSensitive.category, 'compliance'),
+        isNull(personSensitive.deletedAt),
+        inArray(personSensitive.personId, [
+          ...new Set(engaged.map((e) => e.personId)),
+        ]),
+      ),
+    );
+  const onRecord = new Map<
+    string,
+    { residency: string | null; citizenships: Set<string> }
+  >();
+  for (const record of records) {
+    const parsed = payloadSchemas.compliance.safeParse(record.payload);
+    if (!parsed.success) continue;
+    onRecord.set(record.personId, {
+      residency: parsed.data.taxResidency ?? null,
+      citizenships: new Set(parsed.data.citizenships),
+    });
+  }
+
+  const groups = new Map<string | null, Set<string>>();
+  for (const { personId, departmentId } of engaged) {
+    const people = groups.get(departmentId) ?? new Set<string>();
+    people.add(personId);
+    groups.set(departmentId, people);
+  }
+  const departmentIds = [...groups.keys()].filter(
+    (id): id is string => id !== null,
+  );
+  const named =
+    departmentIds.length === 0
+      ? []
+      : await tx
+          .select({ id: department.id, name: department.name })
+          .from(department)
+          .where(
+            and(
+              eq(department.organisationId, found.organisationId),
+              inArray(department.id, departmentIds),
+            ),
+          );
+  const nameOf = new Map(named.map((d) => [d.id, d.name]));
+
+  const departments: ComplianceDepartmentReport[] = [...groups].map(
+    ([departmentId, people]) => {
+      const taxResidency: ComplianceCounts = {};
+      const citizenship: ComplianceCounts = {};
+      for (const personId of people) {
+        const info = onRecord.get(personId);
+        increment(taxResidency, info?.residency ?? UNKNOWN);
+        if (!info || info.citizenships.size === 0) {
+          increment(citizenship, UNKNOWN);
+        } else {
+          for (const country of info.citizenships)
+            increment(citizenship, country);
+        }
+      }
+      return {
+        departmentId,
+        departmentName:
+          departmentId === null ? null : (nameOf.get(departmentId) ?? null),
+        engagedPeople: people.size,
+        taxResidency,
+        citizenship,
+      };
+    },
+  );
+  departments.sort((a, b) => {
+    if ((a.departmentId === null) !== (b.departmentId === null)) {
+      return a.departmentId === null ? 1 : -1;
+    }
+    return (a.departmentName ?? '').localeCompare(b.departmentName ?? '');
+  });
+  return { projectId, departments };
 }
