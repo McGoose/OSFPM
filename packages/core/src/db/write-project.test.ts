@@ -78,6 +78,30 @@ describe.each(testTargets)(
       return id;
     }
 
+    /** Makes every insert into `unit` fail, to test what is left behind. */
+    async function refuseUnits() {
+      await database.db.execute(
+        sql.raw(`create function osfpm_test_refuse_unit() returns trigger
+                 language plpgsql as $$
+                 begin
+                   raise exception 'unit refused' using errcode = 'P0001';
+                 end $$`),
+      );
+      await database.db.execute(
+        sql.raw(`create trigger osfpm_test_refuse_unit
+                 before insert on unit
+                 for each row execute function osfpm_test_refuse_unit()`),
+      );
+    }
+    async function allowUnits() {
+      await database.db.execute(
+        sql.raw('drop trigger osfpm_test_refuse_unit on unit'),
+      );
+      await database.db.execute(
+        sql.raw('drop function osfpm_test_refuse_unit()'),
+      );
+    }
+
     const eventsOf = (organisationId: string, projectId: string) =>
       database.db
         .select()
@@ -126,28 +150,8 @@ describe.each(testTargets)(
     });
 
     describe('when the main unit cannot be created', () => {
-      beforeAll(async () => {
-        await database.db.execute(
-          sql.raw(`create function osfpm_test_refuse_unit() returns trigger
-                   language plpgsql as $$
-                   begin
-                     raise exception 'unit refused' using errcode = 'P0001';
-                   end $$`),
-        );
-        await database.db.execute(
-          sql.raw(`create trigger osfpm_test_refuse_unit
-                   before insert on unit
-                   for each row execute function osfpm_test_refuse_unit()`),
-        );
-      });
-      afterAll(async () => {
-        await database.db.execute(
-          sql.raw('drop trigger osfpm_test_refuse_unit on unit'),
-        );
-        await database.db.execute(
-          sql.raw('drop function osfpm_test_refuse_unit()'),
-        );
-      });
+      beforeAll(refuseUnits);
+      afterAll(allowUnits);
 
       it('rolls back the project row, its change_seq row and its events', async () => {
         const organisationId = await newOrganisation();
@@ -158,6 +162,50 @@ describe.each(testTargets)(
         );
         // The unit insert is what failed, so it is not a project-level refusal.
         expect(failure.code).toBe('P0001');
+
+        expect(
+          await database.db
+            .select()
+            .from(project)
+            .where(eq(project.organisationId, organisationId)),
+        ).toEqual([]);
+        expect(
+          await database.db
+            .select()
+            .from(unit)
+            .where(eq(unit.organisationId, organisationId)),
+        ).toEqual([]);
+        expect(
+          await database.db
+            .select()
+            .from(changeSeq)
+            .where(eq(changeSeq.organisationId, organisationId)),
+        ).toEqual([]);
+        expect(
+          await database.db
+            .select()
+            .from(changeEvent)
+            .where(eq(changeEvent.organisationId, organisationId)),
+        ).toEqual([]);
+      });
+    });
+
+    describe('when the main unit cannot be created and the caller commits', () => {
+      beforeAll(refuseUnits);
+      afterAll(allowUnits);
+
+      it('leaves no project, unit, change_seq row or change event', async () => {
+        const organisationId = await newOrganisation();
+        let caught: unknown;
+        await database.db.transaction(async (tx) => {
+          try {
+            await createProject(tx, ctx(), projectValues(organisationId));
+          } catch (error) {
+            caught = error;
+          }
+          // The caller carries on and commits.
+        });
+        expect(caught).toMatchObject({ code: 'P0001' });
 
         expect(
           await database.db
