@@ -37,7 +37,7 @@ import {
  *
  * Access: the person themselves (`person.user_id`), or a user holding
  * `sensitive:read:<category>` / `sensitive:edit:<category>` on a project where
- * the person has a `project_person` row. Org owners and admins get nothing
+ * the person has a confirmed or released `project_person` engagement. Org owners and admins get nothing
  * automatically.
  *
  * Audit: every allowed read writes one `sensitive.read` event and every denial
@@ -144,6 +144,10 @@ const RETENTION_CLASS: Record<SensitiveCategory, string> = {
   compliance: 'financial-record',
 };
 
+/** Engagement statuses that count as having worked on the production. They are what grants access
+ * to a person's sensitive data and what the compliance report counts. */
+const ENGAGED_STATUSES = ['confirmed', 'released'] as const;
+
 type PersonRow = typeof person.$inferSelect;
 
 function assertCategory(
@@ -224,6 +228,7 @@ async function holdsOnSharedProject(
       and(
         eq(projectPerson.organisationId, subject.organisationId),
         eq(projectPerson.personId, subject.id),
+        inArray(projectPerson.status, [...ENGAGED_STATUSES]),
         isNull(projectPerson.deletedAt),
       ),
     );
@@ -492,9 +497,6 @@ export type ComplianceReport = {
 };
 
 const UNKNOWN = 'unknown';
-
-/** Engagement statuses that count as having worked on the production. */
-const ENGAGED_STATUSES = ['confirmed', 'released'] as const;
 
 function increment(counts: ComplianceCounts, key: string) {
   counts[key] = (counts[key] ?? 0) + 1;

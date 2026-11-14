@@ -19,6 +19,7 @@ import {
   auditEvent,
   orgMembership,
   projectPerson,
+  type ProjectPersonStatus,
 } from '../db/schema/index.js';
 import { createMigratedDatabase, testTargets } from '../db/test-support.js';
 import { RecordNotFoundError } from '../db/write.js';
@@ -387,6 +388,116 @@ describe.each(testTargets)('sensitive data service on $name', (target) => {
       await expect(
         readSensitive(db(), ctxFor(readerDietary), personId, 'dietary'),
       ).rejects.toBeInstanceOf(SensitiveAccessDeniedError);
+    });
+
+    describe('engagement status', () => {
+      /** A person with dietary data, linked to a user, engaged only as given. */
+      async function personWith(
+        engagements: { projectId: string; status: ProjectPersonStatus }[],
+      ) {
+        const self = await seedUser(database);
+        const personId = await newPerson({ userId: self, engaged: false });
+        for (const { projectId, status } of engagements) {
+          await engagePerson(database, s.organisationId, projectId, personId, {
+            status,
+          });
+        }
+        await writeSensitive(
+          db(),
+          ctxFor(self),
+          personId,
+          'dietary',
+          VALID_PAYLOADS.dietary,
+          OPTIONS,
+        );
+        return { self, personId };
+      }
+
+      it.each(['confirmed', 'released'] as const)(
+        'a %s engagement gives access',
+        async (status) => {
+          const { personId } = await personWith([
+            { projectId: s.projectId, status },
+          ]);
+          const read = await readSensitive(
+            db(),
+            ctxFor(readerDietary),
+            personId,
+            'dietary',
+          );
+          expect(read?.payload).toEqual(VALID_PAYLOADS.dietary);
+          await writeSensitive(
+            db(),
+            ctxFor(editorDietary),
+            personId,
+            'dietary',
+            { restrictions: [], allergies: [] },
+            { legalBasis: 'contract' },
+          );
+        },
+      );
+
+      it('a proposed engagement gives no read, write or delete access', async () => {
+        const { personId } = await personWith([
+          { projectId: s.projectId, status: 'proposed' },
+        ]);
+        await expect(
+          readSensitive(db(), ctxFor(readerDietary), personId, 'dietary'),
+        ).rejects.toBeInstanceOf(SensitiveAccessDeniedError);
+        await expect(
+          writeSensitive(
+            db(),
+            ctxFor(editorDietary),
+            personId,
+            'dietary',
+            VALID_PAYLOADS.dietary,
+            { legalBasis: 'contract' },
+          ),
+        ).rejects.toBeInstanceOf(SensitiveAccessDeniedError);
+        await expect(
+          deleteSensitive(db(), ctxFor(editorDietary), personId, 'dietary'),
+        ).rejects.toBeInstanceOf(SensitiveAccessDeniedError);
+        expect(await auditOf(personId, 'sensitive.denied')).toHaveLength(3);
+      });
+
+      it('only the project with a confirmed engagement gives access', async () => {
+        const { personId } = await personWith([
+          { projectId: s.projectId, status: 'proposed' },
+          { projectId: projectB, status: 'confirmed' },
+        ]);
+        await expect(
+          readSensitive(db(), ctxFor(readerDietary), personId, 'dietary'),
+        ).rejects.toBeInstanceOf(SensitiveAccessDeniedError);
+        const read = await readSensitive(
+          db(),
+          ctxFor(readerOnB),
+          personId,
+          'dietary',
+        );
+        expect(read?.payload).toEqual(VALID_PAYLOADS.dietary);
+      });
+
+      it('leaves the person’s own access unaffected by a proposed engagement', async () => {
+        const { self, personId } = await personWith([
+          { projectId: s.projectId, status: 'proposed' },
+        ]);
+        const read = await readSensitive(
+          db(),
+          ctxFor(self),
+          personId,
+          'dietary',
+        );
+        expect(read?.payload).toEqual(VALID_PAYLOADS.dietary);
+        await writeSensitive(
+          db(),
+          ctxFor(self),
+          personId,
+          'dietary',
+          { restrictions: ['vegan'], allergies: [] },
+          OPTIONS,
+        );
+        await deleteSensitive(db(), ctxFor(self), personId, 'dietary');
+      });
     });
 
     it('counts a permission limited to a department', async () => {
