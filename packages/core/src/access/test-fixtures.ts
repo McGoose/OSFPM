@@ -1,0 +1,244 @@
+import type { Database } from '../db/client.js';
+import { newId } from '../db/ids.js';
+import {
+  department,
+  organisation,
+  permission,
+  person,
+  project,
+  projectMembership,
+  projectMembershipRole,
+  projectPerson,
+  role,
+  rolePermission,
+  user,
+  type ProjectMembershipStatus,
+  type ProjectPersonEngagement,
+} from '../db/schema/index.js';
+
+/**
+ * Seed helpers for tests. They insert straight into the tables, as the other
+ * schema tests do. People and users here are invented, from the demo
+ * production The Last Withdrawal.
+ */
+
+export const ORIGIN = newId();
+
+export const base = (organisationId: string) => ({
+  organisationId,
+  ownerOrgId: organisationId,
+  originServer: ORIGIN,
+});
+
+let counter = 0;
+const next = () => (counter += 1);
+
+export type SeedOrganisation = {
+  organisationId: string;
+  projectId: string;
+  departmentId: string;
+};
+
+/** An organisation with one project ("The Last Withdrawal") and one department. */
+export async function seedOrganisation(
+  database: Database,
+): Promise<SeedOrganisation> {
+  const n = next();
+  const organisationId = newId();
+  await database.db.insert(organisation).values({
+    id: organisationId,
+    organisationId,
+    ownerOrgId: organisationId,
+    originServer: ORIGIN,
+    slug: `fixture-org-${n}`,
+    name: 'Demo Pictures',
+    country: 'GB',
+    defaultLocale: 'en-GB',
+    defaultTimezone: 'Europe/London',
+    baseCurrency: 'GBP',
+    status: 'active',
+  });
+  const [p] = await database.db
+    .insert(project)
+    .values({
+      ...base(organisationId),
+      code: `TLW${n}`,
+      title: 'The Last Withdrawal',
+      format: 'feature',
+      status: 'development',
+      timezone: 'Europe/London',
+      locale: 'en-GB',
+      currency: 'GBP',
+    })
+    .returning();
+  const [d] = await database.db
+    .insert(department)
+    .values({ ...base(organisationId), key: 'camera', name: 'Camera' })
+    .returning();
+  return { organisationId, projectId: p!.id, departmentId: d!.id };
+}
+
+/** Another project in the same organisation. */
+export async function seedProject(
+  database: Database,
+  organisationId: string,
+): Promise<string> {
+  const n = next();
+  const [p] = await database.db
+    .insert(project)
+    .values({
+      ...base(organisationId),
+      code: `TLW-B${n}`,
+      title: 'The Last Withdrawal: Second Unit',
+      format: 'feature',
+      status: 'development',
+      timezone: 'Europe/London',
+      locale: 'en-GB',
+      currency: 'GBP',
+    })
+    .returning();
+  return p!.id;
+}
+
+export async function seedDepartment(
+  database: Database,
+  organisationId: string,
+  key: string,
+): Promise<string> {
+  const [d] = await database.db
+    .insert(department)
+    .values({ ...base(organisationId), key, name: key })
+    .returning();
+  return d!.id;
+}
+
+export async function seedUser(database: Database): Promise<string> {
+  const n = next();
+  const [u] = await database.db
+    .insert(user)
+    .values({
+      originServer: ORIGIN,
+      email: `fixture.user${n}@example.test`,
+      displayName: `Fixture User ${n}`,
+      locale: 'en-GB',
+      timezone: 'Europe/London',
+      status: 'active',
+    })
+    .returning();
+  return u!.id;
+}
+
+/** A library person, optionally linked to a user account. */
+export async function seedPerson(
+  database: Database,
+  organisationId: string,
+  options: { userId?: string; displayName?: string } = {},
+): Promise<string> {
+  const [per] = await database.db
+    .insert(person)
+    .values({
+      ...base(organisationId),
+      displayName: options.displayName ?? 'Alex Demo',
+      userId: options.userId ?? null,
+    })
+    .returning();
+  return per!.id;
+}
+
+/** Engages `personId` on `projectId`. */
+export async function engagePerson(
+  database: Database,
+  organisationId: string,
+  projectId: string,
+  personId: string,
+  options: {
+    engagement?: ProjectPersonEngagement;
+    departmentId?: string | null;
+    characterName?: string | null;
+  } = {},
+): Promise<string> {
+  const [row] = await database.db
+    .insert(projectPerson)
+    .values({
+      ...base(organisationId),
+      projectId,
+      personId,
+      engagement: options.engagement ?? 'crew',
+      departmentId: options.departmentId ?? null,
+      characterName: options.characterName ?? null,
+      status: 'confirmed',
+    })
+    .returning();
+  return row!.id;
+}
+
+/** Makes sure the catalogue has rows for `keys`. Tests that bypass `syncPermissions` use it. */
+export async function ensurePermissions(
+  database: Database,
+  keys: readonly string[],
+): Promise<void> {
+  for (const key of keys) {
+    await database.db
+      .insert(permission)
+      .values({
+        key,
+        module: key.split(':')[0]!,
+        description: key,
+        grantsSensitive: key.startsWith('sensitive:'),
+      })
+      .onConflictDoNothing();
+  }
+}
+
+/**
+ * Gives `userId` a membership on `projectId` holding one new role with the
+ * given permission keys. `departmentId` limits each permission to that
+ * department. The keys must already be in the catalogue.
+ */
+export async function grantOnProject(
+  database: Database,
+  organisationId: string,
+  projectId: string,
+  userId: string,
+  keys: readonly string[],
+  options: {
+    status?: ProjectMembershipStatus;
+    departmentId?: string | null;
+    roleProjectId?: string | null;
+  } = {},
+): Promise<{ membershipId: string; roleId: string }> {
+  const n = next();
+  const [r] = await database.db
+    .insert(role)
+    .values({
+      ...base(organisationId),
+      projectId:
+        options.roleProjectId === undefined ? null : options.roleProjectId,
+      key: `fixture-role-${n}`,
+      name: `Fixture role ${n}`,
+    })
+    .returning();
+  for (const key of keys) {
+    await database.db.insert(rolePermission).values({
+      ...base(organisationId),
+      roleId: r!.id,
+      permissionKey: key,
+      departmentId: options.departmentId ?? null,
+    });
+  }
+  const [m] = await database.db
+    .insert(projectMembership)
+    .values({
+      ...base(organisationId),
+      projectId,
+      userId,
+      status: options.status ?? 'active',
+    })
+    .returning();
+  await database.db.insert(projectMembershipRole).values({
+    ...base(organisationId),
+    membershipId: m!.id,
+    roleId: r!.id,
+  });
+  return { membershipId: m!.id, roleId: r!.id };
+}
