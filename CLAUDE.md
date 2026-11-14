@@ -28,6 +28,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - No legal or financial numbers (rates, caps, thresholds, deadlines) in code: they live in rule packs as data.
 - Modules never read other modules' tables; they use core services and events.
 - Tenant records are written only through the write helper in `src/db/write.ts`.
+- A helper that writes records needs at least one test for each kind of table it serves (organisation-level, project-level, and the project table itself).
 - Only `src/sensitive/service.ts` touches `person_sensitive`; other code calls the service.
 - Access denials are audited before the typed error is thrown; callers catch it inside the transaction and commit, so the audit event survives.
 - Tenant tables are defined with `tenantTable()`, never bare `pgTable`.

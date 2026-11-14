@@ -228,10 +228,12 @@ describe.each(testTargets)('database schema on $name', (target) => {
         );
         expect(tables.map((t) => t.table_name)).toEqual([
           'audit_event',
+          'block',
           'change_event',
           'change_seq',
           'company',
           'department',
+          'episode',
           'installation',
           'location',
           'org_membership',
@@ -249,6 +251,7 @@ describe.each(testTargets)('database schema on $name', (target) => {
           'role',
           'role_permission',
           'setting_value',
+          'unit',
           'user',
         ]);
       } finally {

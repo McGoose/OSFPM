@@ -40,6 +40,12 @@ export const project = tenantTable(
     startDate: date('start_date', { mode: 'string' }),
     endDate: date('end_date', { mode: 'string' }),
     involvesMinors: boolean('involves_minors').notNull().default(false),
+    // Key dates for retention and the compliance calendar. No ordering checks:
+    // real productions break any order, e.g. a festival screening before
+    // final delivery.
+    wrapDate: date('wrap_date', { mode: 'string' }),
+    deliveryDate: date('delivery_date', { mode: 'string' }),
+    firstExploitationDate: date('first_exploitation_date', { mode: 'string' }),
   },
   (t) => [
     unique('project_organisation_code_unique').on(t.organisationId, t.code),
