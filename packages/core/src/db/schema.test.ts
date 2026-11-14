@@ -245,17 +245,20 @@ describe.each(testTargets)('database schema on $name', (target) => {
                 and conkey = array[(
                   select attnum from pg_attribute
                   where attrelid = conrelid and attname = 'organisation_id'
-                )]
-              order by 1`,
+                )]`,
         );
-        const expected = [...tenantTableNames()].sort().map((table) => ({
+        // Sorted here, not in SQL: the database collation orders names with
+        // underscores differently from JavaScript.
+        const byTable = (a: Row, b: Row) =>
+          (a.table_name as string) < (b.table_name as string) ? -1 : 1;
+        const expected = [...tenantTableNames()].map((table) => ({
           table_name: table,
           conname: organisationForeignKeyName(table),
         }));
         const tenant = new Set(tenantTableNames());
-        expect(found.filter((r) => tenant.has(r.table_name as string))).toEqual(
-          [...expected].sort((a, b) => (a.table_name < b.table_name ? -1 : 1)),
-        );
+        expect(
+          found.filter((r) => tenant.has(r.table_name as string)).sort(byTable),
+        ).toEqual(expected.sort(byTable));
         const names = await rows(
           database,
           sql`select conname from pg_constraint
