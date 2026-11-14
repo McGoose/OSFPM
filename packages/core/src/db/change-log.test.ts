@@ -449,6 +449,110 @@ describe.each(testTargets)('change log and write helper on $name', (target) => {
       });
     });
 
+    describe('actor attribution', () => {
+      let owner: string;
+      let approver: string;
+      let bystander: string;
+      beforeAll(async () => {
+        owner = await seedUser(database);
+        approver = await seedUser(database);
+        bystander = await seedUser(database);
+      });
+
+      const tokenId = newId();
+      const draftId = newId();
+      const peerId = newId();
+
+      // [label, actor, onBehalfOfUserId, expected created_by/updated_by/deleted_by]
+      const cases = (): [
+        string,
+        WriteContext['actor'],
+        string | null | undefined,
+        string | null,
+      ][] => [
+        ['user', { type: 'user', id: userId }, bystander, userId],
+        ['token', { type: 'token', id: tokenId }, owner, owner],
+        ['email', { type: 'email', id: draftId }, approver, approver],
+        ['system', { type: 'system', id: null }, bystander, null],
+        ['federation', { type: 'federation', id: peerId }, bystander, null],
+        [
+          'token with no owner given',
+          { type: 'token', id: tokenId },
+          null,
+          null,
+        ],
+        [
+          'email with no approver given',
+          { type: 'email', id: draftId },
+          undefined,
+          null,
+        ],
+      ];
+
+      it.each([
+        'user',
+        'token',
+        'email',
+        'system',
+        'federation',
+        'token with no owner given',
+        'email with no approver given',
+      ])(
+        '%s: fills the user columns as specified and keeps the exact actor on every event',
+        async (label) => {
+          const [, actor, onBehalfOfUserId, expectedUser] = cases().find(
+            ([name]) => name === label,
+          )!;
+          const t = await seedTenant(database);
+          const ctx = contextFor(null, { actor, onBehalfOfUserId });
+
+          const created = await database.db.transaction((tx) =>
+            insertRecord(
+              tx,
+              dummyRecord,
+              dummyValues(t.organisationId, t.projectId),
+              ctx,
+            ),
+          );
+          expect(created.createdBy).toBe(expectedUser);
+          expect(created.updatedBy).toBe(expectedUser);
+          expect(created.deletedBy).toBeNull();
+
+          const updated = await database.db.transaction((tx) =>
+            updateRecord(
+              tx,
+              dummyRecord,
+              created.id,
+              1,
+              { title: 'Revised' },
+              ctx,
+            ),
+          );
+          expect(updated.createdBy).toBe(expectedUser);
+          expect(updated.updatedBy).toBe(expectedUser);
+
+          const deleted = await database.db.transaction((tx) =>
+            softDeleteRecord(tx, dummyRecord, created.id, 2, ctx),
+          );
+          expect(deleted.deletedBy).toBe(expectedUser);
+          expect(deleted.updatedBy).toBe(expectedUser);
+
+          const restored = await database.db.transaction((tx) =>
+            restoreRecord(tx, dummyRecord, created.id, 3, ctx),
+          );
+          expect(restored.deletedBy).toBeNull();
+          expect(restored.updatedBy).toBe(expectedUser);
+
+          const events = await eventsFor(database, created.id);
+          expect(events).toHaveLength(4);
+          for (const event of events) {
+            expect(event.actorType).toBe(actor.type);
+            expect(event.actorId).toBe(actor.id);
+          }
+        },
+      );
+    });
+
     describe('project of child records', () => {
       const PERMISSION_KEY = 'budget:read';
       const OTHER_PERMISSION_KEY = 'budget:write';

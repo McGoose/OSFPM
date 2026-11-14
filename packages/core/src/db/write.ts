@@ -25,7 +25,15 @@ import { sensitiveColumns } from './sensitive.js';
  */
 
 export type WriteContext = {
+  /** Who really made the change. Logged as is on every `change_event`. */
   readonly actor: { readonly type: ActorType; readonly id: string | null };
+  /**
+   * The user a `token` or `email` write is made for: the token's owner, or the
+   * user who approved the email draft. It fills `created_by`, `updated_by` and
+   * `deleted_by`, which reference `user`. Ignored for `user` (the actor is the
+   * user), `system` and `federation` (no user, so those columns stay NULL).
+   */
+  readonly onBehalfOfUserId?: string | null;
   readonly requestId?: string | null;
   /** The server doing the write. */
   readonly originServer: string;
@@ -232,9 +240,24 @@ async function logChange(
   });
 }
 
-/** `created_by` and the like reference `user`, so only user actors fill them. */
-const userId = (ctx: WriteContext) =>
-  ctx.actor.type === 'user' ? ctx.actor.id : null;
+/**
+ * The user for `created_by` and the like, which reference `user`. A `user`
+ * actor is that user; a `token` or `email` actor is covered by whoever it acts
+ * on behalf of; `system` and `federation` have no user. The event keeps the
+ * exact actor either way.
+ */
+function attributedUserId(ctx: WriteContext): string | null {
+  switch (ctx.actor.type) {
+    case 'user':
+      return ctx.actor.id;
+    case 'token':
+    case 'email':
+      return ctx.onBehalfOfUserId ?? null;
+    case 'system':
+    case 'federation':
+      return null;
+  }
+}
 
 async function loadRow(tx: Tx, table: TenantTable, id: string): Promise<Row> {
   const [row] = await tx.select().from(table).where(eq(table.id, id)).limit(1);
@@ -261,8 +284,8 @@ export function insertRecord<T extends TenantTable>(
         version: 1,
         createdAt: now,
         updatedAt: now,
-        createdBy: userId(ctx),
-        updatedBy: userId(ctx),
+        createdBy: attributedUserId(ctx),
+        updatedBy: attributedUserId(ctx),
         deletedAt: null,
         deletedBy: null,
       } as Row;
@@ -331,7 +354,7 @@ function modifyRecord<T extends TenantTable>(
           ...change,
           version: sql`${table.version} + 1`,
           updatedAt: now,
-          updatedBy: userId(ctx),
+          updatedBy: attributedUserId(ctx),
         } as never)
         .where(and(eq(table.id, id), eq(table.version, expectedVersion)))
         .returning()) as Row[];
@@ -396,7 +419,7 @@ export function softDeleteRecord<T extends TenantTable>(
     id,
     expectedVersion,
     'delete',
-    { deletedAt: ctx.clock(), deletedBy: userId(ctx) },
+    { deletedAt: ctx.clock(), deletedBy: attributedUserId(ctx) },
     ctx,
   );
 }
