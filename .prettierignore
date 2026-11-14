@@ -3,5 +3,4 @@ pnpm-lock.yaml
 
 # Documents that predate this tooling; left as they are.
 docs/
-README.md
 SECURITY.md
