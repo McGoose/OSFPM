@@ -1,5 +1,5 @@
 import { boolean, foreignKey, text, unique, uuid } from 'drizzle-orm/pg-core';
-import { standardColumns, tenantTable, visibilityCheck } from '../columns.js';
+import { standardColumns, tenantTable } from '../columns.js';
 import { project } from './project.js';
 import { organisation } from './organisation.js';
 import { user } from './user.js';
@@ -26,6 +26,5 @@ export const role = tenantTable(
       .on(t.organisationId, t.projectId, t.key)
       .nullsNotDistinct(),
     unique('role_organisation_id_id_unique').on(t.organisationId, t.id),
-    visibilityCheck('role', t.visibility),
   ],
 );

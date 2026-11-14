@@ -1,11 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { check, foreignKey, text, unique, uuid } from 'drizzle-orm/pg-core';
-import {
-  sqlList,
-  standardColumns,
-  tenantTable,
-  visibilityCheck,
-} from '../columns.js';
+import { sqlList, standardColumns, tenantTable } from '../columns.js';
 import { organisation } from './organisation.js';
 import { user } from './user.js';
 
@@ -53,6 +48,5 @@ export const orgMembership = tenantTable(
       'org_membership_status_check',
       sql`${t.status} in (${sqlList(ORG_MEMBERSHIP_STATUSES)})`,
     ),
-    visibilityCheck('org_membership', t.visibility),
   ],
 );

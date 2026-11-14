@@ -188,6 +188,20 @@ describe('constraint names in the schema', () => {
     }
   });
 
+  it('give every tenant table one <table>_visibility_check, from tenantTable', () => {
+    const tenant = schemaTables.filter((table) =>
+      tenantTableNames().has(getTableName(table)),
+    );
+    expect(tenant.length).toBeGreaterThanOrEqual(9);
+    for (const table of tenant) {
+      const name = getTableName(table);
+      const checks = getTableConfig(table)
+        .checks.map((c) => c.name)
+        .filter((n) => n.endsWith('_visibility_check'));
+      expect(checks, name).toEqual([`${name}_visibility_check`]);
+    }
+  });
+
   it('define every table with the standard columns through tenantTable', () => {
     const standard = schemaTables
       .filter((table) =>

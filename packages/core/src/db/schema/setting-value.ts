@@ -7,12 +7,7 @@ import {
   unique,
   uuid,
 } from 'drizzle-orm/pg-core';
-import {
-  sqlList,
-  standardColumns,
-  tenantTable,
-  visibilityCheck,
-} from '../columns.js';
+import { sqlList, standardColumns, tenantTable } from '../columns.js';
 import { project } from './project.js';
 import { organisation } from './organisation.js';
 import { user } from './user.js';
@@ -51,6 +46,5 @@ export const settingValue = tenantTable(
       'setting_value_layer_project_check',
       sql`(${t.layer} = 'org' and ${t.projectId} is null) or (${t.layer} = 'project' and ${t.projectId} is not null)`,
     ),
-    visibilityCheck('setting_value', t.visibility),
   ],
 );

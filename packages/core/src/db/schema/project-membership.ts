@@ -7,12 +7,7 @@ import {
   unique,
   uuid,
 } from 'drizzle-orm/pg-core';
-import {
-  sqlList,
-  standardColumns,
-  tenantTable,
-  visibilityCheck,
-} from '../columns.js';
+import { sqlList, standardColumns, tenantTable } from '../columns.js';
 import { project } from './project.js';
 import { organisation } from './organisation.js';
 import { user } from './user.js';
@@ -57,6 +52,5 @@ export const projectMembership = tenantTable(
       'project_membership_status_check',
       sql`${t.status} in (${sqlList(PROJECT_MEMBERSHIP_STATUSES)})`,
     ),
-    visibilityCheck('project_membership', t.visibility),
   ],
 );

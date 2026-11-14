@@ -92,7 +92,8 @@ export function tenantTableNames(): ReadonlySet<string> {
  * Defines a tenant table: one built from `standardColumns`. Adds the foreign
  * key from `organisation_id` to `organisation.id`, named
  * `<table>_organisation_fk`, so the name never depends on generated defaults
- * and stays within PostgreSQL's 63-character limit. Every tenant table goes
+ * and stays within PostgreSQL's 63-character limit. It also adds the
+ * `<table>_visibility_check` CHECK, so tables do not repeat it. Every tenant table goes
  * through this wrapper; use plain `pgTable` only for install-level tables.
  *
  * `organisationId` is lazy so table modules need no import cycle.
@@ -117,6 +118,10 @@ export function tenantTable<
       ],
       foreignColumns: [organisationId()],
     }),
+    visibilityCheck(
+      name,
+      (self as unknown as { visibility: AnyPgColumn }).visibility,
+    ),
     ...(extraConfig?.(self) ?? []),
   ]);
 }
@@ -126,8 +131,8 @@ export function organisationForeignKeyName(tableName: string): string {
   return `${tableName}_organisation_fk`;
 }
 
-/** CHECK constraint for the `visibility` column of a standard table. */
-export function visibilityCheck(tableName: string, visibility: AnyPgColumn) {
+/** CHECK constraint for the `visibility` column; `tenantTable` adds it to every tenant table. */
+function visibilityCheck(tableName: string, visibility: AnyPgColumn) {
   return check(
     `${tableName}_visibility_check`,
     sql`${visibility} in (${sqlList(VISIBILITIES)})`,

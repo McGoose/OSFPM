@@ -1,11 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { boolean, check, date, text, unique } from 'drizzle-orm/pg-core';
-import {
-  sqlList,
-  standardColumns,
-  tenantTable,
-  visibilityCheck,
-} from '../columns.js';
+import { sqlList, standardColumns, tenantTable } from '../columns.js';
 import { registerProjectResolver } from '../project-resolver.js';
 import { organisation } from './organisation.js';
 import { user } from './user.js';
@@ -59,7 +54,6 @@ export const project = tenantTable(
       sql`${t.status} in (${sqlList(PROJECT_STATUSES)})`,
     ),
     check('project_currency_check', sql`${t.currency} ~ '^[A-Z]{3}$'`),
-    visibilityCheck('project', t.visibility),
   ],
 );
 

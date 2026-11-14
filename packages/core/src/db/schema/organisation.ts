@@ -5,12 +5,7 @@ import {
   uniqueIndex,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
-import {
-  sqlList,
-  standardColumns,
-  tenantTable,
-  visibilityCheck,
-} from '../columns.js';
+import { sqlList, standardColumns, tenantTable } from '../columns.js';
 import { user } from './user.js';
 
 export const ORGANISATION_STATUSES = ['active', 'suspended'] as const;
@@ -50,6 +45,5 @@ export const organisation = tenantTable(
       'organisation_status_check',
       sql`${t.status} in (${sqlList(ORGANISATION_STATUSES)})`,
     ),
-    visibilityCheck('organisation', t.visibility),
   ],
 );

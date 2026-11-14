@@ -1,6 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import { foreignKey, text, unique, uuid } from 'drizzle-orm/pg-core';
-import { standardColumns, tenantTable, visibilityCheck } from '../columns.js';
+import { standardColumns, tenantTable } from '../columns.js';
 import { registerProjectResolver } from '../project-resolver.js';
 import { department } from './department.js';
 import { permission } from './permission.js';
@@ -37,7 +37,6 @@ export const rolePermission = tenantTable(
     unique('role_permission_role_permission_department_unique')
       .on(t.roleId, t.permissionKey, t.departmentId)
       .nullsNotDistinct(),
-    visibilityCheck('role_permission', t.visibility),
   ],
 );
 

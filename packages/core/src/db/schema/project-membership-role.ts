@@ -1,6 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import { foreignKey, unique, uuid } from 'drizzle-orm/pg-core';
-import { standardColumns, tenantTable, visibilityCheck } from '../columns.js';
+import { standardColumns, tenantTable } from '../columns.js';
 import { registerProjectResolver } from '../project-resolver.js';
 import { projectMembership } from './project-membership.js';
 import { role } from './role.js';
@@ -34,7 +34,6 @@ export const projectMembershipRole = tenantTable(
       t.membershipId,
       t.roleId,
     ),
-    visibilityCheck('project_membership_role', t.visibility),
   ],
 );
 
