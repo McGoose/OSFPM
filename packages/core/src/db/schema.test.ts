@@ -139,6 +139,9 @@ describe.each(testTargets)('database schema on $name', (target) => {
               where table_schema = 'public' order by table_name`,
         );
         expect(tables.map((t) => t.table_name)).toEqual([
+          'audit_event',
+          'change_event',
+          'change_seq',
           'department',
           'installation',
           'org_membership',
