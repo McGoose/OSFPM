@@ -174,8 +174,6 @@ export async function placeLegalHold(
       {
         ...scope,
         ownerOrgId: values.organisationId,
-        // Holds are confidential legal matters: not shared with the project.
-        visibility: 'private',
         retentionClass: 'standard',
         reason: values.reason,
         placedAt: now,

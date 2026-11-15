@@ -113,6 +113,13 @@
       "when": 1794700548744,
       "tag": "0015_legal_hold",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1794717230338,
+      "tag": "0016_legal_hold_private_by_default",
+      "breakpoints": true
     }
   ]
 }

@@ -13,7 +13,8 @@ import { user } from './user.js';
  *
  * Holds are released, never deleted, so the table keeps its own history and
  * the CHECK `deleted_at IS NULL` refuses soft deletes. Rows use retention
- * class `standard`, the column default.
+ * class `standard` and visibility `private`, the column defaults: holds are
+ * confidential legal matters, not shared with the project.
  *
  * `reason` is free text written by staff. It must not copy sensitive values.
  */
@@ -21,7 +22,7 @@ export const legalHold = tenantTable(
   'legal_hold',
   () => organisation.id,
   {
-    ...standardColumns(() => user.id),
+    ...standardColumns(() => user.id, { defaultVisibility: 'private' }),
     projectId: uuid('project_id'),
     entityType: text('entity_type'),
     entityId: uuid('entity_id'),

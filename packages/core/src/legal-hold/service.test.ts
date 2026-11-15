@@ -163,6 +163,7 @@ describe.each(testTargets)('legal holds on $name', (target) => {
       const rows = await holdRows(organisationId);
       expect(rows).toHaveLength(4);
       expect(rows.every((r) => r.retentionClass === 'standard')).toBe(true);
+      expect(rows.every((r) => r.visibility === 'private')).toBe(true);
     });
 
     it.each([
