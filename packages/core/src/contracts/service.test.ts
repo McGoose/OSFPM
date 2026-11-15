@@ -696,6 +696,48 @@ describe.each(testTargets)('contracts on $name', (target) => {
       expect(await linksIn(w.organisationId)).toEqual([]);
     });
 
+    // The link types sit in a plain object, and every object inherits these
+    // names. They must be refused like any other name that is not a type.
+    it.each(['constructor', '__proto__', 'toString'])(
+      'refuses the inherited property name %s as the type of a link added later',
+      async (entityType) => {
+        const w = await setup();
+        const made = await createContract(
+          db(),
+          at(w.orgManager),
+          organisationContract(w),
+        );
+        const error = await errorOf(
+          addContractLink(db(), at(w.orgManager), made.id, {
+            entityType: entityType as never,
+            entityId: newId(),
+          }),
+        );
+        expect(error).toBeInstanceOf(ContractInputError);
+        expect((error as Error).message).toContain('unknown entity type');
+        expect(await linksIn(w.organisationId)).toEqual([]);
+      },
+    );
+
+    it.each(['constructor', '__proto__', 'toString'])(
+      'refuses a new contract whose link has the inherited property name %s as its type',
+      async (entityType) => {
+        const w = await setup();
+        const error = await errorOf(
+          createContract(
+            db(),
+            at(w.projectManager),
+            projectContract(w, {
+              links: [{ entityType: entityType as never, entityId: newId() }],
+            }),
+          ),
+        );
+        expect(error).toBeInstanceOf(ContractInputError);
+        expect((error as Error).message).toContain('unknown entity type');
+        await expectNothingWritten(w);
+      },
+    );
+
     it('refuses the whole contract when one link of several is refused', async () => {
       const w = await setup();
       const personId = await seedPerson(database, w.organisationId);

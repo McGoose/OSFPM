@@ -333,7 +333,11 @@ async function checkLinkTarget(
   contractScope: PermissionScope,
   link: ContractLinkInput,
 ): Promise<void> {
-  const target = LINK_TARGETS[link.entityType] as LinkTarget | undefined;
+  // Own keys only: an object also answers to the names every object inherits,
+  // such as `constructor`, `__proto__` and `toString`.
+  const target = Object.hasOwn(LINK_TARGETS, link.entityType)
+    ? LINK_TARGETS[link.entityType]
+    : undefined;
   if (!target) {
     throw new ContractInputError('The link has an unknown entity type');
   }

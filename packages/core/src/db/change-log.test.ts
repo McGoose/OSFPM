@@ -1247,6 +1247,45 @@ describe.each(testTargets)('change log and write helper on $name', (target) => {
       expect(await eventsFor(database, created.id)).toHaveLength(1);
     });
 
+    // A column check that walks the prototype chain would let these through,
+    // because every object inherits them. They arrive as own keys, as they do
+    // in a parsed JSON body.
+    it.each(['constructor', 'toString', '__proto__'])(
+      'refuses the inherited property name %s as a column',
+      async (name) => {
+        const t = await seedTenant(database);
+        const ctx = contextFor(userId);
+        const created = await database.db.transaction((tx) =>
+          insertRecord(
+            tx,
+            dummyRecord,
+            dummyValues(t.organisationId, t.projectId),
+            ctx,
+          ),
+        );
+        const patch = JSON.parse(
+          `{"${name}": {"title": "Retitled"}}`,
+        ) as object;
+        expect(Object.keys(patch)).toEqual([name]);
+
+        await expect(
+          database.db.transaction((tx) =>
+            updateRecord(tx, dummyRecord, created.id, 1, patch as never, ctx),
+          ),
+        ).rejects.toThrow(`Unknown column ${name} on dummy_record`);
+
+        const [row] = await rows(
+          database,
+          sql`select title, version from dummy_record where id = ${created.id}`,
+        );
+        expect(row).toEqual({ title: 'Call sheet', version: 1 });
+        expect(await eventsFor(database, created.id)).toHaveLength(1);
+        expect(await seqsFor(database, t.organisationId, t.projectId)).toEqual([
+          1,
+        ]);
+      },
+    );
+
     it('reports only the changed fields on update', async () => {
       const t = await seedTenant(database);
       const ctx = contextFor(userId);
@@ -1284,6 +1323,22 @@ describe.each(testTargets)('change log and write helper on $name', (target) => {
         );
         expect(sensitiveColumns(project).size).toBe(0);
       });
+
+      // Typed callers cannot pass these, but the check is what keeps a wrong
+      // name from being recorded in place of the column that needs redacting.
+      it.each(['constructor', 'toString', '__proto__'])(
+        'rejects the inherited property name %s as a column',
+        (name) => {
+          const probe = tenantTable('sensitive_probe', () => organisation.id, {
+            ...standardColumns(() => user.id),
+            note: text('note'),
+          });
+          expect(() => markSensitive(probe, [name as never])).toThrow(
+            'unknown column',
+          );
+          expect(sensitiveColumns(probe).size).toBe(0);
+        },
+      );
 
       it('never stores a sensitive value in before or after, but keeps the name in changed_fields', async () => {
         const t = await seedTenant(database);

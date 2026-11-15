@@ -482,7 +482,9 @@ function checkedPatch<T extends TenantTable>(
         `${key} cannot be changed on ${getTableName(table)}: delete the record and create a new one`,
       );
     }
-    if (!(key in getTableColumns(table))) {
+    // Own keys only: `in` also finds the names every object inherits, such as
+    // `constructor` and `toString`, and a patch comes from the caller.
+    if (!Object.hasOwn(getTableColumns(table), key)) {
       throw new Error(`Unknown column ${key} on ${getTableName(table)}`);
     }
     change[key] = value;

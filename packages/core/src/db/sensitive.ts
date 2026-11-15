@@ -18,7 +18,8 @@ export function markSensitive<T extends PgTable>(
   const known = getTableColumns(table);
   const names = registry.get(table) ?? new Set<string>();
   for (const key of columns) {
-    const column = known[key];
+    // Own keys only, so `constructor` or `toString` is not taken for a column.
+    const column = Object.hasOwn(known, key) ? known[key] : undefined;
     if (!column) {
       throw new Error(
         `Cannot mark unknown column "${key}" of ${getTableName(table)} as sensitive`,
