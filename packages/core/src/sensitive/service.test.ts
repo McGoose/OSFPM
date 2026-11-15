@@ -956,6 +956,31 @@ describe.each(testTargets)('sensitive data service on $name', (target) => {
       ]);
     });
 
+    it('write nothing and queue no notice when staff save the same data again', async () => {
+      const personId = await newPerson();
+      const staff = ctxFor(editorDietary, new QueueingNotifier());
+      const save = () =>
+        writeSensitive(
+          db(),
+          staff,
+          personId,
+          'dietary',
+          VALID_PAYLOADS.dietary,
+          { legalBasis: 'contract' },
+        );
+      await save();
+      const changesAfterFirst = await changesCount();
+
+      const again = await save();
+
+      // Version 1 is still current: the second save wrote no row.
+      expect(again.version).toBe(1);
+      expect(await changesCount()).toBe(changesAfterFirst);
+      expect(await queuedNotices(personId)).toEqual([
+        { category: 'dietary', changed_by: editorDietary },
+      ]);
+    });
+
     describe('when queueing the notice fails, even if the caller catches the error and commits', () => {
       const failing = () => new QueueingNotifier(true);
 

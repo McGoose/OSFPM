@@ -349,8 +349,8 @@ export async function readSensitive<C extends SensitiveCategory>(
  * throws, the row, its change event and the notice are all rolled back, even
  * when the caller catches the error and commits. Writing over a deleted record
  * restores it. A write that changes no stored field, such as the same staff
- * writing the same payload again, writes nothing (see `updateRecord`) but
- * still queues the notice.
+ * writing the same payload again, writes nothing (see `updateRecord`) and
+ * queues no notice: there is nothing to announce.
  *
  * @throws SensitiveAccessDeniedError (after auditing it) when not allowed.
  * @throws SensitivePayloadInvalidError for a payload that breaks its category
@@ -414,6 +414,7 @@ export async function writeSensitive<C extends SensitiveCategory>(
       includeDeleted: true,
     });
     let row: typeof personSensitive.$inferSelect;
+    let changed = true;
     if (!existing) {
       row = await insertRecord(
         inner,
@@ -446,8 +447,13 @@ export async function writeSensitive<C extends SensitiveCategory>(
         fields,
         wc,
       );
+      // `updateRecord` hands back the stored row untouched, at the same
+      // version, when nothing would change. Then there is nothing to announce.
+      changed = row.version !== existing.version;
     }
-    if (via === 'staff') await queueStaffNotice(inner, ctx, personId, category);
+    if (via === 'staff' && changed) {
+      await queueStaffNotice(inner, ctx, personId, category);
+    }
     return row;
   });
 
