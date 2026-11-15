@@ -45,6 +45,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 
 - Comments explain why, not what: the reason, the rule, the edge case. Don't restate the code.
 - Every exported function, type and table has a short JSDoc: what it does, who may call it, what it throws, and any permission or privacy rule.
+- `src/jsdoc.test.ts` enforces JSDoc on every export.
 - Privacy, permission, retention and legal rules name their source (spec section or decision record).
 - Hand-written SQL in migrations has a comment above each block saying why it exists.
 - Each package and module folder has a short README.md: purpose, main entry points, how to test.
