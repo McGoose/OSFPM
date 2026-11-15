@@ -2,8 +2,10 @@ import { sql } from 'drizzle-orm';
 import { boolean, check, pgTable, text } from 'drizzle-orm/pg-core';
 
 /**
- * Install-level catalogue of permissions, filled by modules at start-up.
- * Not tenant-scoped, so it carries no standard columns.
+ * Install-level catalogue of the permissions modules declare; `syncPermissions`
+ * upserts them. `grants_sensitive` flags a permission that exposes sensitive
+ * data (CLAUDE.md, Privacy rule). Not tenant-scoped, so it carries no standard
+ * columns.
  */
 export const permission = pgTable(
   'permission',

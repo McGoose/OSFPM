@@ -2,6 +2,11 @@ import { sql } from 'drizzle-orm';
 import type { Tx } from '../db/write.js';
 import { permission } from '../db/schema/index.js';
 
+/**
+ * One permission a module declares, as a row of the `permission` catalogue.
+ * Set `grantsSensitive` for any permission that exposes sensitive data
+ * (CLAUDE.md, Privacy rule).
+ */
 export type PermissionDefinition = {
   /** `module:action`, for example `sensitive:read:dietary`. */
   readonly key: string;
@@ -14,7 +19,11 @@ export type PermissionDefinition = {
 /**
  * Upserts catalogue rows: new keys are inserted, known keys get the current
  * module, description and `grants_sensitive`. Running it again changes
- * nothing, and existing role grants stay. Modules call it at start-up.
+ * nothing, and existing role grants stay. Modules are meant to call it at
+ * start-up; nothing does yet, so tests that need keys use `ensurePermissions`.
+ * Checks no permission: only trusted start-up code calls it.
+ *
+ * @throws The database's own error when a key breaks the key-format CHECK.
  */
 export async function syncPermissions(
   tx: Tx,

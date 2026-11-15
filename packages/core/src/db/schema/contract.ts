@@ -15,6 +15,10 @@ import { organisation } from './organisation.js';
 import { project } from './project.js';
 import { user } from './user.js';
 
+/**
+ * Allowed values of `contract.kind`. The CHECK is built from this list, so a
+ * new value needs a new migration.
+ */
 export const CONTRACT_KINDS = [
   'deal-memo',
   'crew-contract',
@@ -31,8 +35,13 @@ export const CONTRACT_KINDS = [
   'music-licence',
   'other',
 ] as const;
+/** One value of `CONTRACT_KINDS`. */
 export type ContractKind = (typeof CONTRACT_KINDS)[number];
 
+/**
+ * Allowed values of `contract.status`. The CHECK is built from this list, so a
+ * new value needs a new migration.
+ */
 export const CONTRACT_STATUSES = [
   'draft',
   'negotiating',
@@ -41,6 +50,7 @@ export const CONTRACT_STATUSES = [
   'expired',
   'terminated',
 ] as const;
+/** One value of `CONTRACT_STATUSES`. */
 export type ContractStatus = (typeof CONTRACT_STATUSES)[number];
 
 /**
@@ -57,8 +67,9 @@ export type ContractStatus = (typeof CONTRACT_STATUSES)[number];
  * `territories` holds ISO 3166-1 alpha-2 codes, or `WW` for worldwide.
  * `total_value` is a decimal with four places, in `currency`. It is the one
  * sensitive column: the write helper keeps its value out of change events and
- * records only that it changed (see `markSensitive` below). Dates are calendar
- * dates, not instants, so they carry no time zone.
+ * records only that it changed (see `markSensitive` below). The contracts
+ * service shows it, and `currency`, only to holders of `contracts:read-value`.
+ * Dates are calendar dates, not instants, so they carry no time zone.
  */
 export const contract = tenantTable(
   'contract',

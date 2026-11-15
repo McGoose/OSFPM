@@ -17,7 +17,7 @@ export type PermissionScope = {
  * True when `userId` holds `key` in `scope`: `hasProjectPermission` when the
  * scope has a project, `hasOrganisationPermission` when it has none. For
  * modules whose records may belong to a project or to the organisation alone,
- * such as legal holds and contracts.
+ * such as legal holds and contracts. Server-side only, like both of them.
  */
 export function hasScopedPermission(
   tx: Tx,

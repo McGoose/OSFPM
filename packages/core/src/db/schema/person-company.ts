@@ -15,6 +15,10 @@ import { organisation } from './organisation.js';
 import { person } from './person.js';
 import { user } from './user.js';
 
+/**
+ * Allowed values of `person_company.relation`. The CHECK is built from this
+ * list, so a new value needs a new migration.
+ */
 export const PERSON_COMPANY_RELATIONS = [
   'employee',
   'represented-by',
@@ -22,6 +26,7 @@ export const PERSON_COMPANY_RELATIONS = [
   'director',
   'other',
 ] as const;
+/** One value of `PERSON_COMPANY_RELATIONS`. */
 export type PersonCompanyRelation = (typeof PERSON_COMPANY_RELATIONS)[number];
 
 /** How a person relates to a company, over a period. Library-level, not per project. */
@@ -47,6 +52,8 @@ export const personCompany = tenantTable(
       columns: [t.organisationId, t.companyId],
       foreignColumns: [company.organisationId, company.id],
     }),
+    // NULLS NOT DISTINCT: `start_date` is optional, and a plain UNIQUE would
+    // let the same link repeat while it is NULL.
     unique('person_company_link_unique')
       .on(t.personId, t.companyId, t.relation, t.startDate)
       .nullsNotDistinct(),

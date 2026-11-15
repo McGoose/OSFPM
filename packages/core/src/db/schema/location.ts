@@ -15,6 +15,10 @@ import { organisation } from './organisation.js';
 import { person } from './person.js';
 import { user } from './user.js';
 
+/**
+ * Allowed values of `location.kind`. The CHECK is built from this list, so a
+ * new value needs a new migration.
+ */
 export const LOCATION_KINDS = [
   'location',
   'studio',
@@ -25,9 +29,15 @@ export const LOCATION_KINDS = [
   'office',
   'other',
 ] as const;
+/** One value of `LOCATION_KINDS`. */
 export type LocationKind = (typeof LOCATION_KINDS)[number];
 
+/**
+ * Allowed values of `location.status`. The CHECK is built from this list, so a
+ * new value needs a new migration.
+ */
 export const LOCATION_STATUSES = ['active', 'archived'] as const;
+/** One value of `LOCATION_STATUSES`. */
 export type LocationStatus = (typeof LOCATION_STATUSES)[number];
 
 /** A place in the organisation's library: a set, studio, car park, hospital. */

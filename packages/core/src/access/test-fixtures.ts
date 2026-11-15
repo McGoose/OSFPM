@@ -32,8 +32,10 @@ import {
  * production The Last Withdrawal.
  */
 
+/** A stand-in `origin_server` id shared by all fixture rows of a test run. */
 export const ORIGIN = newId();
 
+/** The tenant columns every fixture row needs, for one organisation. */
 export const base = (organisationId: string) => ({
   organisationId,
   ownerOrgId: organisationId,
@@ -43,6 +45,7 @@ export const base = (organisationId: string) => ({
 let counter = 0;
 const next = () => (counter += 1);
 
+/** The ids `seedOrganisation` returns. */
 export type SeedOrganisation = {
   organisationId: string;
   projectId: string;
@@ -110,6 +113,7 @@ export async function seedProject(
   return p!.id;
 }
 
+/** A department of the organisation, with `key` as its key and name. */
 export async function seedDepartment(
   database: Database,
   organisationId: string,
@@ -122,6 +126,7 @@ export async function seedDepartment(
   return d!.id;
 }
 
+/** An active user account with an invented `@example.test` address. */
 export async function seedUser(database: Database): Promise<string> {
   const n = next();
   const [u] = await database.db

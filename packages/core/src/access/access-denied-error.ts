@@ -12,6 +12,8 @@ import type { PermissionScope } from './scoped-permission.js';
  * would tell whether the id exists.
  *
  * The error never carries ids or values: from the scope it keeps only the kind.
+ * Whether a service audits the denial first is stated in that service's own
+ * documentation.
  */
 export class AccessDeniedError extends Error {
   readonly scope: 'project' | 'organisation' | undefined;

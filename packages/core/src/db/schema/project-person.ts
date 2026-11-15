@@ -16,20 +16,36 @@ import { person } from './person.js';
 import { project } from './project.js';
 import { user } from './user.js';
 
+/**
+ * Allowed values of `project_person.engagement`. The CHECK is built from this
+ * list, so a new value needs a new migration.
+ *
+ * Only a `cast` engagement may carry a cast number; a CHECK enforces it.
+ */
 export const PROJECT_PERSON_ENGAGEMENTS = [
   'crew',
   'cast',
   'background',
   'contact',
 ] as const;
+/** One value of `PROJECT_PERSON_ENGAGEMENTS`. */
 export type ProjectPersonEngagement =
   (typeof PROJECT_PERSON_ENGAGEMENTS)[number];
 
+/**
+ * Allowed values of `project_person.status`. The CHECK is built from this list,
+ * so a new value needs a new migration.
+ *
+ * `confirmed` and `released` mean the person worked on the production. Those
+ * two open access to the person's sensitive data and are what the compliance
+ * report counts (see `sensitive/service.ts`).
+ */
 export const PROJECT_PERSON_STATUSES = [
   'proposed',
   'confirmed',
   'released',
 ] as const;
+/** One value of `PROJECT_PERSON_STATUSES`. */
 export type ProjectPersonStatus = (typeof PROJECT_PERSON_STATUSES)[number];
 
 /**
@@ -70,6 +86,9 @@ export const projectPerson = tenantTable(
       columns: [t.organisationId, t.departmentId],
       foreignColumns: [department.organisationId, department.id],
     }),
+    // NULLS NOT DISTINCT: `character_name` is NULL for crew, and a plain UNIQUE
+    // would let the same engagement repeat. A cast member may appear once per
+    // character.
     unique('project_person_engagement_unique')
       .on(t.projectId, t.personId, t.engagement, t.characterName)
       .nullsNotDistinct(),

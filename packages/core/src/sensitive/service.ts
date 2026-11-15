@@ -31,24 +31,26 @@ import {
 } from './schemas.js';
 
 /**
- * The only code that touches the `person_sensitive` table. Reads and writes of
- * crew and cast sensitive data go through here, so access rules and audit live
- * in one place.
+ * The only code that touches the `person_sensitive` table (CLAUDE.md, Data
+ * rules). Reads and writes of crew and cast sensitive data go through here, so
+ * access rules and audit live in one place.
  *
  * Access: the person themselves (`person.user_id`), or a user holding
  * `sensitive:read:<category>` / `sensitive:edit:<category>` on a project where
- * the person has a confirmed or released `project_person` engagement. Org owners and admins get nothing
- * automatically.
+ * the person has a confirmed or released `project_person` engagement. Org
+ * owners and admins get nothing automatically.
  *
  * Audit: every allowed read writes one `sensitive.read` event and every denial
  * one `sensitive.denied` event, with the category and never a value. A denial
  * throws after its event is written, so a caller that rolls its transaction
  * back on the error loses the event: catch the error inside the transaction
- * and let it commit.
+ * and let it commit (CLAUDE.md, Data rules).
  *
- * Nothing here logs, and no error or audit detail carries a payload value.
+ * Nothing here logs, and no error or audit detail carries a payload value
+ * (CLAUDE.md, Privacy rule).
  */
 
+/** Who is acting, with the server, clock and notifier. Always a user. */
 export type SensitiveContext = {
   /** The user acting. */
   readonly userId: string;
@@ -69,6 +71,7 @@ export interface SensitiveChangeNotifier {
   }): Promise<void>;
 }
 
+/** The default notifier: it tells no one. Used when a context sets none. */
 export const noopSensitiveChangeNotifier: SensitiveChangeNotifier = {
   notifyPersonOfStaffChange: () => Promise.resolve(),
 };
@@ -117,15 +120,22 @@ export type SensitiveRecordMeta = {
   readonly updatedAt: Date;
 };
 
+/**
+ * A stored record with its payload. Only `readSensitive` returns one, after an
+ * access check and an audit event.
+ */
 export type SensitiveRecord<C extends SensitiveCategory = SensitiveCategory> =
   SensitiveRecordMeta & { readonly payload: SensitivePayload<C> };
 
+/** The legal basis of a write, and the consent text the person agreed to. */
 export type WriteSensitiveOptions = {
   readonly legalBasis: PersonSensitiveLegalBasis;
   /** Version of the consent text the person agreed to. Used for self writes on a consent basis. */
   readonly consentTextVersion?: string;
 };
 
+// A run-time guard for callers that bypass the types. It repeats
+// `PERSON_SENSITIVE_LEGAL_BASES`, so keep the two in step.
 const LEGAL_BASES: readonly string[] = [
   'consent',
   'contract',
@@ -133,6 +143,8 @@ const LEGAL_BASES: readonly string[] = [
   'vital-interest',
 ];
 
+// The retention class each category's row gets. The periods that go with the
+// classes live in `retention/defaults.ts`, not here.
 const RETENTION_CLASS: Record<SensitiveCategory, string> = {
   dietary: 'crew-health',
   medical: 'crew-health',
@@ -210,6 +222,10 @@ async function authorise(
   return { person: found, via };
 }
 
+/**
+ * True when the user holds the category's read or edit permission on any
+ * project where the person is engaged (status `confirmed` or `released`).
+ */
 async function holdsOnSharedProject(
   tx: Tx,
   userId: string,
@@ -321,9 +337,16 @@ export async function readSensitive<C extends SensitiveCategory>(
  *
  * The person themselves writes as `self` (and, on a consent basis, records
  * consent; any self write confirms the data). A user with
- * `sensitive:edit:<category>` writes as `staff`, which calls the notifier. A
- * notifier failure fails the write, so a staff change is never unannounced.
- * Writing over a deleted record restores it.
+ * `sensitive:edit:<category>` writes as `staff`, which calls the notifier after
+ * the write. If the notifier throws, the error reaches the caller but the
+ * write is already saved in the caller's transaction: only a rollback by the
+ * caller undoes it. Writing over a deleted record restores it.
+ *
+ * @throws SensitiveAccessDeniedError (after auditing it) when not allowed.
+ * @throws SensitivePayloadInvalidError for a payload that breaks its category
+ * schema; it lists paths and codes, never values.
+ * @throws Error for an unknown category or legal basis, and
+ * `RecordWriteError` when the database refuses the row.
  */
 export async function writeSensitive<C extends SensitiveCategory>(
   tx: Tx,
@@ -419,8 +442,11 @@ export async function writeSensitive<C extends SensitiveCategory>(
 
 /**
  * Deletes one category of a person's sensitive data (soft delete that also erases the payload), under the same rule
- * as `writeSensitive`. Throws `RecordNotFoundError` when there is nothing to
- * delete. A staff delete notifies the person.
+ * as `writeSensitive`. A staff delete notifies the person; a notifier failure
+ * behaves as it does there.
+ *
+ * @throws SensitiveAccessDeniedError (after auditing it) when not allowed.
+ * @throws RecordNotFoundError when there is nothing to delete.
  */
 export async function deleteSensitive(
   tx: Tx,
@@ -475,6 +501,7 @@ export class ComplianceReportDeniedError extends Error {
 /** Country code (or `unknown`) to a number of people. */
 export type ComplianceCounts = Record<string, number>;
 
+/** Counts for one department's engaged people (or none). No person ids. */
 export type ComplianceDepartmentReport = {
   /** `null` for people engaged with no department. */
   readonly departmentId: string | null;
@@ -491,6 +518,7 @@ export type ComplianceDepartmentReport = {
   readonly citizenship: ComplianceCounts;
 };
 
+/** The result of `complianceReport`: counts per department only. */
 export type ComplianceReport = {
   readonly projectId: string;
   readonly departments: readonly ComplianceDepartmentReport[];
@@ -498,6 +526,9 @@ export type ComplianceReport = {
 
 const UNKNOWN = 'unknown';
 
+// Safe on a plain object: every key is a two-letter code that
+// `payloadSchemas.compliance` already checked, or `unknown`. None can be an
+// inherited name such as `constructor`.
 function increment(counts: ComplianceCounts, key: string) {
   counts[key] = (counts[key] ?? 0) + 1;
 }

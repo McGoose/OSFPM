@@ -6,6 +6,12 @@ import { z } from 'zod';
  * fields no category defines.
  */
 
+/**
+ * The eight categories of crew personal data kept in `person_sensitive`
+ * (CLAUDE.md, Privacy rule). Must equal `PERSON_SENSITIVE_CATEGORIES`; a test
+ * checks it. A new category needs a payload schema below, a retention class in
+ * `service.ts`, and a migration for the table's CHECK.
+ */
 export const SENSITIVE_CATEGORIES = [
   'dietary',
   'medical',
@@ -16,6 +22,7 @@ export const SENSITIVE_CATEGORIES = [
   'representation',
   'compliance',
 ] as const;
+/** One value of `SENSITIVE_CATEGORIES`. */
 export type SensitiveCategory = (typeof SENSITIVE_CATEGORIES)[number];
 
 /** ISO 3166-1 alpha-2 shape, upper case. */
@@ -105,6 +112,11 @@ const compliance = z.strictObject({
     .optional(),
 });
 
+/**
+ * One strict Zod schema per category. `writeSensitive` checks a payload against
+ * its schema before anything is stored, and `complianceReport` reads the
+ * `compliance` one back. The compiler checks that every category has a schema.
+ */
 export const payloadSchemas = {
   dietary,
   medical,
@@ -116,12 +128,19 @@ export const payloadSchemas = {
   compliance,
 } satisfies Record<SensitiveCategory, z.ZodType>;
 
+/** The payload type of each category, taken from its schema. */
 export type SensitivePayloads = {
   [C in SensitiveCategory]: z.infer<(typeof payloadSchemas)[C]>;
 };
+/** The payload type of category `C`, or of any category if `C` is omitted. */
 export type SensitivePayload<C extends SensitiveCategory = SensitiveCategory> =
   SensitivePayloads[C];
 
+/**
+ * True when `value` is one of the categories. It checks the constant list, so a
+ * string from a caller is never used to index an object (CLAUDE.md, Data
+ * rules): call it before `payloadSchemas[category]`.
+ */
 export function isSensitiveCategory(
   value: unknown,
 ): value is SensitiveCategory {

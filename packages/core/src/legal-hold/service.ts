@@ -27,14 +27,15 @@ import { LEGAL_HOLD_MANAGE_PERMISSION } from './permissions.js';
  *
  * Audit: place and release each write one `audit_event` in the same savepoint
  * as the hold row and its change event, so the three succeed or fail together.
- * A denial writes one `legal-hold.denied` event and then throws. It is written
- * outside that savepoint, so a caller that catches the error inside the
- * transaction and commits keeps it.
+ * A denial writes one `legal-hold.denied` event and then throws (CLAUDE.md,
+ * Data rules). It is written outside that savepoint, so a caller that catches
+ * the error inside the transaction and commits keeps it.
  *
  * Reasons are free text. Audit events never copy them, and callers must not put
  * sensitive values in them.
  */
 
+/** Who is acting, and on which server and clock. Always a user. */
 export type LegalHoldContext = {
   /** The user acting. */
   readonly userId: string;
@@ -44,6 +45,11 @@ export type LegalHoldContext = {
   readonly clock: () => Date;
 };
 
+/**
+ * What `placeLegalHold` needs. The scope follows from what is set: no project
+ * and no record is the whole organisation, a project alone is that project, and
+ * `entityType` with `entityId` is one record.
+ */
 export type PlaceLegalHoldValues = {
   readonly organisationId: string;
   /** Leave out for a whole-organisation hold, or for a record hold with no project. */
@@ -120,10 +126,14 @@ function requireReason(reason: string, what: string): void {
 }
 
 /**
- * Places a hold. Throws `AccessDeniedError` (after auditing it) when
- * the user may not manage holds in that scope, `LegalHoldInputError` for an
- * empty reason or a half-set record, and `RecordWriteError` when the database
- * refuses the row, for example a project of another organisation.
+ * Places a hold. Needs `legal-hold:manage` in the hold's scope. The error names
+ * the scope here, because the caller supplied it.
+ *
+ * @throws AccessDeniedError (after auditing it) when the user may not manage
+ * holds in that scope.
+ * @throws LegalHoldInputError for an empty reason or a half-set record.
+ * @throws RecordWriteError when the database refuses the row, for example a
+ * project of another organisation.
  */
 export async function placeLegalHold(
   tx: Tx,
@@ -182,6 +192,10 @@ export async function placeLegalHold(
  * hold's own scope. An unknown hold is refused like any other denial, so ids
  * cannot be probed. Releasing a released hold throws `RecordStateError` and
  * writes nothing.
+ *
+ * @throws AccessDeniedError (after auditing it), without a scope.
+ * @throws LegalHoldInputError for an empty release reason.
+ * @throws RecordStateError when the hold is already released.
  */
 export async function releaseLegalHold(
   tx: Tx,
@@ -195,6 +209,8 @@ export async function releaseLegalHold(
     .from(legalHold)
     .where(eq(legalHold.id, holdId))
     .limit(1);
+  // An unknown hold and a forbidden one take this same path, so the answer
+  // never tells a caller whether an id exists.
   if (!found || !(await mayManage(tx, ctx, found))) {
     await recordAudit(tx, {
       ...(found
@@ -236,6 +252,7 @@ export async function releaseLegalHold(
   });
 }
 
+/** What `isUnderLegalHold` asks about: a project, a record, or both. */
 export type LegalHoldTarget = {
   readonly projectId?: string | null;
   /** Table name of the record. Set together with `entityId`. */
@@ -249,6 +266,12 @@ export type LegalHoldTarget = {
  * project hold covers the project and what is in it, so pass `projectId` along
  * with the record; a record hold covers that record, with or without a
  * project. A record hold does not cover its project.
+ *
+ * Checks no permission: it is for purge and erase code to call, and returns
+ * only a yes or no. Nothing calls it yet.
+ *
+ * @throws LegalHoldInputError for an `entityType` without an `entityId`, or the
+ * other way round.
  */
 export async function isUnderLegalHold(
   tx: Tx,

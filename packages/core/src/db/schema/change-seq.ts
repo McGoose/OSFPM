@@ -25,6 +25,8 @@ export const changeSeq = pgTable(
       columns: [t.organisationId, t.projectId],
       foreignColumns: [project.organisationId, project.id],
     }),
+    // The write helper upserts on this key. NULLS NOT DISTINCT lets the
+    // organisation's own row (NULL project) conflict, so it stays one row.
     unique('change_seq_organisation_project_unique')
       .on(t.organisationId, t.projectId)
       .nullsNotDistinct(),

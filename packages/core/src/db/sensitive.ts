@@ -9,7 +9,10 @@ const registry = new WeakMap<PgTable, Set<string>>();
  * `changed_fields`. Call it once, next to the table definition.
  *
  * Columns are given by their property key in the Drizzle table. A table can
- * only gain sensitive columns, never lose them.
+ * only gain sensitive columns, never lose them. This is how a table keeps
+ * values out of events and logs (CLAUDE.md, Data rules and Privacy rule).
+ *
+ * @throws Error when a key is not an own column of the table.
  */
 export function markSensitive<T extends PgTable>(
   table: T,

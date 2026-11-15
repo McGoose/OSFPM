@@ -21,22 +21,29 @@ import { newId } from '../ids.js';
 import { organisation } from './organisation.js';
 import { project } from './project.js';
 
+/**
+ * Allowed values of `change_event.action`. The CHECK is built from this list,
+ * so a new value needs a new migration.
+ */
 export const CHANGE_ACTIONS = [
   'create',
   'update',
   'delete',
   'restore',
 ] as const;
+/** One value of `CHANGE_ACTIONS`. */
 export type ChangeAction = (typeof CHANGE_ACTIONS)[number];
 
 /**
  * Append-only change feed: one row per write to a tenant record. Used for
  * history, webhooks and offline sync. Exception to the standard columns: it is
  * never updated or deleted, so it has no `version`, `updated_*`, `deleted_*`,
- * `visibility`, `owner_org_id` or `retention_class`.
+ * `visibility`, `owner_org_id` or `retention_class`. Written only by the write
+ * helper, one event per write; a database trigger refuses UPDATE, DELETE and
+ * TRUNCATE (see `appendOnlyMigrationSql`).
  *
  * `before` and `after` omit sensitive fields; their names stay in
- * `changed_fields`, their values are never stored.
+ * `changed_fields`, their values are never stored (CLAUDE.md, Data rules).
  */
 export const changeEvent = pgTable(
   'change_event',
@@ -69,6 +76,8 @@ export const changeEvent = pgTable(
       columns: [t.organisationId, t.projectId],
       foreignColumns: [project.organisationId, project.id],
     }),
+    // NULLS NOT DISTINCT: organisation-level events have a NULL project, and
+    // their numbers must not repeat either.
     unique('change_event_organisation_project_seq_unique')
       .on(t.organisationId, t.projectId, t.seq)
       .nullsNotDistinct(),

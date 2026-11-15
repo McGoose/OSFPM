@@ -13,7 +13,8 @@ import {
  * template or belong to that project. Deleted rows grant nothing. Org owners
  * and admins get nothing extra: only project roles count.
  *
- * The general policy engine comes later and may reuse this.
+ * Server-side only: permission checks never run on a client (CLAUDE.md, Data
+ * rules). The general policy engine comes later and may reuse this.
  */
 export async function hasProjectPermission(
   tx: Tx,

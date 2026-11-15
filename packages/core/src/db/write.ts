@@ -9,9 +9,11 @@ import type { ChangeAction } from './schema/index.js';
 import { sensitiveColumns } from './sensitive.js';
 
 /**
- * The only way to write tenant records. Every call, in the caller's
- * transaction, writes the row, bumps `version`, checks for conflicts, takes the
- * next `change_seq` number and inserts exactly one `change_event`.
+ * The only way to write tenant records (CLAUDE.md, Data rules). Every call, in
+ * the caller's transaction, writes the row, bumps `version`, checks for
+ * conflicts, takes the next `change_seq` number and inserts exactly one
+ * `change_event`. The helper checks no permission: the calling service must
+ * have done that first.
  *
  * Pass the transaction handle, not the bare database: the row and its event
  * must commit or roll back together. Each call also runs in a savepoint, so a
@@ -98,16 +100,29 @@ const IMMUTABLE_KEYS = [
   'originServer',
 ] as const;
 
+/**
+ * What `insertRecord` accepts: the table's insert columns minus the ones the
+ * helper sets (`version`, timestamps, the `*_by` columns). `originServer` is
+ * optional and defaults to the context's server.
+ */
 export type InsertValues<T extends TenantTable> = Omit<
   T['$inferInsert'],
   ManagedKeys | 'originServer'
 > & { originServer?: string };
 
+/**
+ * What `updateRecord` accepts: any column except the helper-managed and
+ * immutable ones. A column the table's project resolver reads is also refused,
+ * but only at run time (see `registerProjectResolver`).
+ */
 export type UpdatePatch<T extends TenantTable> = Partial<
   Omit<T['$inferInsert'], ManagedKeys | (typeof IMMUTABLE_KEYS)[number]>
 >;
 
-/** `expectedVersion` did not match the stored version, so nothing was written. */
+/**
+ * `expectedVersion` did not match the stored version, so nothing was written.
+ * Carries the ids and the two versions, never row values.
+ */
 export class VersionConflictError extends Error {
   constructor(
     readonly entityType: string,
@@ -122,7 +137,7 @@ export class VersionConflictError extends Error {
   }
 }
 
-/** No record with this id exists. */
+/** No record with this id exists. Thrown by update, delete and restore. */
 export class RecordNotFoundError extends Error {
   constructor(
     readonly entityType: string,
@@ -171,7 +186,9 @@ export class MissingActingUserError extends Error {
 /**
  * A database error with the values stripped. Drivers and Drizzle put query
  * parameters and offending values in messages and `detail`, so the original
- * error is not kept; only the SQLSTATE and constraint name survive.
+ * error is not kept; only the SQLSTATE and constraint name survive (CLAUDE.md,
+ * Data rules: sensitive values never appear in error messages). Every database
+ * failure inside a write call is turned into this.
  */
 export class RecordWriteError extends Error {
   constructor(
@@ -211,6 +228,8 @@ function driverError(error: unknown) {
   return undefined;
 }
 
+// Typed errors pass through. Everything else becomes a value-free
+// `RecordWriteError`, because driver errors can carry the values written.
 async function guarded<R>(
   table: PgTable,
   operation: string,
@@ -255,7 +274,10 @@ async function nextSeq(
   return row!.lastSeq;
 }
 
-/** Database-column-name view of `row`, limited to `keys`, without sensitive values. */
+/**
+ * Database-column-name view of `row`, limited to `keys`, without sensitive
+ * values. This is the one place values are kept out of change events.
+ */
 function redact(table: PgTable, row: Row, keys?: readonly string[]): Snapshot {
   const sensitive = sensitiveColumns(table);
   const out: Snapshot = {};
@@ -271,6 +293,8 @@ function columnName(table: PgTable, key: string): string {
   return getTableColumns(table)[key]!.name;
 }
 
+// Compared as JSON so dates and arrays match by value, and null and undefined
+// count as the same.
 const same = (a: unknown, b: unknown) =>
   JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
@@ -334,7 +358,16 @@ async function loadRow(tx: Tx, table: TenantTable, id: string): Promise<Row> {
   return row;
 }
 
-/** Inserts a record and logs a `create` event. */
+/**
+ * Inserts a record and logs a `create` event with the whole row in `after`
+ * (sensitive values left out). Called by server-side services only, with the
+ * transaction handle.
+ *
+ * @throws MissingActingUserError for a `token` or `email` context without
+ * `onBehalfOfUserId`.
+ * @throws RecordWriteError when the database refuses the row; it carries the
+ * SQLSTATE and constraint name, never values.
+ */
 export function insertRecord<T extends TenantTable>(
   tx: Tx,
   table: T,
@@ -342,6 +375,7 @@ export function insertRecord<T extends TenantTable>(
   ctx: WriteContext,
 ): Promise<T['$inferSelect']> {
   return guarded(table, 'insert', () =>
+    // A savepoint: a failed insert leaves no row, event or used `seq`.
     tx.transaction(async (inner) => {
       attributedUserId(ctx); // refuses a missing acting user before any write
       const now = ctx.clock();
@@ -402,6 +436,7 @@ function modifyRecord<T extends TenantTable>(
   ctx: WriteContext,
 ): Promise<T['$inferSelect']> {
   return guarded(table, action, () =>
+    // A savepoint, as in `insertRecord`.
     tx.transaction(async (inner) => {
       attributedUserId(ctx); // refuses a missing acting user before any write
       const before = await loadRow(inner, table, id);
@@ -492,7 +527,16 @@ function checkedPatch<T extends TenantTable>(
   return change;
 }
 
-/** Updates fields of a record and logs an `update` event. */
+/**
+ * Updates fields of a record and logs an `update` event naming only the fields
+ * that changed. A patch that changes nothing still bumps the version and logs
+ * an event with an empty `changed_fields`. Undefined values are skipped.
+ *
+ * @throws Error for an immutable column, one the project resolver reads, or an
+ * unknown column (nothing is written).
+ * @throws VersionConflictError, RecordNotFoundError, MissingActingUserError,
+ * RecordWriteError as for the other writes.
+ */
 export async function updateRecord<T extends TenantTable>(
   tx: Tx,
   table: T,
@@ -516,6 +560,10 @@ export async function updateRecord<T extends TenantTable>(
  * Marks a record deleted and logs a `delete` event. `alsoSet` changes other
  * fields in the same write, for example to erase values a table must not keep
  * on a deleted row. It follows the rules of an update patch.
+ *
+ * @throws RecordStateError when the record is already deleted.
+ * @throws VersionConflictError, RecordNotFoundError, MissingActingUserError,
+ * RecordWriteError, and the `Error` of a refused `alsoSet`, as `updateRecord`.
  */
 export async function softDeleteRecord<T extends TenantTable>(
   tx: Tx,
@@ -543,6 +591,9 @@ export async function softDeleteRecord<T extends TenantTable>(
 /**
  * Clears the deletion mark and logs a `restore` event. `alsoSet` changes other
  * fields in the same write, for example to refill values erased on delete.
+ *
+ * @throws RecordStateError when the record is not deleted.
+ * @throws The same errors as `softDeleteRecord`.
  */
 export async function restoreRecord<T extends TenantTable>(
   tx: Tx,
@@ -563,6 +614,7 @@ export async function restoreRecord<T extends TenantTable>(
   );
 }
 
+/** Input of `recordAudit`. Required: `category`, `action` and `actor`. */
 export type AuditInput = {
   readonly organisationId?: string | null;
   readonly projectId?: string | null;
@@ -579,7 +631,14 @@ export type AuditInput = {
   readonly occurredAt?: Date;
 };
 
-/** Inserts one `audit_event`. */
+/**
+ * Inserts one `audit_event` in the caller's transaction, with no savepoint of
+ * its own. Services call it before they throw a typed access error, and the
+ * caller commits, so the denial is kept (CLAUDE.md, Data rules). Checks no
+ * permission and never inspects `details`: callers keep sensitive values out.
+ *
+ * @throws RecordWriteError when the database refuses the row.
+ */
 export function recordAudit(tx: Tx, event: AuditInput) {
   return guarded(auditEvent, 'insert', () => insertAudit(tx, event));
 }

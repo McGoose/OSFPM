@@ -10,6 +10,7 @@ export const RETENTION_ANCHORS = [
   'first-exploitation',
   'last-activity',
 ] as const;
+/** One value of `RETENTION_ANCHORS`. */
 export type RetentionAnchor = (typeof RETENTION_ANCHORS)[number];
 
 /**

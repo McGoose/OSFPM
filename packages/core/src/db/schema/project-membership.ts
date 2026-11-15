@@ -12,11 +12,19 @@ import { project } from './project.js';
 import { organisation } from './organisation.js';
 import { user } from './user.js';
 
+/**
+ * Allowed values of `project_membership.status`. The CHECK is built from this
+ * list, so a new value needs a new migration.
+ *
+ * Only `active` counts when a permission is checked (see
+ * `hasProjectPermission`).
+ */
 export const PROJECT_MEMBERSHIP_STATUSES = [
   'invited',
   'active',
   'ended',
 ] as const;
+/** One value of `PROJECT_MEMBERSHIP_STATUSES`. */
 export type ProjectMembershipStatus =
   (typeof PROJECT_MEMBERSHIP_STATUSES)[number];
 

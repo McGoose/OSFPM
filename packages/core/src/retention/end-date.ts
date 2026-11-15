@@ -3,6 +3,10 @@ import type { RetentionAnchor } from '../db/schema/retention-class.js';
 /** A calendar date as `YYYY-MM-DD`, or a point in time, read as its UTC date. */
 export type RetentionDate = string | Date;
 
+/**
+ * The dates a retention period can count from, one per anchor. `null` means the
+ * date is not known yet, which keeps the record (see `retentionEndDate`).
+ */
 export type RetentionDates = {
   readonly recordCreated: RetentionDate | null;
   readonly lastActivity: RetentionDate | null;
@@ -11,6 +15,7 @@ export type RetentionDates = {
   readonly firstExploitationDate: RetentionDate | null;
 };
 
+/** Input of `retentionEndDate`: the anchor, the periods and the dates. */
 export type RetentionEndInput = {
   readonly anchor: RetentionAnchor;
   /**
@@ -84,6 +89,8 @@ const pad = (n: number, width: number) => String(n).padStart(width, '0');
  */
 export function retentionEndDate(input: RetentionEndInput): string | null {
   const { anchor, periodsYears, dates } = input;
+  // Own keys only: an anchor such as `constructor` would otherwise find an
+  // inherited property and read a date from nowhere.
   if (!Object.hasOwn(DATE_KEY, anchor)) {
     throw new RangeError('Unknown retention anchor');
   }
@@ -98,6 +105,8 @@ export function retentionEndDate(input: RetentionEndInput): string | null {
   const longest = Math.max(...(periodsYears as number[]));
   const [year, month, day] = utcParts(raw);
   const endYear = year + longest;
+  // Edge case: 29 February has no counterpart in a non-leap target year, so the
+  // end date is the 28th, not 1 March.
   const endDay = month === 2 && day === 29 && !isLeapYear(endYear) ? 28 : day;
   return `${pad(endYear, 4)}-${pad(month, 2)}-${pad(endDay, 2)}`;
 }

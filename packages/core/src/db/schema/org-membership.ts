@@ -5,6 +5,13 @@ import { declareOrganisationLevel } from '../project-resolver.js';
 import { organisation } from './organisation.js';
 import { user } from './user.js';
 
+/**
+ * Allowed values of `org_membership.org_role`. The CHECK is built from this
+ * list, so a new value needs a new migration.
+ *
+ * A tier grants nothing by itself: permissions come from the roles linked
+ * through `org_membership_role` (see `hasOrganisationPermission`).
+ */
 export const ORG_ROLES = [
   'owner',
   'admin',
@@ -12,13 +19,21 @@ export const ORG_ROLES = [
   'supervisor',
   'guest',
 ] as const;
+/** One value of `ORG_ROLES`. */
 export type OrgRole = (typeof ORG_ROLES)[number];
 
+/**
+ * Allowed values of `org_membership.status`. The CHECK is built from this list,
+ * so a new value needs a new migration.
+ *
+ * Only `active` counts when a permission is checked.
+ */
 export const ORG_MEMBERSHIP_STATUSES = [
   'invited',
   'active',
   'removed',
 ] as const;
+/** One value of `ORG_MEMBERSHIP_STATUSES`. */
 export type OrgMembershipStatus = (typeof ORG_MEMBERSHIP_STATUSES)[number];
 
 /** A user's place in the organisation. */

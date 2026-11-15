@@ -10,7 +10,7 @@ import { user } from './user.js';
  * Gives an organisation membership a role, so each organisation decides which
  * roles hold which organisation-level permissions. Only organisation roles
  * (`role.project_id` IS NULL) can be linked; a database trigger enforces it on
- * both sides of the link (see the `org_membership_role` migration). Has no
+ * both sides of the link (see `0017_org_membership_role.sql`). Has no
  * `project_id`, so its writes belong to the organisation sequence and it needs
  * no project resolver.
  */

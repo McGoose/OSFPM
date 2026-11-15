@@ -16,7 +16,11 @@ import { user } from './user.js';
  * class `standard` and visibility `private`, the column defaults: holds are
  * confidential legal matters, not shared with the project.
  *
- * `reason` is free text written by staff. It must not copy sensitive values.
+ * Placed and released only through `placeLegalHold` and `releaseLegalHold`,
+ * which check `legal-hold:manage` and write an audit event.
+ *
+ * `reason` is free text written by staff. It must not copy sensitive values
+ * (CLAUDE.md, Data rules).
  */
 export const legalHold = tenantTable(
   'legal_hold',

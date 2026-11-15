@@ -21,8 +21,10 @@ import { project } from './project.js';
 
 /**
  * Append-only security log (sign-ins, permission changes, exports, and so on).
- * Same exception to the standard columns as `change_event`. `details` must
- * never hold sensitive values.
+ * Same exception to the standard columns as `change_event`. Written through
+ * `recordAudit`; a database trigger refuses UPDATE, DELETE and TRUNCATE (see
+ * `appendOnlyMigrationSql`). `details` must never hold sensitive values
+ * (CLAUDE.md, Data rules).
  */
 export const auditEvent = pgTable(
   'audit_event',
