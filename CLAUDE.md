@@ -32,8 +32,10 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Tenant records are written only through the write helper in `src/db/write.ts`.
 - Test fixtures may insert rows directly to set up state. Code under test always writes through the write helper.
 - A helper that writes records needs at least one test for each kind of table it serves (organisation-level, project-level, and the project table itself).
+- Side effects (email, webhooks, notifications, jobs) are only queued inside the write's own transaction; sending happens later in the worker, never in the request path.
 - Only `src/sensitive/service.ts` touches `person_sensitive`; other code calls the service.
-- Access denials are audited before the typed error is thrown; callers catch it inside the transaction and commit, so the audit event survives.
+- Access denials are audited for sensitive data and legal holds; other modules don't audit denials.
+- Where a denial is audited, the event is written before the typed error is thrown. Callers catch the error inside the transaction and commit, so the audit event survives.
 - Tenant tables are defined with `tenantTable()`, never bare `pgTable`.
 - Permission checks run only on the server through the policy engine.
 - Every endpoint gets a test proving 403 without access and no sensitive fields without `sensitive:read`.
@@ -43,6 +45,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 
 - Comments explain why, not what: the reason, the rule, the edge case. Don't restate the code.
 - Every exported function, type and table has a short JSDoc: what it does, who may call it, what it throws, and any permission or privacy rule.
+- `src/jsdoc.test.ts` enforces JSDoc on every export.
 - Privacy, permission, retention and legal rules name their source (spec section or decision record).
 - Hand-written SQL in migrations has a comment above each block saying why it exists.
 - Each package and module folder has a short README.md: purpose, main entry points, how to test.

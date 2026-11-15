@@ -22,7 +22,7 @@ import {
   type ProjectPersonStatus,
 } from '../db/schema/index.js';
 import { createMigratedDatabase, testTargets } from '../db/test-support.js';
-import { RecordNotFoundError } from '../db/write.js';
+import { RecordNotFoundError, type Tx } from '../db/write.js';
 import { leafStrings, VALID_PAYLOADS } from './payload-fixtures.js';
 import {
   editPermissionKey,
@@ -44,19 +44,33 @@ type Row = Record<string, unknown>;
 
 const NOW = new Date('2026-11-15T10:00:00.000Z');
 
+type NoticeInput = {
+  personId: string;
+  category: SensitiveCategory;
+  changedByUserId: string;
+};
+
 class FakeNotifier implements SensitiveChangeNotifier {
-  readonly calls: {
-    personId: string;
-    category: SensitiveCategory;
-    changedByUserId: string;
-  }[] = [];
-  notifyPersonOfStaffChange(input: {
-    personId: string;
-    category: SensitiveCategory;
-    changedByUserId: string;
-  }) {
+  readonly calls: NoticeInput[] = [];
+  queueStaffChangeNotice(_tx: Tx, input: NoticeInput) {
     this.calls.push(input);
     return Promise.resolve();
+  }
+}
+
+/**
+ * Queues each notice as a row in `test_notice_queue`, through the transaction
+ * it is handed, as a real outbox would. With `failAfterQueueing` it throws once
+ * the row is written, to show that the row goes with the write.
+ */
+class QueueingNotifier implements SensitiveChangeNotifier {
+  constructor(private readonly failAfterQueueing = false) {}
+  async queueStaffChangeNotice(tx: Tx, input: NoticeInput) {
+    await tx.execute(
+      sql`insert into test_notice_queue (person_id, category, changed_by)
+          values (${input.personId}, ${input.category}, ${input.changedByUserId})`,
+    );
+    if (this.failAfterQueueing) throw new Error('queue unavailable');
   }
 }
 
@@ -136,8 +150,29 @@ describe.each(testTargets)('sensitive data service on $name', (target) => {
     return r.rows[0]!.n;
   };
 
+  const changesCount = async () => {
+    const r = (await db().execute(
+      sql`select count(*)::int as n from change_event`,
+    )) as { rows: { n: number }[] };
+    return r.rows[0]!.n;
+  };
+
+  const queuedNotices = async (personId: string) => {
+    const r = (await db().execute(
+      sql`select category, changed_by from test_notice_queue
+          where person_id = ${personId}`,
+    )) as { rows: { category: string; changed_by: string }[] };
+    return r.rows;
+  };
+
   beforeAll(async () => {
     ({ database, cleanup } = await createMigratedDatabase(target));
+    // A stand-in for the outbox table the email module will own.
+    await database.db.execute(
+      sql`create table test_notice_queue (
+            person_id uuid not null, category text not null, changed_by uuid not null
+          )`,
+    );
     s = await seedOrganisation(database);
     projectB = await seedProject(database, s.organisationId);
     await ensurePermissions(
@@ -905,24 +940,128 @@ describe.each(testTargets)('sensitive data service on $name', (target) => {
       );
     });
 
-    it('roll back when the notifier fails, so no change goes unannounced', async () => {
+    it('queue the notice through the write’s own transaction', async () => {
       const personId = await newPerson();
-      const failing: SensitiveChangeNotifier = {
-        notifyPersonOfStaffChange: () => Promise.reject(new Error('mail down')),
-      };
-      await expect(
-        db().transaction((tx) =>
+      await writeSensitive(
+        db(),
+        ctxFor(editorDietary, new QueueingNotifier()),
+        personId,
+        'dietary',
+        VALID_PAYLOADS.dietary,
+        { legalBasis: 'contract' },
+      );
+      expect(await countSensitiveRows(personId)).toBe(1);
+      expect(await queuedNotices(personId)).toEqual([
+        { category: 'dietary', changed_by: editorDietary },
+      ]);
+    });
+
+    it('write nothing and queue no notice when staff save the same data again', async () => {
+      const personId = await newPerson();
+      const staff = ctxFor(editorDietary, new QueueingNotifier());
+      const save = () =>
+        writeSensitive(
+          db(),
+          staff,
+          personId,
+          'dietary',
+          VALID_PAYLOADS.dietary,
+          { legalBasis: 'contract' },
+        );
+      await save();
+      const changesAfterFirst = await changesCount();
+
+      const again = await save();
+
+      // Version 1 is still current: the second save wrote no row.
+      expect(again.version).toBe(1);
+      expect(await changesCount()).toBe(changesAfterFirst);
+      expect(await queuedNotices(personId)).toEqual([
+        { category: 'dietary', changed_by: editorDietary },
+      ]);
+    });
+
+    describe('when queueing the notice fails, even if the caller catches the error and commits', () => {
+      const failing = () => new QueueingNotifier(true);
+
+      /** Runs `action` in a caller's transaction that catches the error and still commits. */
+      async function failInsideCaller(action: (tx: Tx) => Promise<unknown>) {
+        await db().transaction(async (tx) => {
+          await expect(action(tx)).rejects.toThrow('queue unavailable');
+        });
+      }
+
+      it('leave no sensitive row, no change event and no queued notice after a create', async () => {
+        const personId = await newPerson();
+        const before = await changesCount();
+        await failInsideCaller((tx) =>
           writeSensitive(
             tx,
-            ctxFor(editorDietary, failing),
+            ctxFor(editorDietary, failing()),
             personId,
             'dietary',
             VALID_PAYLOADS.dietary,
             { legalBasis: 'contract' },
           ),
-        ),
-      ).rejects.toThrow('mail down');
-      expect(await countSensitiveRows(personId)).toBe(0);
+        );
+        expect(await countSensitiveRows(personId)).toBe(0);
+        expect(await changesCount()).toBe(before);
+        expect(await queuedNotices(personId)).toEqual([]);
+      });
+
+      it('leave the stored record and its history as they were after an update', async () => {
+        const personId = await newPerson();
+        await writeSensitive(
+          db(),
+          ctxFor(editorAll),
+          personId,
+          'dietary',
+          VALID_PAYLOADS.dietary,
+          { legalBasis: 'contract' },
+        );
+        const before = await changesCount();
+        await failInsideCaller((tx) =>
+          writeSensitive(
+            tx,
+            ctxFor(editorAll, failing()),
+            personId,
+            'dietary',
+            { restrictions: [], allergies: [] },
+            { legalBasis: 'contract' },
+          ),
+        );
+        expect(await changesCount()).toBe(before);
+        expect(await queuedNotices(personId)).toEqual([]);
+        expect(
+          await readSensitive(db(), ctxFor(editorAll), personId, 'dietary'),
+        ).toMatchObject({ version: 1, payload: VALID_PAYLOADS.dietary });
+      });
+
+      it('leave the record undeleted after a delete', async () => {
+        const personId = await newPerson();
+        await writeSensitive(
+          db(),
+          ctxFor(editorAll),
+          personId,
+          'dietary',
+          VALID_PAYLOADS.dietary,
+          { legalBasis: 'contract' },
+        );
+        const before = await changesCount();
+        await failInsideCaller((tx) =>
+          deleteSensitive(
+            tx,
+            ctxFor(editorAll, failing()),
+            personId,
+            'dietary',
+          ),
+        );
+        expect(await changesCount()).toBe(before);
+        expect(await queuedNotices(personId)).toEqual([]);
+        expect(
+          await readSensitive(db(), ctxFor(editorAll), personId, 'dietary'),
+        ).toMatchObject({ version: 1, payload: VALID_PAYLOADS.dietary });
+      });
     });
   });
 
@@ -964,6 +1103,24 @@ describe.each(testTargets)('sensitive data service on $name', (target) => {
       ).rejects.toThrow(/category/i);
     });
 
+    it.each([
+      'consent',
+      'contract',
+      'legal-obligation',
+      'vital-interest',
+    ] as const)('accept the legal basis %s', async (legalBasis) => {
+      const personId = await newPerson();
+      const written = await writeSensitive(
+        db(),
+        ctxFor(editorAll),
+        personId,
+        'dietary',
+        VALID_PAYLOADS.dietary,
+        { legalBasis },
+      );
+      expect(written.legalBasis).toBe(legalBasis);
+    });
+
     it('refuse an unknown legal basis', async () => {
       const personId = await newPerson();
       await expect(
@@ -992,13 +1149,6 @@ describe.each(testTargets)('sensitive data service on $name', (target) => {
         ),
       ).rejects.toBeInstanceOf(SensitiveAccessDeniedError);
     });
-
-    async function changesCount() {
-      const r = (await db().execute(
-        sql`select count(*)::int as n from change_event`,
-      )) as { rows: { n: number }[] };
-      return r.rows[0]!.n;
-    }
   });
 
   describe('deleting', () => {

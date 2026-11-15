@@ -12,8 +12,9 @@ import { sensitiveColumns } from './sensitive.js';
  * The only way to write tenant records (CLAUDE.md, Data rules). Every call, in
  * the caller's transaction, writes the row, bumps `version`, checks for
  * conflicts, takes the next `change_seq` number and inserts exactly one
- * `change_event`. The helper checks no permission: the calling service must
- * have done that first.
+ * `change_event`. The one exception is an update that changes no field: it
+ * checks the version, then writes nothing (see `updateRecord`). The helper
+ * checks no permission: the calling service must have done that first.
  *
  * Pass the transaction handle, not the bare database: the row and its event
  * must commit or roll back together. Each call also runs in a savepoint, so a
@@ -293,10 +294,24 @@ function columnName(table: PgTable, key: string): string {
   return getTableColumns(table)[key]!.name;
 }
 
+// JSON with each object's keys sorted: PostgreSQL returns jsonb keys in its own
+// order, so a value a caller wrote in another order is still the same value.
+// Array order still counts.
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value ?? null, (_key, inner: unknown) =>
+    inner !== null && typeof inner === 'object' && !Array.isArray(inner)
+      ? Object.fromEntries(
+          Object.entries(inner).sort(([a], [b]) =>
+            a < b ? -1 : a > b ? 1 : 0,
+          ),
+        )
+      : inner,
+  );
+}
+
 // Compared as JSON so dates and arrays match by value, and null and undefined
 // count as the same.
-const same = (a: unknown, b: unknown) =>
-  JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+const same = (a: unknown, b: unknown) => canonicalJson(a) === canonicalJson(b);
 
 async function logChange(
   tx: Tx,
@@ -424,7 +439,9 @@ export function insertRecord<T extends TenantTable>(
 
 /**
  * Shared by update, soft delete and restore: checks the version, takes the
- * sequence number, applies `change` and logs the event.
+ * sequence number, applies `change` and logs the event. An update whose
+ * `change` alters no field returns the current row after the version check and
+ * does none of the rest.
  */
 function modifyRecord<T extends TenantTable>(
   tx: Tx,
@@ -455,6 +472,13 @@ function modifyRecord<T extends TenantTable>(
       const changedKeys = Object.keys(change).filter(
         (key) => !same(before[key], change[key]),
       );
+      // An update that changes nothing writes nothing: no new version, no
+      // sequence number, no event. It comes after the version check, so a stale
+      // caller still learns it is stale. Only updates qualify: delete and
+      // restore always change `deleted_at`.
+      if (action === 'update' && changedKeys.length === 0) {
+        return before;
+      }
       // Seq is taken before the row is locked, so every writer in a project
       // queues on the counter first and multi-record transactions cannot
       // deadlock on each other's rows.
@@ -529,8 +553,11 @@ function checkedPatch<T extends TenantTable>(
 
 /**
  * Updates fields of a record and logs an `update` event naming only the fields
- * that changed. A patch that changes nothing still bumps the version and logs
- * an event with an empty `changed_fields`. Undefined values are skipped.
+ * that changed. The version is checked first, so a stale `expectedVersion`
+ * throws even when the patch matches the stored values. When no field would
+ * change, nothing is written: no new version, no new `updated_at`, no sequence
+ * number, no event, and the current record is returned. Undefined values are
+ * skipped.
  *
  * @throws Error for an immutable column, one the project resolver reads, or an
  * unknown column (nothing is written).

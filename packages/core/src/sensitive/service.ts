@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { hasProjectPermission } from '../access/project-permission.js';
 import {
   department,
+  PERSON_SENSITIVE_LEGAL_BASES,
   person,
   personSensitive,
   project,
@@ -58,22 +59,32 @@ export type SensitiveContext = {
   /** The server doing the work. */
   readonly originServer: string;
   readonly clock: () => Date;
-  /** Told about staff changes. Defaults to a no-op until the email module exists. */
+  /** Queues notices of staff changes. Defaults to a no-op until the email module exists. */
   readonly notifier?: SensitiveChangeNotifier;
 };
 
-/** Tells a person that staff entered, changed or deleted their data. Never gets values. */
+/**
+ * Queues a notice that staff entered, changed or deleted a person's data. The
+ * service calls it inside the write's own savepoint and hands over that
+ * savepoint's transaction `tx`. An implementation only enqueues, for example by
+ * inserting an outbox row through `tx`, and sends nothing: the notice then
+ * commits or rolls back with the write, and a throw undoes the write. Never
+ * gets values.
+ */
 export interface SensitiveChangeNotifier {
-  notifyPersonOfStaffChange(input: {
-    personId: string;
-    category: SensitiveCategory;
-    changedByUserId: string;
-  }): Promise<void>;
+  queueStaffChangeNotice(
+    tx: Tx,
+    input: {
+      personId: string;
+      category: SensitiveCategory;
+      changedByUserId: string;
+    },
+  ): Promise<void>;
 }
 
-/** The default notifier: it tells no one. Used when a context sets none. */
+/** The default notifier: it queues nothing. Used when a context sets none. */
 export const noopSensitiveChangeNotifier: SensitiveChangeNotifier = {
-  notifyPersonOfStaffChange: () => Promise.resolve(),
+  queueStaffChangeNotice: () => Promise.resolve(),
 };
 
 type Operation = 'read' | 'write' | 'delete';
@@ -134,14 +145,10 @@ export type WriteSensitiveOptions = {
   readonly consentTextVersion?: string;
 };
 
-// A run-time guard for callers that bypass the types. It repeats
-// `PERSON_SENSITIVE_LEGAL_BASES`, so keep the two in step.
-const LEGAL_BASES: readonly string[] = [
-  'consent',
-  'contract',
-  'legal-obligation',
-  'vital-interest',
-];
+// A run-time guard for callers that bypass the types. It is the table's own
+// list, `PERSON_SENSITIVE_LEGAL_BASES`, so the service and the CHECK cannot
+// disagree.
+const LEGAL_BASES: readonly string[] = PERSON_SENSITIVE_LEGAL_BASES;
 
 // The retention class each category's row gets. The periods that go with the
 // classes live in `retention/defaults.ts`, not here.
@@ -337,10 +344,13 @@ export async function readSensitive<C extends SensitiveCategory>(
  *
  * The person themselves writes as `self` (and, on a consent basis, records
  * consent; any self write confirms the data). A user with
- * `sensitive:edit:<category>` writes as `staff`, which calls the notifier after
- * the write. If the notifier throws, the error reaches the caller but the
- * write is already saved in the caller's transaction: only a rollback by the
- * caller undoes it. Writing over a deleted record restores it.
+ * `sensitive:edit:<category>` writes as `staff`, which queues a notice through
+ * the notifier. The write and the notice share one savepoint: if the notifier
+ * throws, the row, its change event and the notice are all rolled back, even
+ * when the caller catches the error and commits. Writing over a deleted record
+ * restores it. A write that changes no stored field, such as the same staff
+ * writing the same payload again, writes nothing (see `updateRecord`) and
+ * queues no notice: there is nothing to announce.
  *
  * @throws SensitiveAccessDeniedError (after auditing it) when not allowed.
  * @throws SensitivePayloadInvalidError for a payload that breaks its category
@@ -397,12 +407,16 @@ export async function writeSensitive<C extends SensitiveCategory>(
     ...(via === 'self' ? { lastConfirmedAt: now } : {}),
   };
 
+  // One savepoint holds the write and the notice, so they succeed or fail
+  // together even when the caller catches the error and commits.
   const saved = await tx.transaction(async (inner) => {
     const existing = await findRow(inner, personId, category, {
       includeDeleted: true,
     });
+    let row: typeof personSensitive.$inferSelect;
+    let changed = true;
     if (!existing) {
-      return insertRecord(
+      row = await insertRecord(
         inner,
         personSensitive,
         {
@@ -414,10 +428,9 @@ export async function writeSensitive<C extends SensitiveCategory>(
         },
         wc,
       );
-    }
-    if (existing.deletedAt !== null) {
+    } else if (existing.deletedAt !== null) {
       // One write: a deleted row has no payload, so restore and refill together.
-      return restoreRecord(
+      row = await restoreRecord(
         inner,
         personSensitive,
         existing.id,
@@ -425,25 +438,32 @@ export async function writeSensitive<C extends SensitiveCategory>(
         wc,
         fields,
       );
+    } else {
+      row = await updateRecord(
+        inner,
+        personSensitive,
+        existing.id,
+        existing.version,
+        fields,
+        wc,
+      );
+      // `updateRecord` hands back the stored row untouched, at the same
+      // version, when nothing would change. Then there is nothing to announce.
+      changed = row.version !== existing.version;
     }
-    return updateRecord(
-      inner,
-      personSensitive,
-      existing.id,
-      existing.version,
-      fields,
-      wc,
-    );
+    if (via === 'staff' && changed) {
+      await queueStaffNotice(inner, ctx, personId, category);
+    }
+    return row;
   });
 
-  if (via === 'staff') await notifyStaffChange(ctx, personId, category);
   return metaOf(saved);
 }
 
 /**
  * Deletes one category of a person's sensitive data (soft delete that also erases the payload), under the same rule
- * as `writeSensitive`. A staff delete notifies the person; a notifier failure
- * behaves as it does there.
+ * as `writeSensitive`. A staff delete queues a notice in the same savepoint,
+ * so a notifier failure leaves the record undeleted.
  *
  * @throws SensitiveAccessDeniedError (after auditing it) when not allowed.
  * @throws RecordNotFoundError when there is nothing to delete.
@@ -465,29 +485,34 @@ export async function deleteSensitive(
       `${personId}/${category}`,
     );
   }
-  await softDeleteRecord(
-    tx,
-    personSensitive,
-    existing.id,
-    existing.version,
-    writeContext(ctx),
-    { payload: null }, // erased in the same write; the table CHECK requires it
-  );
-  if (via === 'staff') await notifyStaffChange(ctx, personId, category);
+  // The delete and the notice share one savepoint, as in `writeSensitive`.
+  await tx.transaction(async (inner) => {
+    await softDeleteRecord(
+      inner,
+      personSensitive,
+      existing.id,
+      existing.version,
+      writeContext(ctx),
+      { payload: null }, // erased in the same write; the table CHECK requires it
+    );
+    if (via === 'staff') await queueStaffNotice(inner, ctx, personId, category);
+  });
 }
 
-function notifyStaffChange(
+function queueStaffNotice(
+  tx: Tx,
   ctx: SensitiveContext,
   personId: string,
   category: SensitiveCategory,
 ): Promise<void> {
-  return (
-    ctx.notifier ?? noopSensitiveChangeNotifier
-  ).notifyPersonOfStaffChange({
-    personId,
-    category,
-    changedByUserId: ctx.userId,
-  });
+  return (ctx.notifier ?? noopSensitiveChangeNotifier).queueStaffChangeNotice(
+    tx,
+    {
+      personId,
+      category,
+      changedByUserId: ctx.userId,
+    },
+  );
 }
 
 /** The caller may not see the compliance report. Carries no values. */

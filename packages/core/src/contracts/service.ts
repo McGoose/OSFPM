@@ -488,7 +488,8 @@ export async function createContract(
  * Changes fields of a contract. Needs `contracts:edit`; naming `totalValue`
  * or `currency` in `changes`, even to clear it, needs `contracts:read-value`
  * as well. The result hides the amount from a caller without
- * `contracts:read-value`, whatever changed.
+ * `contracts:read-value`, whatever changed. Changes that alter no field write
+ * nothing and return the current contract (see `updateRecord`).
  *
  * @throws AccessDeniedError, with no scope, for a contract that is unknown,
  * deleted or forbidden: all three look the same, so ids cannot be probed.
