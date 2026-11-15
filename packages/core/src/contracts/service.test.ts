@@ -237,16 +237,22 @@ describe.each(testTargets)('contracts on $name', (target) => {
   }
 
   describe('the permission catalogue', () => {
-    it('is accepted by the permission table', async () => {
+    // Amounts are what crew and cast are paid, so the permission that shows
+    // them is the one flagged as granting sensitive data.
+    it('is accepted by the permission table, and only contracts:read-value grants sensitive data', async () => {
       const found = await db()
-        .select({ key: permission.key, module: permission.module })
+        .select({
+          key: permission.key,
+          module: permission.module,
+          grantsSensitive: permission.grantsSensitive,
+        })
         .from(permission)
         .where(eq(permission.module, 'contracts'))
         .orderBy(asc(permission.key));
       expect(found).toEqual([
-        { key: EDIT, module: 'contracts' },
-        { key: READ, module: 'contracts' },
-        { key: READ_VALUE, module: 'contracts' },
+        { key: EDIT, module: 'contracts', grantsSensitive: false },
+        { key: READ, module: 'contracts', grantsSensitive: false },
+        { key: READ_VALUE, module: 'contracts', grantsSensitive: true },
       ]);
     });
   });

@@ -17,7 +17,9 @@ export const CONTRACTS_EDIT_PERMISSION = 'contracts:edit';
 /**
  * Permission to see the amount and the currency of a contract, and to set or
  * change them. Without it those two fields are left out of every result, and
- * writing them is refused.
+ * writing them is refused. It is the one contracts permission flagged as
+ * granting sensitive data, because the amounts of crew and cast contracts are
+ * what people are paid.
  */
 export const CONTRACTS_READ_VALUE_PERMISSION = 'contracts:read-value';
 
@@ -39,6 +41,6 @@ export const CONTRACT_PERMISSIONS: readonly PermissionDefinition[] = [
     key: CONTRACTS_READ_VALUE_PERMISSION,
     module: 'contracts',
     description: 'See and change contract amounts and currencies',
-    grantsSensitive: false,
+    grantsSensitive: true,
   },
 ];
