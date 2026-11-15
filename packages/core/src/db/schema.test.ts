@@ -3,6 +3,7 @@ import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from './client.js';
 import {
+  declaredRetentionClasses,
   organisationForeignKeyName,
   retentionClassForeignKeyName,
   tenantTableNames,
@@ -309,7 +310,7 @@ describe.each(testTargets)('database schema on $name', (target) => {
         await cleanup();
       }
     });
-    it('links every retention_class column to retention_class(key) and defaults it to standard', async () => {
+    it('links every retention_class column to retention_class(key) and defaults it to standard, or to the class its table declares', async () => {
       const { database, cleanup } = await target.create();
       try {
         await migrate(database);
@@ -328,9 +329,22 @@ describe.each(testTargets)('database schema on $name', (target) => {
         expect(withColumn.map((r) => r.table_name as string).sort()).toEqual(
           [...tenantTableNames(), 'user'].sort(),
         );
+        const seeded = new Set(
+          (await rows(database, sql`select key from retention_class`)).map(
+            (r) => r.key as string,
+          ),
+        );
         for (const column of withColumn) {
-          expect(column.is_nullable).toBe('NO');
-          expect(column.column_default).toBe("'standard'::text");
+          const table = column.table_name as string;
+          // Standard, unless the table passes `defaultRetentionClass`; then the
+          // migrated database must agree with what the schema declares.
+          const expected = declaredRetentionClasses().get(table) ?? 'standard';
+          expect(column.is_nullable, table).toBe('NO');
+          expect(column.column_default, table).toBe(`'${expected}'::text`);
+          expect(
+            seeded.has(expected),
+            `${table} defaults to ${expected}, which is not a seeded retention class`,
+          ).toBe(true);
         }
         const links = await rows(
           database,
