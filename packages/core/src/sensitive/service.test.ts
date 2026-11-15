@@ -1078,6 +1078,24 @@ describe.each(testTargets)('sensitive data service on $name', (target) => {
       ).rejects.toThrow(/category/i);
     });
 
+    it.each([
+      'consent',
+      'contract',
+      'legal-obligation',
+      'vital-interest',
+    ] as const)('accept the legal basis %s', async (legalBasis) => {
+      const personId = await newPerson();
+      const written = await writeSensitive(
+        db(),
+        ctxFor(editorAll),
+        personId,
+        'dietary',
+        VALID_PAYLOADS.dietary,
+        { legalBasis },
+      );
+      expect(written.legalBasis).toBe(legalBasis);
+    });
+
     it('refuse an unknown legal basis', async () => {
       const personId = await newPerson();
       await expect(

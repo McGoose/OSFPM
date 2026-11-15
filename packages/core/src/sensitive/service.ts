@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { hasProjectPermission } from '../access/project-permission.js';
 import {
   department,
+  PERSON_SENSITIVE_LEGAL_BASES,
   person,
   personSensitive,
   project,
@@ -144,14 +145,10 @@ export type WriteSensitiveOptions = {
   readonly consentTextVersion?: string;
 };
 
-// A run-time guard for callers that bypass the types. It repeats
-// `PERSON_SENSITIVE_LEGAL_BASES`, so keep the two in step.
-const LEGAL_BASES: readonly string[] = [
-  'consent',
-  'contract',
-  'legal-obligation',
-  'vital-interest',
-];
+// A run-time guard for callers that bypass the types. It is the table's own
+// list, `PERSON_SENSITIVE_LEGAL_BASES`, so the service and the CHECK cannot
+// disagree.
+const LEGAL_BASES: readonly string[] = PERSON_SENSITIVE_LEGAL_BASES;
 
 // The retention class each category's row gets. The periods that go with the
 // classes live in `retention/defaults.ts`, not here.
