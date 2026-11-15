@@ -1,0 +1,39 @@
+# @osfpm/core
+
+The database layer and shared services of OSFPM: schema, write helper, access checks, sensitive data, production structure, retention, legal holds and contracts. Other modules and the future API build on it. They use its services and events and never read each other's tables.
+
+`src/index.ts` exports only a placeholder version constant today. Import from the module folders by path.
+
+## Folder map
+
+| Path                | What it holds                                                                           |
+| ------------------- | --------------------------------------------------------------------------------------- |
+| `src/db/`           | Clients, the Drizzle schema, the write helper and the column conventions                |
+| `src/access/`       | Permission checks and `AccessDeniedError`                                               |
+| `src/sensitive/`    | The one service that reads and writes crew personal data                                |
+| `src/projects/`     | `createProject`, which also creates the main unit                                       |
+| `src/retention/`    | Retention classes' shipped periods and the end-date calculation                         |
+| `src/legal-hold/`   | Placing, releasing and checking legal holds                                             |
+| `src/contracts/`    | The contracts registry, with amounts hidden from those without `contracts:read-value`   |
+| `migrations/`       | Forward-only SQL migrations and Drizzle snapshots. Never edit one that has been applied |
+| `drizzle.config.ts` | Drizzle Kit settings; the `db:generate` script writes a migration from the schema       |
+
+Each module folder has its own README with entry points and the rules that apply to it. The rules for all code are in `CLAUDE.md` at the repository root.
+
+## Running the tests
+
+Run these from the repository root. By default the tests run on PGlite, in memory:
+
+```sh
+pnpm test
+```
+
+To run them on PostgreSQL as well, point `DATABASE_URL` at a server. Each test creates its own throwaway database and drops it afterwards, so existing data is never touched:
+
+```sh
+DATABASE_URL=postgres://user:pass@host:5432/postgres pnpm test
+```
+
+Add part of a file path to run a subset, for example `pnpm test retention`. Before a commit also run `pnpm typecheck`, `pnpm lint` and `pnpm format:check`.
+
+Test data is the fictional production _The Last Withdrawal_ or invented values, never real people's data.
