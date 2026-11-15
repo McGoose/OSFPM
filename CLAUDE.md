@@ -33,7 +33,8 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Test fixtures may insert rows directly to set up state. Code under test always writes through the write helper.
 - A helper that writes records needs at least one test for each kind of table it serves (organisation-level, project-level, and the project table itself).
 - Only `src/sensitive/service.ts` touches `person_sensitive`; other code calls the service.
-- Access denials are audited before the typed error is thrown; callers catch it inside the transaction and commit, so the audit event survives.
+- Access denials are audited for sensitive data and legal holds; other modules don't audit denials.
+- Where a denial is audited, the event is written before the typed error is thrown. Callers catch the error inside the transaction and commit, so the audit event survives.
 - Tenant tables are defined with `tenantTable()`, never bare `pgTable`.
 - Permission checks run only on the server through the policy engine.
 - Every endpoint gets a test proving 403 without access and no sensitive fields without `sensitive:read`.
