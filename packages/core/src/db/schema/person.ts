@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import { check, foreignKey, text, unique, uuid } from 'drizzle-orm/pg-core';
 import { lowerCaseCheck } from '../address-columns.js';
 import { sqlList, standardColumns, tenantTable } from '../columns.js';
+import { declareOrganisationLevel } from '../project-resolver.js';
 import { department } from './department.js';
 import { organisation } from './organisation.js';
 import { user } from './user.js';
@@ -52,3 +53,6 @@ export const person = tenantTable(
     ),
   ],
 );
+
+/** Belongs to the organisation, never to a project: no project_id, no resolver. */
+declareOrganisationLevel(person);

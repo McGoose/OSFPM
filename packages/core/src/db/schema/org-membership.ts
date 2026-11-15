@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { check, foreignKey, text, unique, uuid } from 'drizzle-orm/pg-core';
 import { sqlList, standardColumns, tenantTable } from '../columns.js';
+import { declareOrganisationLevel } from '../project-resolver.js';
 import { organisation } from './organisation.js';
 import { user } from './user.js';
 
@@ -54,3 +55,6 @@ export const orgMembership = tenantTable(
     ),
   ],
 );
+
+/** Belongs to the organisation, never to a project: no project_id, no resolver. */
+declareOrganisationLevel(orgMembership);

@@ -6,6 +6,7 @@ import {
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { sqlList, standardColumns, tenantTable } from '../columns.js';
+import { declareOrganisationLevel } from '../project-resolver.js';
 import { user } from './user.js';
 
 export const ORGANISATION_STATUSES = ['active', 'suspended'] as const;
@@ -47,3 +48,6 @@ export const organisation = tenantTable(
     ),
   ],
 );
+
+/** Belongs to the organisation, never to a project: no project_id, no resolver. */
+declareOrganisationLevel(organisation);

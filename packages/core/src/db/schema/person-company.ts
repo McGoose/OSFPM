@@ -9,6 +9,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { dateRangeCheck } from '../address-columns.js';
 import { sqlList, standardColumns, tenantTable } from '../columns.js';
+import { declareOrganisationLevel } from '../project-resolver.js';
 import { company } from './company.js';
 import { organisation } from './organisation.js';
 import { person } from './person.js';
@@ -56,3 +57,6 @@ export const personCompany = tenantTable(
     dateRangeCheck('person_company_dates_check', t.startDate, t.endDate),
   ],
 );
+
+/** Belongs to the organisation, never to a project: no project_id, no resolver. */
+declareOrganisationLevel(personCompany);
