@@ -10,6 +10,7 @@ import {
 } from './columns.js';
 import { newId } from './ids.js';
 import { migrate } from './migrate.js';
+import { hasProjectResolver, isOrganisationLevel } from './project-resolver.js';
 import * as schemaModule from './schema/index.js';
 import {
   department,
@@ -217,6 +218,46 @@ describe('constraint names in the schema', () => {
       .sort();
     expect(standard.length).toBeGreaterThanOrEqual(9);
     expect([...tenantTableNames()].sort()).toEqual(standard);
+  });
+});
+
+describe('project resolution in the schema', () => {
+  const tenant = schemaTables.filter((table) =>
+    tenantTableNames().has(getTableName(table)),
+  );
+  const hasProjectId = (table: PgTable) =>
+    getTableConfig(table).columns.some((c) => c.name === 'project_id');
+  const names = (tables: PgTable[]) => tables.map(getTableName).sort();
+
+  it('finds the tenant tables it is meant to check', () => {
+    // Guards against the filters matching nothing and passing for nothing.
+    expect(tenant.filter(hasProjectId).length).toBeGreaterThanOrEqual(5);
+    expect(
+      tenant.filter((table) => !hasProjectId(table)).length,
+    ).toBeGreaterThanOrEqual(5);
+    expect(tenant.some(hasProjectResolver)).toBe(true);
+    expect(tenant.some(isOrganisationLevel)).toBe(true);
+  });
+
+  // A child table with no project_id and no resolver files its changes under
+  // the organisation, as if it belonged to no project, without any error.
+  it('gives every tenant table without a project_id a project resolver or an organisation-level declaration', () => {
+    const undeclared = tenant.filter(
+      (table) =>
+        !hasProjectId(table) &&
+        !hasProjectResolver(table) &&
+        !isOrganisationLevel(table),
+    );
+    expect(names(undeclared)).toEqual([]);
+  });
+
+  it('declares only tables with neither a project_id nor a resolver as organisation-level', () => {
+    const contradicting = tenant.filter(
+      (table) =>
+        isOrganisationLevel(table) &&
+        (hasProjectId(table) || hasProjectResolver(table)),
+    );
+    expect(names(contradicting)).toEqual([]);
   });
 });
 
