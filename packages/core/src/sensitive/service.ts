@@ -351,7 +351,9 @@ export async function readSensitive<C extends SensitiveCategory>(
  * the notifier. The write and the notice share one savepoint: if the notifier
  * throws, the row, its change event and the notice are all rolled back, even
  * when the caller catches the error and commits. Writing over a deleted record
- * restores it.
+ * restores it. A write that changes no stored field, such as the same staff
+ * writing the same payload again, writes nothing (see `updateRecord`) but
+ * still queues the notice.
  *
  * @throws SensitiveAccessDeniedError (after auditing it) when not allowed.
  * @throws SensitivePayloadInvalidError for a payload that breaks its category

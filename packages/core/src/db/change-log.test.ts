@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { sql } from 'drizzle-orm';
-import { text, uuid } from 'drizzle-orm/pg-core';
+import { jsonb, text, uuid } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { APPEND_ONLY_SQLSTATE, appendOnlyMigrationSql } from './append-only.js';
 import type { Database } from './client.js';
@@ -49,6 +49,7 @@ const dummyRecord = tenantTable('dummy_record', () => organisation.id, {
   projectId: uuid('project_id'),
   title: text('title').notNull(),
   secretNote: text('secret_note'),
+  layout: jsonb('layout').$type<Record<string, unknown>>(),
 });
 markSensitive(dummyRecord, ['secretNote']);
 
@@ -72,7 +73,8 @@ const CREATE_DUMMY_TABLE = sql`
     retention_class text,
     project_id uuid,
     title text not null,
-    secret_note text
+    secret_note text,
+    layout jsonb
   )`;
 
 type Row = Record<string, unknown>;
@@ -1210,6 +1212,170 @@ describe.each(testTargets)('change log and write helper on $name', (target) => {
       expect(await seqsFor(database, t.organisationId, t.projectId)).toEqual([
         1, 2,
       ]);
+    });
+
+    describe('an update that changes no field', () => {
+      async function seedRecord() {
+        const t = await seedTenant(database);
+        const ctx = contextFor(userId);
+        const created = await database.db.transaction((tx) =>
+          insertRecord(
+            tx,
+            dummyRecord,
+            dummyValues(t.organisationId, t.projectId),
+            ctx,
+          ),
+        );
+        return { t, ctx, created };
+      }
+
+      it.each([
+        ['the same value', { title: 'Call sheet' }],
+        ['an empty patch', {}],
+        ['a null for a column that is already null', { secretNote: null }],
+        ['only undefined values', { title: undefined }],
+      ])(
+        'with %s writes nothing and returns the current record',
+        async (_name, patch) => {
+          const { t, ctx, created } = await seedRecord();
+
+          const result = await database.db.transaction((tx) =>
+            updateRecord(tx, dummyRecord, created.id, 1, patch, ctx),
+          );
+
+          expect(result).toEqual(created);
+          expect(await eventsFor(database, created.id)).toHaveLength(1);
+          expect(
+            await seqsFor(database, t.organisationId, t.projectId),
+          ).toEqual([1]);
+        },
+      );
+
+      // PostgreSQL stores jsonb with its own key order (shorter keys first, then
+      // alphabetical), so the stored value never matches the order a caller
+      // wrote. Only the value counts, not the order of an object's keys.
+      it('with the same jsonb value in another key order writes nothing', async () => {
+        const t = await seedTenant(database);
+        const ctx = contextFor(userId);
+        const created = await database.db.transaction((tx) =>
+          insertRecord(
+            tx,
+            dummyRecord,
+            dummyValues(t.organisationId, t.projectId, {
+              layout: { zebra: 1, apple: { y: 2, x: 3 } },
+            }),
+            ctx,
+          ),
+        );
+
+        const result = await database.db.transaction((tx) =>
+          updateRecord(
+            tx,
+            dummyRecord,
+            created.id,
+            1,
+            { layout: { zebra: 1, apple: { y: 2, x: 3 } } },
+            ctx,
+          ),
+        );
+
+        expect(result).toEqual(created);
+        expect(await eventsFor(database, created.id)).toHaveLength(1);
+      });
+
+      it('with a jsonb array in another order is a change', async () => {
+        const t = await seedTenant(database);
+        const ctx = contextFor(userId);
+        const created = await database.db.transaction((tx) =>
+          insertRecord(
+            tx,
+            dummyRecord,
+            dummyValues(t.organisationId, t.projectId, {
+              layout: { rows: [1, 2] },
+            }),
+            ctx,
+          ),
+        );
+
+        const result = await database.db.transaction((tx) =>
+          updateRecord(
+            tx,
+            dummyRecord,
+            created.id,
+            1,
+            { layout: { rows: [2, 1] } },
+            ctx,
+          ),
+        );
+
+        expect(result.version).toBe(2);
+        expect(result.layout).toEqual({ rows: [2, 1] });
+      });
+
+      it('bumps no version and takes no sequence number', async () => {
+        const { t, ctx, created } = await seedRecord();
+        await database.db.transaction((tx) =>
+          updateRecord(
+            tx,
+            dummyRecord,
+            created.id,
+            1,
+            { title: 'Call sheet' },
+            ctx,
+          ),
+        );
+
+        // Version 1 is still current, and the next change is the next number.
+        const revised = await database.db.transaction((tx) =>
+          updateRecord(
+            tx,
+            dummyRecord,
+            created.id,
+            1,
+            { title: 'Revised' },
+            ctx,
+          ),
+        );
+        expect(revised.version).toBe(2);
+        expect(await seqsFor(database, t.organisationId, t.projectId)).toEqual([
+          1, 2,
+        ]);
+      });
+
+      it('still throws VersionConflictError when the version is stale', async () => {
+        const { t, ctx, created } = await seedRecord();
+        await database.db.transaction((tx) =>
+          updateRecord(
+            tx,
+            dummyRecord,
+            created.id,
+            1,
+            { title: 'Second' },
+            ctx,
+          ),
+        );
+
+        // The patch equals the stored title, but the caller's version is old.
+        const attempt = database.db.transaction((tx) =>
+          updateRecord(
+            tx,
+            dummyRecord,
+            created.id,
+            1,
+            { title: 'Second' },
+            ctx,
+          ),
+        );
+        await expect(attempt).rejects.toBeInstanceOf(VersionConflictError);
+        await expect(attempt).rejects.toMatchObject({
+          expectedVersion: 1,
+          actualVersion: 2,
+        });
+        expect(await eventsFor(database, created.id)).toHaveLength(2);
+        expect(await seqsFor(database, t.organisationId, t.projectId)).toEqual([
+          1, 2,
+        ]);
+      });
     });
 
     it('throws RecordNotFoundError for an unknown id', async () => {
