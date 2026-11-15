@@ -20,7 +20,11 @@ export const MAIN_UNIT = { key: 'main', name: 'Main unit' } as const;
  * counter row and its events are rolled back too, even when the caller catches
  * the error and commits.
  *
- * Whether the project may have episodes is not decided here.
+ * Whether the project may have episodes is not decided here. Checks no
+ * permission: the caller must have done that.
+ *
+ * @throws The errors of `insertRecord` (`MissingActingUserError`,
+ * `RecordWriteError`), for either record.
  */
 export function createProject(
   tx: Tx,

@@ -8,8 +8,10 @@ export const RETENTION_CLASS_KEYS = [
   'minor-record',
   'security-log',
 ] as const;
+/** One value of `RETENTION_CLASS_KEYS`. */
 export type RetentionClassKey = (typeof RETENTION_CLASS_KEYS)[number];
 
+/** The shipped period for one retention class, and whether it is verified. */
 export type RetentionDefault = {
   /**
    * Whole years to keep a record after its anchor date. `null` means no
@@ -23,7 +25,9 @@ export type RetentionDefault = {
 /**
  * Periods that ship with OSFPM, one per class. They are starting points, not
  * legal advice, so none is verified. Installs and rule packs will override
- * them later; until then this constant is the only place periods live.
+ * them later; until then this constant is the only place periods live. This is
+ * the exception CLAUDE.md, Data rules allows for shipped defaults marked
+ * `verified: false`: never repeat a period elsewhere.
  */
 export const SHIPPED_RETENTION_DEFAULTS: Readonly<
   Record<RetentionClassKey, RetentionDefault>

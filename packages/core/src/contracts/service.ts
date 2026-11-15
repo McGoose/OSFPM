@@ -69,6 +69,7 @@ import {
  * restores it, because the unique keys count deleted rows too.
  */
 
+/** Who is acting, and on which server and clock. Always a user. */
 export type ContractContext = {
   /** The user acting. */
   readonly userId: string;
@@ -86,6 +87,7 @@ export class ContractInputError extends Error {
   }
 }
 
+/** A party to add: exactly one of a person or a company, in a role. */
 export type ContractPartyInput =
   | {
       readonly personId: string;
@@ -99,11 +101,16 @@ export type ContractPartyInput =
       readonly partyRole: string;
     };
 
+/** A record a contract concerns, named by table and id. */
 export type ContractLinkInput = {
   readonly entityType: ContractLinkEntityType;
   readonly entityId: string;
 };
 
+/**
+ * What `createContract` needs. Leave out `projectId` for an organisation-level
+ * contract. `currency` and `totalValue` need `contracts:read-value`.
+ */
 export type CreateContractValues = {
   readonly organisationId: string;
   /** Leave out for an organisation-level contract. */
@@ -140,6 +147,7 @@ export type ContractChanges = {
   readonly totalValue?: string | null;
 };
 
+/** Which contracts `listContracts` returns: one scope, optionally narrowed. */
 export type ContractFilter = {
   readonly organisationId: string;
   /**
@@ -152,7 +160,9 @@ export type ContractFilter = {
 };
 
 type ContractRow = typeof contract.$inferSelect;
+/** A stored `contract_party` row, as the party calls return it. */
 export type ContractPartyRow = typeof contractParty.$inferSelect;
+/** A stored `contract_link` row, as the link calls return it. */
 export type ContractLinkRow = typeof contractLink.$inferSelect;
 
 /**
@@ -216,6 +226,8 @@ async function findContract(tx: Tx, id: string) {
   return found;
 }
 
+// The keys are removed, not set to null or 0, so a caller cannot tell a hidden
+// amount from an empty one.
 function withoutAmounts(
   row: ContractRow,
 ): Omit<ContractRow, 'currency' | 'totalValue'> {
@@ -286,6 +298,8 @@ type LinkTarget = {
   readonly projectKey: AnyPgColumn | null;
 };
 
+// Where each link type points. The compiler requires an entry for every
+// `ContractLinkEntityType`, and `checkLinkTarget` only reads it for own keys.
 const LINK_TARGETS: Record<ContractLinkEntityType, LinkTarget> = {
   project: { table: project, projectKey: project.id },
   person: { table: person, projectKey: null },
@@ -473,8 +487,12 @@ export async function createContract(
 /**
  * Changes fields of a contract. Needs `contracts:edit`; naming `totalValue`
  * or `currency` in `changes`, even to clear it, needs `contracts:read-value`
- * as well. A stale `version` throws `VersionConflictError`. The result hides
- * the amount from a caller without `contracts:read-value`, whatever changed.
+ * as well. The result hides the amount from a caller without
+ * `contracts:read-value`, whatever changed.
+ *
+ * @throws AccessDeniedError, with no scope, for a contract that is unknown,
+ * deleted or forbidden: all three look the same, so ids cannot be probed.
+ * @throws VersionConflictError for a stale `version`.
  */
 export async function updateContract(
   tx: Tx,
@@ -527,7 +545,9 @@ export async function updateContract(
  * company must exist, not be deleted and be in the contract's organisation, or
  * `ContractInputError` is thrown, also when the party was removed earlier. A
  * party removed earlier is restored; a repeated live one is refused by the
- * database.
+ * database (`RecordWriteError`).
+ *
+ * @throws AccessDeniedError, with no scope, as `updateContract`.
  */
 export async function addContractParty(
   tx: Tx,
@@ -569,7 +589,13 @@ export async function addContractParty(
   return insertRecord(tx, contractParty, values, writeContext(ctx));
 }
 
-/** Removes a party by soft delete. Needs `contracts:edit` on its contract. */
+/**
+ * Removes a party by soft delete. Needs `contracts:edit` on its contract.
+ *
+ * @throws AccessDeniedError, with no scope, for an unknown, removed or
+ * forbidden party.
+ * @throws VersionConflictError for a stale `version`.
+ */
 export async function removeContractParty(
   tx: Tx,
   ctx: ContractContext,
@@ -600,7 +626,9 @@ export async function removeContractParty(
  * must exist, not be deleted and be in the contract's organisation, and for a
  * project contract a target of a project must be in that project, or
  * `ContractInputError` is thrown. A link removed earlier is restored; a
- * repeated live one is refused by the database.
+ * repeated live one is refused by the database (`RecordWriteError`).
+ *
+ * @throws AccessDeniedError, with no scope, as `updateContract`.
  */
 export async function addContractLink(
   tx: Tx,
@@ -642,7 +670,13 @@ export async function addContractLink(
   );
 }
 
-/** Removes a link by soft delete. Needs `contracts:edit` on its contract. */
+/**
+ * Removes a link by soft delete. Needs `contracts:edit` on its contract.
+ *
+ * @throws AccessDeniedError, with no scope, for an unknown, removed or
+ * forbidden link.
+ * @throws VersionConflictError for a stale `version`.
+ */
 export async function removeContractLink(
   tx: Tx,
   ctx: ContractContext,
@@ -666,6 +700,8 @@ export async function removeContractLink(
  * Reads one contract with its parties and links. Needs `contracts:read`;
  * `currency` and `totalValue` are in the result only with
  * `contracts:read-value`.
+ *
+ * @throws AccessDeniedError, with no scope, as `updateContract`.
  */
 export async function getContract(
   tx: Tx,
@@ -689,6 +725,8 @@ export async function getContract(
  * Lists the contracts of one project, or the organisation-level ones, oldest
  * first, with their parties and links. Needs `contracts:read` on that scope;
  * amounts follow the same rule as `getContract`.
+ *
+ * @throws AccessDeniedError, naming the scope, because the caller supplied it.
  */
 export async function listContracts(
   tx: Tx,

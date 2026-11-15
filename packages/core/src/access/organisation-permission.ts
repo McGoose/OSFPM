@@ -20,7 +20,8 @@ import {
  * organisations. Organisation roles do not grant project permissions; see
  * `hasProjectPermission`.
  *
- * The general policy engine comes later and may reuse this.
+ * Server-side only: permission checks never run on a client (CLAUDE.md, Data
+ * rules). The general policy engine comes later and may reuse this.
  */
 export async function hasOrganisationPermission(
   tx: Tx,

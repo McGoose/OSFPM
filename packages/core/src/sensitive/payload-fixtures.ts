@@ -1,11 +1,13 @@
 import type { SensitiveCategory } from './schemas.js';
 
-/**
- * Valid payloads for tests, one per category. Invented details for people in
- * the demo production The Last Withdrawal; never real data.
- */
+/** An invented company id for the `representation` payload below. */
 export const AGENCY_ID = '0192f0a0-7c3e-7a3b-8a4d-1b2c3d4e5f60';
 
+/**
+ * Valid payloads for tests, one per category. Invented details for people in
+ * the demo production The Last Withdrawal; never real data (CLAUDE.md, Test
+ * data).
+ */
 export const VALID_PAYLOADS: Record<
   SensitiveCategory,
   Record<string, unknown>
