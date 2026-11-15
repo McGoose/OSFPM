@@ -1,5 +1,6 @@
 import { and, asc, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { AccessDeniedError } from '../access/access-denied-error.js';
 import {
   ensurePermissions,
   grantOnOrganisation,
@@ -25,7 +26,6 @@ import {
 } from './permissions.js';
 import {
   isUnderLegalHold,
-  LegalHoldAccessDeniedError,
   LegalHoldInputError,
   placeLegalHold,
   releaseLegalHold,
@@ -429,19 +429,31 @@ describe.each(testTargets)('legal holds on $name', (target) => {
 
     it('refuses a user without legal-hold:manage, audits the denial and writes no hold', async () => {
       const { organisationId, projectId, outsider } = await setup();
-      for (const values of [
-        { organisationId, projectId, reason: REASON },
-        { organisationId, reason: REASON },
-        {
-          organisationId,
-          entityType: 'person',
-          entityId: newId(),
-          reason: REASON,
-        },
-      ]) {
-        await expect(
-          placeLegalHold(db(), ctxFor(outsider), values),
-        ).rejects.toBeInstanceOf(LegalHoldAccessDeniedError);
+      // The caller names the scope here, so the error says which kind it was.
+      const attempts = [
+        [{ organisationId, projectId, reason: REASON }, 'project'],
+        [{ organisationId, reason: REASON }, 'organisation'],
+        [
+          {
+            organisationId,
+            entityType: 'person',
+            entityId: newId(),
+            reason: REASON,
+          },
+          'organisation',
+        ],
+      ] as const;
+      for (const [values, scope] of attempts) {
+        const error = await placeLegalHold(
+          db(),
+          ctxFor(outsider),
+          values,
+        ).catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(AccessDeniedError);
+        expect(error).toMatchObject({
+          permission: 'legal-hold:manage',
+          scope,
+        });
       }
       expect(await holdRows(organisationId)).toEqual([]);
       const denied = await auditOf(organisationId, 'legal-hold.denied');
@@ -463,7 +475,7 @@ describe.each(testTargets)('legal holds on $name', (target) => {
             projectId,
             reason: REASON,
           }),
-        ).rejects.toBeInstanceOf(LegalHoldAccessDeniedError);
+        ).rejects.toBeInstanceOf(AccessDeniedError);
       });
       expect(await auditOf(organisationId, 'legal-hold.denied')).toHaveLength(
         1,
@@ -478,14 +490,14 @@ describe.each(testTargets)('legal holds on $name', (target) => {
           organisationId,
           reason: REASON,
         }),
-      ).rejects.toBeInstanceOf(LegalHoldAccessDeniedError);
+      ).rejects.toBeInstanceOf(AccessDeniedError);
       await expect(
         placeLegalHold(db(), ctxFor(organisationManager), {
           organisationId,
           projectId,
           reason: REASON,
         }),
-      ).rejects.toBeInstanceOf(LegalHoldAccessDeniedError);
+      ).rejects.toBeInstanceOf(AccessDeniedError);
       expect(await holdRows(organisationId)).toEqual([]);
     });
 
@@ -498,7 +510,7 @@ describe.each(testTargets)('legal holds on $name', (target) => {
           projectId: otherProject,
           reason: REASON,
         }),
-      ).rejects.toBeInstanceOf(LegalHoldAccessDeniedError);
+      ).rejects.toBeInstanceOf(AccessDeniedError);
     });
 
     it('refuses a project of another organisation without writing anything', async () => {
@@ -705,9 +717,14 @@ describe.each(testTargets)('legal holds on $name', (target) => {
         projectId,
         reason: REASON,
       });
-      await expect(
-        releaseLegalHold(db(), ctxFor(outsider), hold.id, RELEASE_REASON),
-      ).rejects.toBeInstanceOf(LegalHoldAccessDeniedError);
+      const error = await releaseLegalHold(
+        db(),
+        ctxFor(outsider),
+        hold.id,
+        RELEASE_REASON,
+      ).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(AccessDeniedError);
+      expect(error).toMatchObject({ permission: 'legal-hold:manage' });
       const [row] = await holdRows(organisationId);
       expect(row).toMatchObject({ releasedAt: null, version: 1 });
       const denied = await auditOf(organisationId, 'legal-hold.denied');
@@ -728,7 +745,7 @@ describe.each(testTargets)('legal holds on $name', (target) => {
       });
       await expect(
         releaseLegalHold(db(), ctxFor(projectManager), hold.id, RELEASE_REASON),
-      ).rejects.toBeInstanceOf(LegalHoldAccessDeniedError);
+      ).rejects.toBeInstanceOf(AccessDeniedError);
       const released = await releaseLegalHold(
         db(),
         ctxFor(organisationManager, () => RELEASED_AT),
@@ -736,6 +753,46 @@ describe.each(testTargets)('legal holds on $name', (target) => {
         RELEASE_REASON,
       );
       expect(released.releasedBy).toBe(organisationManager);
+    });
+
+    // The caller names only an id, so the error must not say which scope a hold
+    // is in: an unknown id would have no scope to name, and the difference
+    // would tell whether the id exists.
+    it('answers an unknown hold, a forbidden project hold and a forbidden organisation hold in the same way', async () => {
+      const {
+        organisationId,
+        projectId,
+        projectManager,
+        organisationManager,
+        outsider,
+      } = await setup();
+      const projectHold = await placeLegalHold(db(), ctxFor(projectManager), {
+        organisationId,
+        projectId,
+        reason: REASON,
+      });
+      const organisationHold = await placeLegalHold(
+        db(),
+        ctxFor(organisationManager),
+        { organisationId, reason: REASON },
+      );
+      const answers: unknown[] = [];
+      for (const id of [newId(), projectHold.id, organisationHold.id]) {
+        answers.push(
+          await releaseLegalHold(
+            db(),
+            ctxFor(outsider),
+            id,
+            RELEASE_REASON,
+          ).catch((e: unknown) => e),
+        );
+      }
+      for (const answer of answers) {
+        expect(answer).toBeInstanceOf(AccessDeniedError);
+        expect(answer).toMatchObject({ permission: 'legal-hold:manage' });
+        expect((answer as AccessDeniedError).scope).toBeUndefined();
+      }
+      expect(new Set(answers.map((a) => (a as Error).message)).size).toBe(1);
     });
 
     it('refuses an unknown hold like any other denial', async () => {
@@ -747,7 +804,7 @@ describe.each(testTargets)('legal holds on $name', (target) => {
           newId(),
           RELEASE_REASON,
         ),
-      ).rejects.toBeInstanceOf(LegalHoldAccessDeniedError);
+      ).rejects.toBeInstanceOf(AccessDeniedError);
       // No organisation is known for an unknown id, so the event has none.
       const denied = await db()
         .select()
@@ -781,7 +838,7 @@ describe.each(testTargets)('legal holds on $name', (target) => {
           hold.id,
           RELEASE_REASON,
         ),
-      ).rejects.toBeInstanceOf(LegalHoldAccessDeniedError);
+      ).rejects.toBeInstanceOf(AccessDeniedError);
     });
 
     it('refuses an empty release reason', async () => {

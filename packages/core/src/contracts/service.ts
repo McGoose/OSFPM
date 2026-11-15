@@ -9,6 +9,7 @@ import {
   type SQL,
 } from 'drizzle-orm';
 import type { AnyPgColumn, PgTable } from 'drizzle-orm/pg-core';
+import { AccessDeniedError } from '../access/access-denied-error.js';
 import {
   hasScopedPermission,
   type PermissionScope,
@@ -58,9 +59,11 @@ import {
  * well as `contracts:edit`, so nobody overwrites an amount they cannot see.
  *
  * A call on a contract that does not exist, is deleted or belongs to another
- * organisation fails like any other denial, so ids cannot be probed.
- * Contracts are not sensitive personal data, so a denial throws
- * `ContractAccessDeniedError` and writes no audit event.
+ * organisation fails like any other denial, so ids cannot be probed. For that
+ * reason the `AccessDeniedError` of a call that names a contract by id does not
+ * say which scope the contract is in; one that names the scope, a create or a
+ * list, does. Contracts are not sensitive personal data, so a denial writes no
+ * audit event.
  *
  * Parties and links are removed by soft delete. Adding one that was removed
  * restores it, because the unique keys count deleted rows too.
@@ -75,15 +78,7 @@ export type ContractContext = {
   readonly clock: () => Date;
 };
 
-/** The caller lacks `permission`. Carries no ids and no values. */
-export class ContractAccessDeniedError extends Error {
-  constructor(readonly permission: string) {
-    super(`Contract access denied: ${permission} is needed`);
-    this.name = 'ContractAccessDeniedError';
-  }
-}
-
-/** A link target is refused, or a link has an unknown type. Carries no ids. */
+/** A party or link target is refused, or a link has an unknown type. Carries no ids. */
 export class ContractInputError extends Error {
   constructor(message: string) {
     super(message);
@@ -183,14 +178,31 @@ function scopeOf(row: PermissionScope): PermissionScope {
   return { organisationId: row.organisationId, projectId: row.projectId };
 }
 
-async function requirePermission(
+/** For a scope the caller named: the error says whether it is a project or the organisation. */
+async function requireInScope(
   tx: Tx,
   ctx: ContractContext,
   scope: PermissionScope,
   key: string,
 ): Promise<void> {
   if (!(await hasScopedPermission(tx, ctx.userId, scope, key))) {
-    throw new ContractAccessDeniedError(key);
+    throw new AccessDeniedError(key, scope);
+  }
+}
+
+/**
+ * For a contract the caller named by id: `scope` is where the contract is, and
+ * the error does not say so, or an unknown id would answer differently from a
+ * forbidden one.
+ */
+async function requireOnRecord(
+  tx: Tx,
+  ctx: ContractContext,
+  scope: PermissionScope,
+  key: string,
+): Promise<void> {
+  if (!(await hasScopedPermission(tx, ctx.userId, scope, key))) {
+    throw new AccessDeniedError(key);
   }
 }
 
@@ -387,7 +399,7 @@ function linkValues(parent: ContractRow, link: ContractLinkInput) {
  * Creates a contract, with its parties and links, in one savepoint: it all
  * happens or none of it does, including the change events and their sequence
  * numbers. Needs `contracts:edit`, and `contracts:read-value` as well when it
- * sets an amount or a currency. Throws `ContractAccessDeniedError`,
+ * sets an amount or a currency. Throws `AccessDeniedError`,
  * `ContractInputError` for a refused party or link target (before anything is
  * written), and `RecordWriteError` when the database refuses a row, for
  * example a repeated party.
@@ -401,9 +413,9 @@ export async function createContract(
     organisationId: values.organisationId,
     projectId: values.projectId ?? null,
   };
-  await requirePermission(tx, ctx, scope, CONTRACTS_EDIT_PERMISSION);
+  await requireInScope(tx, ctx, scope, CONTRACTS_EDIT_PERMISSION);
   if (values.currency != null || values.totalValue != null) {
-    await requirePermission(tx, ctx, scope, CONTRACTS_READ_VALUE_PERMISSION);
+    await requireInScope(tx, ctx, scope, CONTRACTS_READ_VALUE_PERMISSION);
   }
   for (const party of values.parties ?? []) {
     await checkPartyTarget(tx, scope, party);
@@ -468,13 +480,13 @@ export async function updateContract(
   changes: ContractChanges,
 ): Promise<ContractView> {
   const found = await findContract(tx, id);
-  if (!found) throw new ContractAccessDeniedError(CONTRACTS_EDIT_PERMISSION);
+  if (!found) throw new AccessDeniedError(CONTRACTS_EDIT_PERMISSION);
   const scope = scopeOf(found);
-  await requirePermission(tx, ctx, scope, CONTRACTS_EDIT_PERMISSION);
+  await requireOnRecord(tx, ctx, scope, CONTRACTS_EDIT_PERMISSION);
   const changesAmount =
     changes.totalValue !== undefined || changes.currency !== undefined;
   if (changesAmount) {
-    await requirePermission(tx, ctx, scope, CONTRACTS_READ_VALUE_PERMISSION);
+    await requireOnRecord(tx, ctx, scope, CONTRACTS_READ_VALUE_PERMISSION);
   }
   const patch: UpdatePatch<typeof contract> = {
     kind: changes.kind,
@@ -520,8 +532,8 @@ export async function addContractParty(
   party: ContractPartyInput,
 ): Promise<ContractPartyRow> {
   const parent = await findContract(tx, contractId);
-  if (!parent) throw new ContractAccessDeniedError(CONTRACTS_EDIT_PERMISSION);
-  await requirePermission(tx, ctx, scopeOf(parent), CONTRACTS_EDIT_PERMISSION);
+  if (!parent) throw new AccessDeniedError(CONTRACTS_EDIT_PERMISSION);
+  await requireOnRecord(tx, ctx, scopeOf(parent), CONTRACTS_EDIT_PERMISSION);
   await checkPartyTarget(tx, scopeOf(parent), party);
   const values = partyValues(parent, party);
   const [removed] = await tx
@@ -567,9 +579,9 @@ export async function removeContractParty(
     .limit(1);
   const parent = party ? await findContract(tx, party.contractId) : undefined;
   if (!party || !parent) {
-    throw new ContractAccessDeniedError(CONTRACTS_EDIT_PERMISSION);
+    throw new AccessDeniedError(CONTRACTS_EDIT_PERMISSION);
   }
-  await requirePermission(tx, ctx, scopeOf(parent), CONTRACTS_EDIT_PERMISSION);
+  await requireOnRecord(tx, ctx, scopeOf(parent), CONTRACTS_EDIT_PERMISSION);
   return softDeleteRecord(
     tx,
     contractParty,
@@ -593,9 +605,9 @@ export async function addContractLink(
   link: ContractLinkInput,
 ): Promise<ContractLinkRow> {
   const parent = await findContract(tx, contractId);
-  if (!parent) throw new ContractAccessDeniedError(CONTRACTS_EDIT_PERMISSION);
+  if (!parent) throw new AccessDeniedError(CONTRACTS_EDIT_PERMISSION);
   const scope = scopeOf(parent);
-  await requirePermission(tx, ctx, scope, CONTRACTS_EDIT_PERMISSION);
+  await requireOnRecord(tx, ctx, scope, CONTRACTS_EDIT_PERMISSION);
   await checkLinkTarget(tx, scope, link);
   const [removed] = await tx
     .select()
@@ -640,9 +652,9 @@ export async function removeContractLink(
     .limit(1);
   const parent = link ? await findContract(tx, link.contractId) : undefined;
   if (!link || !parent) {
-    throw new ContractAccessDeniedError(CONTRACTS_EDIT_PERMISSION);
+    throw new AccessDeniedError(CONTRACTS_EDIT_PERMISSION);
   }
-  await requirePermission(tx, ctx, scopeOf(parent), CONTRACTS_EDIT_PERMISSION);
+  await requireOnRecord(tx, ctx, scopeOf(parent), CONTRACTS_EDIT_PERMISSION);
   return softDeleteRecord(tx, contractLink, linkId, version, writeContext(ctx));
 }
 
@@ -657,9 +669,9 @@ export async function getContract(
   id: string,
 ): Promise<ContractView> {
   const found = await findContract(tx, id);
-  if (!found) throw new ContractAccessDeniedError(CONTRACTS_READ_PERMISSION);
+  if (!found) throw new AccessDeniedError(CONTRACTS_READ_PERMISSION);
   const scope = scopeOf(found);
-  await requirePermission(tx, ctx, scope, CONTRACTS_READ_PERMISSION);
+  await requireOnRecord(tx, ctx, scope, CONTRACTS_READ_PERMISSION);
   const canSeeValue = await hasScopedPermission(
     tx,
     ctx.userId,
@@ -683,7 +695,7 @@ export async function listContracts(
     organisationId: filter.organisationId,
     projectId: filter.projectId ?? null,
   };
-  await requirePermission(tx, ctx, scope, CONTRACTS_READ_PERMISSION);
+  await requireInScope(tx, ctx, scope, CONTRACTS_READ_PERMISSION);
   const canSeeValue = await hasScopedPermission(
     tx,
     ctx.userId,

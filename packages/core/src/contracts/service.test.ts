@@ -1,5 +1,6 @@
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { AccessDeniedError } from '../access/access-denied-error.js';
 import { syncPermissions } from '../access/permission-sync.js';
 import {
   grantOnOrganisation,
@@ -41,7 +42,6 @@ import {
 import {
   addContractLink,
   addContractParty,
-  ContractAccessDeniedError,
   ContractInputError,
   createContract,
   getContract,
@@ -225,7 +225,7 @@ describe.each(testTargets)('contracts on $name', (target) => {
     );
 
   const denied = (permissionKey: string) => ({
-    name: 'ContractAccessDeniedError',
+    name: 'AccessDeniedError',
     permission: permissionKey,
   });
 
@@ -344,9 +344,11 @@ describe.each(testTargets)('contracts on $name', (target) => {
         const error = await errorOf(
           createContract(db(), at(userId), projectContract(w)),
         );
-        expect(error).toBeInstanceOf(ContractAccessDeniedError);
-        expect(error).toMatchObject(denied(EDIT));
+        expect(error).toBeInstanceOf(AccessDeniedError);
+        // The caller names the scope here, so the error says which kind it was.
+        expect(error).toMatchObject({ ...denied(EDIT), scope: 'project' });
         expect((error as Error).message).not.toContain(w.organisationId);
+        expect((error as Error).message).not.toContain(w.projectId);
       }
       await expectNothingWritten(w);
     });
@@ -356,11 +358,14 @@ describe.each(testTargets)('contracts on $name', (target) => {
       const forOrganisation = await errorOf(
         createContract(db(), at(w.projectManager), organisationContract(w)),
       );
-      expect(forOrganisation).toMatchObject(denied(EDIT));
+      expect(forOrganisation).toMatchObject({
+        ...denied(EDIT),
+        scope: 'organisation',
+      });
       const forProject = await errorOf(
         createContract(db(), at(w.orgManager), projectContract(w)),
       );
-      expect(forProject).toMatchObject(denied(EDIT));
+      expect(forProject).toMatchObject({ ...denied(EDIT), scope: 'project' });
       await expectNothingWritten(w);
     });
 
@@ -1433,7 +1438,11 @@ describe.each(testTargets)('contracts on $name', (target) => {
             projectId,
           }),
         );
-        expect(error).toMatchObject(denied(READ));
+        // The caller names the scope in a list, so the error says which kind.
+        expect(error).toMatchObject({
+          ...denied(READ),
+          scope: projectId === null ? 'organisation' : 'project',
+        });
       }
     });
   });
@@ -1630,9 +1639,48 @@ describe.each(testTargets)('contracts on $name', (target) => {
         () => removeContractLink(db(), who, newId(), 1),
       ];
       for (const call of calls) {
-        expect(await errorOf(call())).toBeInstanceOf(ContractAccessDeniedError);
+        expect(await errorOf(call())).toBeInstanceOf(AccessDeniedError);
       }
       expect(await auditIn(w.organisationId)).toEqual([]);
+    });
+
+    // The caller names only an id, so the error must not say which scope the
+    // contract is in: an unknown id would have no scope to name, and the
+    // difference would tell whether the id exists.
+    it('do not say which scope a contract is in, so an unknown id answers like a forbidden one', async () => {
+      const w = await setup();
+      const projectLevel = await createContract(
+        db(),
+        at(w.projectManager),
+        projectContract(w),
+      );
+      const organisationLevel = await createContract(
+        db(),
+        at(w.orgManager),
+        organisationContract(w),
+      );
+      const who = at(w.outsider);
+      const ids = [newId(), projectLevel.id, organisationLevel.id];
+      const answers: [string, unknown][] = [];
+      for (const id of ids) {
+        answers.push([READ, await errorOf(getContract(db(), who, id))]);
+        answers.push([
+          EDIT,
+          await errorOf(updateContract(db(), who, id, 1, { title: 'Nope' })),
+        ]);
+      }
+      for (const [key, answer] of answers) {
+        expect(answer).toBeInstanceOf(AccessDeniedError);
+        expect(answer).toMatchObject(denied(key));
+        expect((answer as AccessDeniedError).scope).toBeUndefined();
+      }
+      // Whatever the id, one operation gives one message.
+      for (const key of [READ, EDIT]) {
+        const messages = answers
+          .filter(([k]) => k === key)
+          .map(([, answer]) => (answer as Error).message);
+        expect(new Set(messages).size).toBe(1);
+      }
     });
   });
 });

@@ -1,4 +1,5 @@
 import { and, eq, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { AccessDeniedError } from '../access/access-denied-error.js';
 import {
   hasScopedPermission,
   type PermissionScope,
@@ -52,16 +53,6 @@ export type PlaceLegalHoldValues = {
   readonly entityId?: string | null;
   readonly reason: string;
 };
-
-type Operation = 'place' | 'release';
-
-/** The caller may not manage this hold. Carries no ids and no reasons. */
-export class LegalHoldAccessDeniedError extends Error {
-  constructor(readonly operation: Operation) {
-    super(`Managing legal holds denied for ${operation}`);
-    this.name = 'LegalHoldAccessDeniedError';
-  }
-}
 
 /** A reason is missing, or a scope is half set. */
 export class LegalHoldInputError extends Error {
@@ -129,7 +120,7 @@ function requireReason(reason: string, what: string): void {
 }
 
 /**
- * Places a hold. Throws `LegalHoldAccessDeniedError` (after auditing it) when
+ * Places a hold. Throws `AccessDeniedError` (after auditing it) when
  * the user may not manage holds in that scope, `LegalHoldInputError` for an
  * empty reason or a half-set record, and `RecordWriteError` when the database
  * refuses the row, for example a project of another organisation.
@@ -159,7 +150,8 @@ export async function placeLegalHold(
       category: 'legal-hold.denied',
       action: 'place',
     });
-    throw new LegalHoldAccessDeniedError('place');
+    // The caller named the scope, so the error may say which kind it is.
+    throw new AccessDeniedError(LEGAL_HOLD_MANAGE_PERMISSION, scope);
   }
   return tx.transaction(async (inner) => {
     const now = ctx.clock();
@@ -216,7 +208,10 @@ export async function releaseLegalHold(
       category: 'legal-hold.denied',
       action: 'release',
     });
-    throw new LegalHoldAccessDeniedError('release');
+    // The caller named only an id, so the error does not say which scope the
+    // hold is in: an unknown id has none, and the difference would tell whether
+    // the id exists.
+    throw new AccessDeniedError(LEGAL_HOLD_MANAGE_PERMISSION);
   }
   if (found.releasedAt !== null) {
     throw new RecordStateError('legal_hold', holdId, 'release');
