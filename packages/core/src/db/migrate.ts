@@ -8,7 +8,11 @@ export const MIGRATIONS_FOLDER = fileURLToPath(
   new URL('../../migrations', import.meta.url),
 );
 
-/** Applies all pending migrations. The same migration set serves both drivers. */
+/**
+ * Applies all pending migrations. The same migration set serves both drivers.
+ * Migrations are forward-only: never edit one that has been applied (CLAUDE.md,
+ * Data rules). A failing statement is thrown as the driver reports it.
+ */
 export async function migrate(
   database: Database | PostgresDb | PgliteDb,
   migrationsFolder: string = MIGRATIONS_FOLDER,

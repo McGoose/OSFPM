@@ -6,6 +6,10 @@ import { organisation } from './organisation.js';
 import { project } from './project.js';
 import { user } from './user.js';
 
+/**
+ * Allowed values of `project_location.status`. The CHECK is built from this
+ * list, so a new value needs a new migration.
+ */
 export const PROJECT_LOCATION_STATUSES = [
   'scouted',
   'proposed',
@@ -13,6 +17,7 @@ export const PROJECT_LOCATION_STATUSES = [
   'confirmed',
   'rejected',
 ] as const;
+/** One value of `PROJECT_LOCATION_STATUSES`. */
 export type ProjectLocationStatus = (typeof PROJECT_LOCATION_STATUSES)[number];
 
 /** A library location considered or used by one project. */

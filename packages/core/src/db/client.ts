@@ -24,12 +24,14 @@ export type DbConfig =
     }
   | { readonly driver: 'pglite'; readonly client: PGlite };
 
+/** A PostgreSQL handle over a node-postgres pool. `close` ends the pool. */
 export type PostgresDb = {
   readonly driver: 'postgres';
   readonly db: NodePgDatabase<typeof schema>;
   readonly close: () => Promise<void>;
 };
 
+/** A PGlite handle. `close` also closes a `client` the caller passed in. */
 export type PgliteDb = {
   readonly driver: 'pglite';
   readonly db: PgliteDatabase<typeof schema>;
@@ -49,13 +51,22 @@ export type Database = {
   readonly close: () => Promise<void>;
 };
 
+/**
+ * Opens a database for the configured driver. It runs no migrations (see
+ * `migrate`). The overloads only narrow the return type.
+ *
+ * @throws Error for a driver other than `postgres` or `pglite`. The message
+ * names the driver only, never the rest of the config.
+ */
 export function createDatabase(config: {
   driver: 'postgres';
   url: string;
 }): PostgresDb;
+/** PGlite overload: in memory, in `dataDir`, or over an existing client. */
 export function createDatabase(
   config: Extract<DbConfig, { driver: 'pglite' }>,
 ): PgliteDb;
+/** General overload, for a `DbConfig` whose driver is not known statically. */
 export function createDatabase(config: DbConfig): Database;
 export function createDatabase(config: DbConfig): PostgresDb | PgliteDb {
   switch (config.driver) {

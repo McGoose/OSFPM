@@ -5,6 +5,10 @@ import { registerProjectResolver } from '../project-resolver.js';
 import { organisation } from './organisation.js';
 import { user } from './user.js';
 
+/**
+ * Allowed values of `project.format`. The CHECK is built from this list, so a
+ * new value needs a new migration.
+ */
 export const PROJECT_FORMATS = [
   'feature',
   'series',
@@ -13,8 +17,13 @@ export const PROJECT_FORMATS = [
   'documentary',
   'other',
 ] as const;
+/** One value of `PROJECT_FORMATS`. */
 export type ProjectFormat = (typeof PROJECT_FORMATS)[number];
 
+/**
+ * Allowed values of `project.status`. The CHECK is built from this list, so a
+ * new value needs a new migration.
+ */
 export const PROJECT_STATUSES = [
   'development',
   'pre-production',
@@ -23,8 +32,16 @@ export const PROJECT_STATUSES = [
   'delivered',
   'archived',
 ] as const;
+/** One value of `PROJECT_STATUSES`. */
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 
+/**
+ * A film production. Most project-level tables point here through a composite
+ * `(organisation_id, project_id)` key, which keeps the reference inside one
+ * organisation. A project's own changes are numbered in its own `change_seq`
+ * counter (see the resolver below). Create projects with `createProject`,
+ * which also creates the main unit.
+ */
 export const project = tenantTable(
   'project',
   () => organisation.id,

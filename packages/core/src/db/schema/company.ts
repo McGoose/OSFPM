@@ -10,6 +10,10 @@ import { declareOrganisationLevel } from '../project-resolver.js';
 import { organisation } from './organisation.js';
 import { user } from './user.js';
 
+/**
+ * Allowed values of `company.kind`. The CHECK is built from this list, so a new
+ * value needs a new migration.
+ */
 export const COMPANY_KINDS = [
   'vendor',
   'co-producer',
@@ -20,6 +24,7 @@ export const COMPANY_KINDS = [
   'rental-house',
   'other',
 ] as const;
+/** One value of `COMPANY_KINDS`. */
 export type CompanyKind = (typeof COMPANY_KINDS)[number];
 
 /** A company in the organisation's library: a vendor, funder, agency and so on. */

@@ -6,6 +6,13 @@ import { contract, contractProjectResolver } from './contract.js';
 import { organisation } from './organisation.js';
 import { user } from './user.js';
 
+/**
+ * Allowed values of `contract_link.entity_type`. The CHECK is built from this
+ * list, so a new value needs a new migration.
+ *
+ * `contract_link.entity_id` has no foreign key, so the contracts service keeps
+ * a lookup entry for each value (`LINK_TARGETS`).
+ */
 export const CONTRACT_LINK_ENTITY_TYPES = [
   'project',
   'person',
@@ -14,6 +21,7 @@ export const CONTRACT_LINK_ENTITY_TYPES = [
   'unit',
   'episode',
 ] as const;
+/** One value of `CONTRACT_LINK_ENTITY_TYPES`. */
 export type ContractLinkEntityType =
   (typeof CONTRACT_LINK_ENTITY_TYPES)[number];
 

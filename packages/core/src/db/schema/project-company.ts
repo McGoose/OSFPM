@@ -6,6 +6,10 @@ import { organisation } from './organisation.js';
 import { project } from './project.js';
 import { user } from './user.js';
 
+/**
+ * Allowed values of `project_company.role`. The CHECK is built from this list,
+ * so a new value needs a new migration.
+ */
 export const PROJECT_COMPANY_ROLES = [
   'vendor',
   'co-producer',
@@ -14,13 +18,19 @@ export const PROJECT_COMPANY_ROLES = [
   'distributor',
   'other',
 ] as const;
+/** One value of `PROJECT_COMPANY_ROLES`. */
 export type ProjectCompanyRole = (typeof PROJECT_COMPANY_ROLES)[number];
 
+/**
+ * Allowed values of `project_company.status`. The CHECK is built from this
+ * list, so a new value needs a new migration.
+ */
 export const PROJECT_COMPANY_STATUSES = [
   'proposed',
   'confirmed',
   'ended',
 ] as const;
+/** One value of `PROJECT_COMPANY_STATUSES`. */
 export type ProjectCompanyStatus = (typeof PROJECT_COMPANY_STATUSES)[number];
 
 /** A library company's role on one project. */

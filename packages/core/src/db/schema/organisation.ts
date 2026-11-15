@@ -9,7 +9,12 @@ import { sqlList, standardColumns, tenantTable } from '../columns.js';
 import { declareOrganisationLevel } from '../project-resolver.js';
 import { user } from './user.js';
 
+/**
+ * Allowed values of `organisation.status`. The CHECK is built from this list,
+ * so a new value needs a new migration.
+ */
 export const ORGANISATION_STATUSES = ['active', 'suspended'] as const;
+/** One value of `ORGANISATION_STATUSES`. */
 export type OrganisationStatus = (typeof ORGANISATION_STATUSES)[number];
 
 /** The tenant. Its own `organisation_id` is always its `id`. */

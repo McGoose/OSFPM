@@ -30,6 +30,9 @@ const organisationLevel = new WeakSet<PgTable>();
  * `parentKeys` names the columns (by property key) the resolver reads. They
  * become immutable, because changing one could move the record to another
  * project. Moving a record to another parent is a delete plus a create.
+ *
+ * @throws Error when a resolver is already registered for the table, or the
+ * table was declared organisation-level.
  */
 export function registerProjectResolver(
   table: PgTable,
@@ -57,6 +60,8 @@ export function registerProjectResolver(
  * column and no project resolver. A schema test requires every such table to
  * say one or the other, so a child table whose resolver was forgotten does not
  * quietly file its changes under the organisation.
+ *
+ * @throws Error when a project resolver is already registered for the table.
  */
 export function declareOrganisationLevel(table: PgTable): void {
   if (resolvers.has(table)) {

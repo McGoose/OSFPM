@@ -34,6 +34,8 @@ export const rolePermission = tenantTable(
       columns: [t.organisationId, t.departmentId],
       foreignColumns: [department.organisationId, department.id],
     }),
+    // NULLS NOT DISTINCT: a grant with no department is not limited to one,
+    // and a plain UNIQUE would let it repeat.
     unique('role_permission_role_permission_department_unique')
       .on(t.roleId, t.permissionKey, t.departmentId)
       .nullsNotDistinct(),

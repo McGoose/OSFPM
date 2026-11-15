@@ -13,11 +13,16 @@ import { organisation } from './organisation.js';
 import { project } from './project.js';
 import { user } from './user.js';
 
+/**
+ * Allowed values of `episode.status`. The CHECK is built from this list, so a
+ * new value needs a new migration.
+ */
 export const EPISODE_STATUSES = [
   'planned',
   'in-production',
   'delivered',
 ] as const;
+/** One value of `EPISODE_STATUSES`. */
 export type EpisodeStatus = (typeof EPISODE_STATUSES)[number];
 
 /**

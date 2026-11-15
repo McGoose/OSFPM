@@ -17,14 +17,19 @@ export const role = tenantTable(
     isDefault: boolean('is_default').notNull().default(false),
   },
   (t) => [
+    // Composite, so the project must be in the same organisation. A NULL
+    // project (an organisation template) skips the check.
     foreignKey({
       name: 'role_project_fk',
       columns: [t.organisationId, t.projectId],
       foreignColumns: [project.organisationId, project.id],
     }),
+    // NULLS NOT DISTINCT: templates have a NULL project, and a plain UNIQUE
+    // would let the same key repeat among them.
     unique('role_organisation_project_key_unique')
       .on(t.organisationId, t.projectId, t.key)
       .nullsNotDistinct(),
+    // Target for composite tenant foreign keys in later tables.
     unique('role_organisation_id_id_unique').on(t.organisationId, t.id),
   ],
 );

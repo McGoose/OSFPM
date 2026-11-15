@@ -7,14 +7,19 @@ import { department } from './department.js';
 import { organisation } from './organisation.js';
 import { user } from './user.js';
 
+/**
+ * Allowed values of `person.status`. The CHECK is built from this list, so a
+ * new value needs a new migration.
+ */
 export const PERSON_STATUSES = ['active', 'archived'] as const;
+/** One value of `PERSON_STATUSES`. */
 export type PersonStatus = (typeof PERSON_STATUSES)[number];
 
 /**
  * A person in the organisation's library, stored once however many projects
  * they work on. Identity and contact details only: this table has no notes
- * column and holds no sensitive data, ever. Sensitive personal data lives in its
- * own table.
+ * column and holds no sensitive data, ever (CLAUDE.md, Privacy rule). Sensitive
+ * personal data lives in its own table, `person_sensitive`.
  */
 export const person = tenantTable(
   'person',

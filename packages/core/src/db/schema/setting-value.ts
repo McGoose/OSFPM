@@ -12,7 +12,14 @@ import { project } from './project.js';
 import { organisation } from './organisation.js';
 import { user } from './user.js';
 
+/**
+ * Allowed values of `setting_value.layer`. The CHECK is built from this list,
+ * so a new value needs a new migration.
+ *
+ * An `org` row has no project and a `project` row has one; a CHECK enforces it.
+ */
 export const SETTING_LAYERS = ['org', 'project'] as const;
+/** One value of `SETTING_LAYERS`. */
 export type SettingLayer = (typeof SETTING_LAYERS)[number];
 
 /**
@@ -35,6 +42,8 @@ export const settingValue = tenantTable(
       columns: [t.organisationId, t.projectId],
       foreignColumns: [project.organisationId, project.id],
     }),
+    // NULLS NOT DISTINCT: the org layer has a NULL project, and a plain UNIQUE
+    // would let the same key repeat at that layer.
     unique('setting_value_organisation_project_key_unique')
       .on(t.organisationId, t.projectId, t.key)
       .nullsNotDistinct(),

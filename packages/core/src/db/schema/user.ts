@@ -13,13 +13,19 @@ import {
   timestamptz,
 } from '../columns.js';
 
+/**
+ * Allowed values of `user.status`. The CHECK is built from this list, so a new
+ * value needs a new migration.
+ */
 export const USER_STATUSES = ['invited', 'active', 'disabled'] as const;
+/** One value of `USER_STATUSES`. */
 export type UserStatus = (typeof USER_STATUSES)[number];
 
 /**
  * Install-level account. Not tenant-scoped, so it has no `organisation_id`,
  * `owner_org_id` or `visibility`. It must never hold personal details such as
- * phone, address or medical data.
+ * phone, address or medical data (CLAUDE.md, Privacy rule): those belong to
+ * `person` and `person_sensitive`.
  */
 export const user = pgTable(
   'user',

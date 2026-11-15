@@ -18,13 +18,23 @@ import { sqlList } from './sql-list.js';
 
 export { sqlList };
 
+/**
+ * Allowed `visibility` markers on a tenant record (CLAUDE.md, Data rules).
+ * `tenantTable` builds `<table>_visibility_check` from this list, so a new
+ * value needs a new migration.
+ */
 export const VISIBILITIES = [
   'private',
   'project',
   'shared-with-partners',
 ] as const;
+/** One value of `VISIBILITIES`. */
 export type Visibility = (typeof VISIBILITIES)[number];
 
+/**
+ * A `timestamptz` column read and written as a JS `Date`. PostgreSQL stores the
+ * instant in UTC (CLAUDE.md, Data rules).
+ */
 export const timestamptz = (name: string) =>
   timestamp(name, { withTimezone: true, mode: 'date' });
 
@@ -151,9 +161,9 @@ export function tenantTableNames(): ReadonlySet<string> {
  * key from `retention_class` to `retention_class.key`, named
  * `<table>_retention_class_fk`, and the
  * `<table>_visibility_check` CHECK, so tables do not repeat it. Every tenant table goes
- * through this wrapper; use plain `pgTable` only for install-level tables.
- * It also records a retention class the table chose through
- * `defaultRetentionClass` (see `declaredRetentionClasses`).
+ * through this wrapper; use plain `pgTable` only for install-level tables
+ * (CLAUDE.md, Data rules). It also records a retention class the table chose
+ * through `defaultRetentionClass` (see `declaredRetentionClasses`).
  *
  * `organisationId` is lazy so table modules need no import cycle.
  */
@@ -171,6 +181,8 @@ export function tenantTable<
   tenantTableRegistry.add(name);
   const declaredClass = declaredByColumn.get(columns.retentionClass);
   if (declaredClass !== undefined) declaredByTable.set(name, declaredClass);
+  // `self` is typed from the caller's columns. The casts below are safe because
+  // `TenantColumns` requires these three columns on every tenant table.
   return pgTable(name, columns, (self) => [
     foreignKey({
       name: organisationForeignKeyName(name),
@@ -204,6 +216,11 @@ function visibilityCheck(tableName: string, visibility: AnyPgColumn) {
   );
 }
 
+/**
+ * Kinds of actor named on `change_event` and `audit_event`; both tables' CHECKs
+ * are built from this list, so a new value needs a new migration. A `token` or
+ * `email` actor acts for a user (see `WriteContext`).
+ */
 export const ACTOR_TYPES = [
   'user',
   'token',
@@ -211,4 +228,5 @@ export const ACTOR_TYPES = [
   'email',
   'federation',
 ] as const;
+/** One value of `ACTOR_TYPES`. */
 export type ActorType = (typeof ACTOR_TYPES)[number];

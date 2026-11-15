@@ -5,6 +5,12 @@ import { createDatabase, type Database } from './client.js';
 import { migrate } from './migrate.js';
 import * as schema from './schema/index.js';
 
+/**
+ * Test helpers: a database to run against, and ways to read a failure. Only
+ * tests import this file.
+ */
+
+/** A database engine the tests run against: PGlite, or a PostgreSQL server. */
 export type TestTarget = {
   readonly name: 'pglite' | 'postgres';
   /** Creates an empty, isolated database. Call `cleanup` when finished. */
@@ -74,6 +80,7 @@ export const testTargets: TestTarget[] = [
     : []),
 ];
 
+/** A fresh, empty database on `target` with every migration applied. */
 export async function createMigratedDatabase(target: TestTarget) {
   const created = await target.create();
   await migrate(created.database);
@@ -93,7 +100,13 @@ function driverError(error: unknown): DriverError | undefined {
   return undefined;
 }
 
-/** Runs `action` and returns the SQLSTATE code and constraint name it failed with. */
+/**
+ * Runs `action` and returns the SQLSTATE code and constraint name it failed
+ * with.
+ *
+ * @throws Error when `action` succeeds. An error with no driver code is
+ * rethrown as it is.
+ */
 export async function failureOf(action: () => PromiseLike<unknown>) {
   try {
     await action();
@@ -105,6 +118,7 @@ export async function failureOf(action: () => PromiseLike<unknown>) {
   throw new Error('Expected the statement to fail, but it succeeded');
 }
 
+/** SQLSTATE codes tests expect from `failureOf`. */
 export const SQLSTATE = {
   foreignKeyViolation: '23503',
   uniqueViolation: '23505',

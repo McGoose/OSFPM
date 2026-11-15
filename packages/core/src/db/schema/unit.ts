@@ -13,6 +13,12 @@ import { organisation } from './organisation.js';
 import { project } from './project.js';
 import { user } from './user.js';
 
+/**
+ * Allowed values of `unit.kind`. The CHECK is built from this list, so a new
+ * value needs a new migration.
+ *
+ * A project has at most one live `main` unit (a partial unique index).
+ */
 export const UNIT_KINDS = [
   'main',
   'second',
@@ -20,6 +26,7 @@ export const UNIT_KINDS = [
   'vfx',
   'other',
 ] as const;
+/** One value of `UNIT_KINDS`. */
 export type UnitKind = (typeof UNIT_KINDS)[number];
 
 /** A shooting unit of one project: the main unit, a second unit and so on. */
