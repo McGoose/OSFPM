@@ -1,16 +1,24 @@
 import { and, eq, isNull } from 'drizzle-orm';
 import type { Tx } from '../db/write.js';
-import { orgMembership, role, rolePermission } from '../db/schema/index.js';
+import {
+  orgMembership,
+  orgMembershipRole,
+  role,
+  rolePermission,
+} from '../db/schema/index.js';
 
 /**
  * True when `userId` has an active, undeleted membership in `organisationId`
- * whose organisation role holds `key`, in any department scope.
+ * that is linked, through a live `org_membership_role`, to a live organisation
+ * role (`role.project_id` is NULL) granting `key` with no department scope.
  *
- * A membership's role is the organisation template role (`role.project_id` is
- * NULL) with the same key as its `org_role`. Project roles never count here.
- * There is no bypass: owners and admins hold a permission only when their role
- * has it, like everyone else. Invited and removed members hold nothing, and
- * neither do members of other organisations.
+ * A department-scoped grant does not count at organisation level, and project
+ * roles never do. `org_membership.org_role` is the membership tier (owner,
+ * admin and so on) and grants nothing by itself: owners and admins hold a
+ * permission only when a role linked to them has it, like everyone else.
+ * Invited and removed members hold nothing, and neither do members of other
+ * organisations. Organisation roles do not grant project permissions; see
+ * `hasProjectPermission`.
  *
  * The general policy engine comes later and may reuse this.
  */
@@ -24,13 +32,18 @@ export async function hasOrganisationPermission(
     .select({ id: rolePermission.id })
     .from(orgMembership)
     .innerJoin(
+      orgMembershipRole,
+      and(
+        eq(orgMembershipRole.organisationId, orgMembership.organisationId),
+        eq(orgMembershipRole.membershipId, orgMembership.id),
+        isNull(orgMembershipRole.deletedAt),
+      ),
+    )
+    .innerJoin(
       role,
       and(
-        eq(role.organisationId, orgMembership.organisationId),
-        // TODO: replace this key match with a link table between org
-        // memberships and roles. A follow-up prompt changes the internals of
-        // this function only; the signature stays.
-        eq(role.key, orgMembership.orgRole),
+        eq(role.organisationId, orgMembershipRole.organisationId),
+        eq(role.id, orgMembershipRole.roleId),
         isNull(role.projectId),
         isNull(role.deletedAt),
       ),
@@ -41,6 +54,7 @@ export async function hasOrganisationPermission(
         eq(rolePermission.organisationId, role.organisationId),
         eq(rolePermission.roleId, role.id),
         eq(rolePermission.permissionKey, key),
+        isNull(rolePermission.departmentId),
         isNull(rolePermission.deletedAt),
       ),
     )

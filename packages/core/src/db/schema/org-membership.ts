@@ -40,6 +40,10 @@ export const orgMembership = tenantTable(
       t.organisationId,
       t.userId,
     ),
+    unique('org_membership_organisation_id_id_unique').on(
+      t.organisationId,
+      t.id,
+    ),
     check(
       'org_membership_org_role_check',
       sql`${t.orgRole} in (${sqlList(ORG_ROLES)})`,

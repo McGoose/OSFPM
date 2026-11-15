@@ -1,4 +1,4 @@
-import { getTableName, is, sql } from 'drizzle-orm';
+import { eq, getTableName, is, sql } from 'drizzle-orm';
 import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from './client.js';
@@ -14,6 +14,7 @@ import {
   department,
   installation,
   orgMembership,
+  orgMembershipRole,
   organisation,
   permission,
   project,
@@ -242,6 +243,7 @@ describe.each(testTargets)('database schema on $name', (target) => {
           'legal_hold',
           'location',
           'org_membership',
+          'org_membership_role',
           'organisation',
           'permission',
           'person',
@@ -392,6 +394,17 @@ describe.each(testTargets)('database schema on $name', (target) => {
         );
         // Guards against the query matching nothing and passing for nothing.
         expect(between.length).toBeGreaterThanOrEqual(10);
+        // The organisation role link's two keys are among those checked.
+        expect(
+          between.map(
+            (r) => `${r.table_name as string}.${r.conname as string}`,
+          ),
+        ).toEqual(
+          expect.arrayContaining([
+            'org_membership_role.org_membership_role_membership_fk',
+            'org_membership_role.org_membership_role_role_fk',
+          ]),
+        );
         // Names only: an unscoped key could point at another organisation's row.
         expect(
           between
@@ -420,6 +433,7 @@ describe.each(testTargets)('database schema on $name', (target) => {
         'organisation',
         'project',
         'org_membership',
+        'org_membership_role',
         'department',
         'role',
         'role_permission',
@@ -465,6 +479,7 @@ describe.each(testTargets)('database schema on $name', (target) => {
           'project',
           'user',
           'org_membership',
+          'org_membership_role',
           'department',
           'role',
           'role_permission',
@@ -829,6 +844,234 @@ describe.each(testTargets)('database schema on $name', (target) => {
           expect(badStatus).toEqual(
             checkViolation('org_membership_status_check'),
           );
+        });
+      });
+
+      describe('org_membership_role', () => {
+        const ORG_ROLE_ONLY = 'org_membership_role_org_role_only';
+        const orgRoleOnly = {
+          code: SQLSTATE.checkViolation,
+          constraint: ORG_ROLE_ONLY,
+        };
+
+        const newMembership = async (organisationId = a.organisationId) =>
+          insertOrgMembership(
+            database,
+            organisationId,
+            await insertUser(database),
+          );
+
+        it('backs the composite membership key with a unique (organisation_id, id) on org_membership', async () => {
+          const found = await rows(
+            database,
+            sql`select a.attname
+                from pg_constraint c
+                join pg_attribute a
+                  on a.attrelid = c.conrelid and a.attnum = any (c.conkey)
+                where c.contype = 'u'
+                  and c.conrelid = 'org_membership'::regclass
+                  and c.conname = 'org_membership_organisation_id_id_unique'
+                order by a.attname`,
+          );
+          expect(found.map((r) => r.attname)).toEqual([
+            'id',
+            'organisation_id',
+          ]);
+        });
+
+        it('links a membership to an organisation role, defaulting to private', async () => {
+          const m = await newMembership();
+          const r = await insertRole(database, a.organisationId, 'link-ok');
+          const [link] = await database.db
+            .insert(orgMembershipRole)
+            .values(orgMembershipRoleValues(a.organisationId, m, r))
+            .returning();
+          expect(link).toMatchObject({
+            membershipId: m,
+            roleId: r,
+            visibility: 'private',
+          });
+        });
+
+        it('rejects the same role twice on one membership', async () => {
+          const m = await newMembership();
+          const r = await insertRole(database, a.organisationId, 'link-twice');
+          await database.db
+            .insert(orgMembershipRole)
+            .values(orgMembershipRoleValues(a.organisationId, m, r));
+          const failure = await failureOf(() =>
+            database.db
+              .insert(orgMembershipRole)
+              .values(orgMembershipRoleValues(a.organisationId, m, r)),
+          );
+          expect(failure).toEqual(
+            uniqueViolation('org_membership_role_membership_role_unique'),
+          );
+        });
+
+        it('rejects an organisation that does not exist', async () => {
+          const m = await newMembership();
+          const r = await insertRole(database, a.organisationId, 'link-no-org');
+          const failure = await failureOf(() =>
+            database.db
+              .insert(orgMembershipRole)
+              .values(orgMembershipRoleValues(newId(), m, r)),
+          );
+          // The composite keys fail too, so only the code is asserted.
+          expect(failure.code).toBe(SQLSTATE.foreignKeyViolation);
+        });
+
+        it('rejects a membership in another organisation', async () => {
+          const bMembership = await newMembership(b.organisationId);
+          const aRole = await insertRole(database, a.organisationId, 'link-x1');
+          const failure = await failureOf(() =>
+            database.db
+              .insert(orgMembershipRole)
+              .values(
+                orgMembershipRoleValues(a.organisationId, bMembership, aRole),
+              ),
+          );
+          expect(failure).toEqual(
+            fkViolation('org_membership_role_membership_fk'),
+          );
+        });
+
+        it('rejects a role in another organisation', async () => {
+          const aMembership = await newMembership();
+          const bRole = await insertRole(database, b.organisationId, 'link-x2');
+          const failure = await failureOf(() =>
+            database.db
+              .insert(orgMembershipRole)
+              .values(
+                orgMembershipRoleValues(a.organisationId, aMembership, bRole),
+              ),
+          );
+          expect(failure).toEqual(fkViolation('org_membership_role_role_fk'));
+        });
+
+        it('rejects a project role, naming the rule in the message', async () => {
+          const m = await newMembership();
+          const projectRole = await insertProjectRole(
+            database,
+            a.organisationId,
+            a.projectId,
+            'link-project-role',
+          );
+          const failure = await failureWithMessageOf(() =>
+            database.db
+              .insert(orgMembershipRole)
+              .values(
+                orgMembershipRoleValues(a.organisationId, m, projectRole),
+              ),
+          );
+          expect(failure).toMatchObject(orgRoleOnly);
+          expect(failure.message).toContain(ORG_ROLE_ONLY);
+        });
+
+        it('rejects pointing an existing link at a project role', async () => {
+          const m = await newMembership();
+          const orgRole = await insertRole(
+            database,
+            a.organisationId,
+            'repoint',
+          );
+          const projectRole = await insertProjectRole(
+            database,
+            a.organisationId,
+            a.projectId,
+            'repoint-project-role',
+          );
+          const [link] = await database.db
+            .insert(orgMembershipRole)
+            .values(orgMembershipRoleValues(a.organisationId, m, orgRole))
+            .returning({ id: orgMembershipRole.id });
+          const failure = await failureWithMessageOf(() =>
+            database.db
+              .update(orgMembershipRole)
+              .set({ roleId: projectRole })
+              .where(eq(orgMembershipRole.id, link!.id)),
+          );
+          expect(failure).toMatchObject(orgRoleOnly);
+          expect(failure.message).toContain(ORG_ROLE_ONLY);
+        });
+
+        it('rejects turning a linked organisation role into a project role, naming the rule in the message', async () => {
+          const m = await newMembership();
+          const r = await insertRole(database, a.organisationId, 'turn-linked');
+          await database.db
+            .insert(orgMembershipRole)
+            .values(orgMembershipRoleValues(a.organisationId, m, r));
+          const failure = await failureWithMessageOf(() =>
+            database.db
+              .update(role)
+              .set({ projectId: a.projectId })
+              .where(eq(role.id, r)),
+          );
+          expect(failure).toMatchObject(orgRoleOnly);
+          expect(failure.message).toContain(ORG_ROLE_ONLY);
+          const [row] = await rows(
+            database,
+            sql`select project_id from role where id = ${r}`,
+          );
+          expect(row).toEqual({ project_id: null });
+        });
+
+        it('keeps a role organisation-wide while only a deleted link references it', async () => {
+          const m = await newMembership();
+          const r = await insertRole(
+            database,
+            a.organisationId,
+            'turn-deleted',
+          );
+          await database.db.insert(orgMembershipRole).values({
+            ...orgMembershipRoleValues(a.organisationId, m, r),
+            deletedAt: new Date(),
+          });
+          const failure = await failureOf(() =>
+            database.db
+              .update(role)
+              .set({ projectId: a.projectId })
+              .where(eq(role.id, r)),
+          );
+          expect(failure).toEqual(orgRoleOnly);
+        });
+
+        it('lets an unlinked organisation role become a project role', async () => {
+          const r = await insertRole(database, a.organisationId, 'turn-free');
+          await database.db
+            .update(role)
+            .set({ projectId: a.projectId })
+            .where(eq(role.id, r));
+          const [row] = await rows(
+            database,
+            sql`select project_id from role where id = ${r}`,
+          );
+          expect(row).toEqual({ project_id: a.projectId });
+        });
+
+        it('does not block other changes to a linked role or to its link', async () => {
+          const m = await newMembership();
+          const r = await insertRole(database, a.organisationId, 'other-edits');
+          const [link] = await database.db
+            .insert(orgMembershipRole)
+            .values(orgMembershipRoleValues(a.organisationId, m, r))
+            .returning({ id: orgMembershipRole.id });
+          await database.db
+            .update(role)
+            .set({ name: 'Renamed' })
+            .where(eq(role.id, r));
+          await database.db
+            .update(orgMembershipRole)
+            .set({ deletedAt: new Date() })
+            .where(eq(orgMembershipRole.id, link!.id));
+          const [row] = await rows(
+            database,
+            sql`select
+                  (select name from role where id = ${r}) as role_name,
+                  (select deleted_at is not null from org_membership_role
+                   where id = ${link!.id}) as link_deleted`,
+          );
+          expect(row).toEqual({ role_name: 'Renamed', link_deleted: true });
         });
       });
 
@@ -1242,6 +1485,7 @@ describe.each(testTargets)('database schema on $name', (target) => {
         it('uses private visibility for memberships and settings, project elsewhere', async () => {
           const expected: Record<string, string> = {
             org_membership: 'private',
+            org_membership_role: 'private',
             setting_value: 'private',
             department: 'project',
             role: 'project',
@@ -1314,6 +1558,72 @@ function orgMembershipValues(organisationId: string, userId: string) {
     orgRole: 'member',
     status: 'active',
   } satisfies typeof orgMembership.$inferInsert;
+}
+
+async function insertOrgMembership(
+  database: Database,
+  organisationId: string,
+  userId: string,
+) {
+  const [row] = await database.db
+    .insert(orgMembership)
+    .values(orgMembershipValues(organisationId, userId))
+    .returning({ id: orgMembership.id });
+  return row!.id;
+}
+
+function orgMembershipRoleValues(
+  organisationId: string,
+  membershipId: string,
+  roleId: string,
+) {
+  return {
+    organisationId,
+    ownerOrgId: organisationId,
+    originServer: newId(),
+    membershipId,
+    roleId,
+  } satisfies typeof orgMembershipRole.$inferInsert;
+}
+
+async function insertProjectRole(
+  database: Database,
+  organisationId: string,
+  projectId: string,
+  key: string,
+) {
+  const [row] = await database.db
+    .insert(role)
+    .values(roleValues(organisationId, projectId, key))
+    .returning({ id: role.id });
+  return row!.id;
+}
+
+/** Like `failureOf`, and also returns the driver's message, for trigger errors. */
+async function failureWithMessageOf(action: () => PromiseLike<unknown>) {
+  try {
+    await action();
+  } catch (error) {
+    let current: unknown = error;
+    while (current && typeof current === 'object') {
+      const found = current as {
+        code?: unknown;
+        constraint?: unknown;
+        message?: unknown;
+        cause?: unknown;
+      };
+      if (typeof found.code === 'string') {
+        return {
+          code: found.code,
+          constraint: found.constraint,
+          message: String(found.message),
+        };
+      }
+      current = found.cause;
+    }
+    throw error;
+  }
+  throw new Error('Expected the statement to fail, but it succeeded');
 }
 
 function departmentValues(

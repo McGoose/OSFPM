@@ -4,6 +4,7 @@ import { newId } from '../db/ids.js';
 import {
   department,
   orgMembership,
+  orgMembershipRole,
   organisation,
   permission,
   person,
@@ -250,9 +251,14 @@ export async function grantOnProject(
 }
 
 /**
- * Makes `userId` a member of the organisation with `orgRole`, and gives the
- * organisation template role of that key (one per organisation, reused) the
- * given permission keys. The keys must already be in the catalogue.
+ * Makes `userId` a member of the organisation with tier `orgRole`, and links
+ * the membership to an organisation role named after that tier (one per
+ * organisation, reused) holding the given permission keys. The keys must
+ * already be in the catalogue.
+ *
+ * `linked: false` creates the membership and the role but no link, to show
+ * that the tier alone grants nothing. `departmentId` limits each permission to
+ * that department. `linkId` is null when no link was made.
  */
 export async function grantOnOrganisation(
   database: Database,
@@ -260,8 +266,13 @@ export async function grantOnOrganisation(
   userId: string,
   orgRole: OrgRole,
   keys: readonly string[],
-  options: { status?: OrgMembershipStatus; deleted?: boolean } = {},
-): Promise<{ membershipId: string; roleId: string }> {
+  options: {
+    status?: OrgMembershipStatus;
+    deleted?: boolean;
+    linked?: boolean;
+    departmentId?: string | null;
+  } = {},
+): Promise<{ membershipId: string; roleId: string; linkId: string | null }> {
   const [existing] = await database.db
     .select()
     .from(role)
@@ -292,7 +303,7 @@ export async function grantOnOrganisation(
         ...base(organisationId),
         roleId: roleRow.id,
         permissionKey: key,
-        departmentId: null,
+        departmentId: options.departmentId ?? null,
       })
       .onConflictDoNothing();
   }
@@ -306,5 +317,17 @@ export async function grantOnOrganisation(
       deletedAt: options.deleted ? new Date() : null,
     })
     .returning();
-  return { membershipId: m!.id, roleId: roleRow.id };
+  let linkId: string | null = null;
+  if (options.linked ?? true) {
+    const [link] = await database.db
+      .insert(orgMembershipRole)
+      .values({
+        ...base(organisationId),
+        membershipId: m!.id,
+        roleId: roleRow.id,
+      })
+      .returning();
+    linkId = link!.id;
+  }
+  return { membershipId: m!.id, roleId: roleRow.id, linkId };
 }
