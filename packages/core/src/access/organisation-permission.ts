@@ -27,6 +27,9 @@ export async function hasOrganisationPermission(
       role,
       and(
         eq(role.organisationId, orgMembership.organisationId),
+        // TODO: replace this key match with a link table between org
+        // memberships and roles. A follow-up prompt changes the internals of
+        // this function only; the signature stays.
         eq(role.key, orgMembership.orgRole),
         isNull(role.projectId),
         isNull(role.deletedAt),
