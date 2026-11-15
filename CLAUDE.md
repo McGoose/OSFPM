@@ -37,6 +37,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Tenant tables are defined with `tenantTable()`, never bare `pgTable`.
 - Permission checks run only on the server through the policy engine.
 - Every endpoint gets a test proving 403 without access and no sensitive fields without `sensitive:read`.
+- A string from a caller never indexes a plain object and never goes through `in`. Use Object.hasOwn, a Map, or check it against the constant list first.
 
 ## Privacy rule
 
