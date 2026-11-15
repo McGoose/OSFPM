@@ -24,11 +24,13 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Every record carries `organisation_id`, `origin_server`, `owner_org` and a visibility marker; timestamps are UTC.
 - Fields are tagged `normal` or `sensitive`. Sensitive fields never appear in logs, emails, webhook payloads, exports, error messages or API error responses unless a sensitive scope explicitly allows it.
 - Migrations are forward-only; never edit an applied migration.
+- Migrations may contain hand-written SQL (triggers, functions, reordered statements) that drizzle snapshots don't track. Say so in the commit message. Never edit an applied migration.
 - Explicit foreign-key names follow `<table>_<target>_fk`; when a table references itself or the same target twice, use `<table>_<column without _id>_fk`.
 - No legal or financial numbers (rates, caps, thresholds, deadlines) in code: they live in rule packs as data.
 - Exception: shipped default values (legal periods, rates) may live in one constant marked `verified: false`, until the rule-pack engine replaces them. Never repeat them elsewhere.
 - Modules never read other modules' tables; they use core services and events.
 - Tenant records are written only through the write helper in `src/db/write.ts`.
+- Test fixtures may insert rows directly to set up state. Code under test always writes through the write helper.
 - A helper that writes records needs at least one test for each kind of table it serves (organisation-level, project-level, and the project table itself).
 - Only `src/sensitive/service.ts` touches `person_sensitive`; other code calls the service.
 - Access denials are audited before the typed error is thrown; callers catch it inside the transaction and commit, so the audit event survives.
