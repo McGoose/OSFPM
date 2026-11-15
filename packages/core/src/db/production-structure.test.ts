@@ -42,7 +42,7 @@ const STANDARD_COLUMNS: Record<string, { type: string; nullable: boolean }> = {
   updated_by: { type: 'uuid', nullable: true },
   deleted_at: { type: TIMESTAMPTZ, nullable: true },
   deleted_by: { type: 'uuid', nullable: true },
-  retention_class: { type: 'text', nullable: true },
+  retention_class: { type: 'text', nullable: false },
 };
 
 /** Each new table, its own columns, and its composite foreign keys. */

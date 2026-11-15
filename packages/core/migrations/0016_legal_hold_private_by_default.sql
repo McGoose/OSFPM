@@ -1,0 +1,1 @@
+ALTER TABLE "legal_hold" ALTER COLUMN "visibility" SET DEFAULT 'private';

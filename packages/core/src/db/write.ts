@@ -135,18 +135,22 @@ export class RecordNotFoundError extends Error {
 
 /**
  * The record is in the wrong state for this operation: it was already deleted,
- * or it is not deleted so there is nothing to restore. Nothing was written.
+ * it is not deleted so there is nothing to restore, or (for records that are
+ * released rather than deleted, such as legal holds) it was already released.
+ * Nothing was written.
  */
 export class RecordStateError extends Error {
   constructor(
     readonly entityType: string,
     readonly entityId: string,
-    readonly operation: 'delete' | 'restore',
+    readonly operation: 'delete' | 'restore' | 'release',
   ) {
     super(
       operation === 'delete'
         ? `Cannot delete ${entityType} ${entityId}: it is already deleted`
-        : `Cannot restore ${entityType} ${entityId}: it is not deleted`,
+        : operation === 'release'
+          ? `Cannot release ${entityType} ${entityId}: it is already released`
+          : `Cannot restore ${entityType} ${entityId}: it is not deleted`,
     );
     this.name = 'RecordStateError';
   }

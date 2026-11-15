@@ -6,7 +6,12 @@ import {
   uniqueIndex,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
-import { baseColumns, sqlList, timestamptz } from '../columns.js';
+import {
+  baseColumns,
+  retentionClassForeignKey,
+  sqlList,
+  timestamptz,
+} from '../columns.js';
 
 export const USER_STATUSES = ['invited', 'active', 'disabled'] as const;
 export type UserStatus = (typeof USER_STATUSES)[number];
@@ -28,6 +33,7 @@ export const user = pgTable(
     lastLoginAt: timestamptz('last_login_at'),
   },
   (t) => [
+    retentionClassForeignKey('user', t.retentionClass),
     uniqueIndex('user_email_unique').on(t.email),
     check('user_email_lowercase_check', sql`${t.email} = lower(${t.email})`),
     check('user_status_check', sql`${t.status} in (${sqlList(USER_STATUSES)})`),

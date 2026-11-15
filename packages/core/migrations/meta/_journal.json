@@ -85,6 +85,41 @@
       "when": 1794699363312,
       "tag": "0011_project_key_dates",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1794700326882,
+      "tag": "0012_retention_classes",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1794700327835,
+      "tag": "0013_seed_retention_classes",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1794700412248,
+      "tag": "0014_retention_class_foreign_keys",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1794700548744,
+      "tag": "0015_legal_hold",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1794717230338,
+      "tag": "0016_legal_hold_private_by_default",
+      "breakpoints": true
     }
   ]
 }
