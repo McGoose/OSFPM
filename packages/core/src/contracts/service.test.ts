@@ -774,9 +774,8 @@ describe.each(testTargets)('contracts on $name', (target) => {
       expect(await partiesIn(w.organisationId)).toEqual([]);
     });
 
-    it('lets the database refuse a repeated party and a person of another organisation', async () => {
+    it('lets the database refuse a repeated party', async () => {
       const w = await setup();
-      const other = await setup();
       const made = await createContract(
         db(),
         at(w.projectManager),
@@ -798,15 +797,160 @@ describe.each(testTargets)('contracts on $name', (target) => {
         code: SQLSTATE.uniqueViolation,
         constraint: 'contract_party_contract_person_company_role_unique',
       });
-      const foreign = await errorOf(
-        addContractParty(db(), at(w.projectManager), made.id, {
-          personId: await seedPerson(database, other.organisationId),
-          partyRole: 'producer',
-        }),
+    });
+
+    describe('party targets', () => {
+      const KINDS = ['person', 'company'] as const;
+      type Kind = (typeof KINDS)[number];
+
+      const seedTarget = (kind: Kind, organisationId: string) =>
+        kind === 'person'
+          ? seedPerson(database, organisationId)
+          : seedCompany(database, organisationId);
+      const asParty = (kind: Kind, id: string) =>
+        kind === 'person'
+          ? ({ personId: id, partyRole: 'artist' } as const)
+          : ({ companyId: id, partyRole: 'licensor' } as const);
+      const softDelete = (kind: Kind, id: string) =>
+        db().execute(
+          sql`update ${sql.identifier(kind)} set deleted_at = now() where id = ${id}`,
+        );
+
+      it.each(KINDS)('refuses a %s that does not exist', async (kind) => {
+        const w = await setup();
+        const made = await createContract(
+          db(),
+          at(w.projectManager),
+          projectContract(w),
+        );
+        const error = await errorOf(
+          addContractParty(
+            db(),
+            at(w.projectManager),
+            made.id,
+            asParty(kind, newId()),
+          ),
+        );
+        expect(error).toBeInstanceOf(ContractInputError);
+        expect(await partiesIn(w.organisationId)).toEqual([]);
+      });
+
+      it.each(KINDS)('refuses a %s that is soft-deleted', async (kind) => {
+        const w = await setup();
+        const made = await createContract(
+          db(),
+          at(w.projectManager),
+          projectContract(w),
+        );
+        const id = await seedTarget(kind, w.organisationId);
+        await softDelete(kind, id);
+        const error = await errorOf(
+          addContractParty(
+            db(),
+            at(w.projectManager),
+            made.id,
+            asParty(kind, id),
+          ),
+        );
+        expect(error).toBeInstanceOf(ContractInputError);
+        expect((error as Error).message).not.toContain(id);
+        expect(await partiesIn(w.organisationId)).toEqual([]);
+        expect(await eventsIn(w.organisationId)).toHaveLength(1);
+      });
+
+      it.each(KINDS)('refuses a %s of another organisation', async (kind) => {
+        const w = await setup();
+        const other = await setup();
+        const made = await createContract(
+          db(),
+          at(w.projectManager),
+          projectContract(w),
+        );
+        const error = await errorOf(
+          addContractParty(
+            db(),
+            at(w.projectManager),
+            made.id,
+            asParty(kind, await seedTarget(kind, other.organisationId)),
+          ),
+        );
+        expect(error).toBeInstanceOf(ContractInputError);
+        expect(await partiesIn(w.organisationId)).toEqual([]);
+      });
+
+      it.each(KINDS)(
+        'refuses the whole contract when one party of several has a deleted %s',
+        async (kind) => {
+          const w = await setup();
+          const alive = await seedPerson(database, w.organisationId);
+          const deleted = await seedTarget(kind, w.organisationId);
+          await softDelete(kind, deleted);
+          const error = await errorOf(
+            createContract(
+              db(),
+              at(w.projectManager),
+              projectContract(w, {
+                parties: [
+                  { personId: alive, partyRole: 'producer' },
+                  asParty(kind, deleted),
+                ],
+              }),
+            ),
+          );
+          expect(error).toBeInstanceOf(ContractInputError);
+          await expectNothingWritten(w);
+        },
       );
-      expect(foreign).toMatchObject({
-        code: SQLSTATE.foreignKeyViolation,
-        constraint: 'contract_party_person_fk',
+
+      it.each(KINDS)(
+        'keeps an existing party when its %s is soft-deleted later, and still lets it be removed',
+        async (kind) => {
+          const w = await setup();
+          const id = await seedTarget(kind, w.organisationId);
+          const made = await createContract(
+            db(),
+            at(w.projectManager),
+            projectContract(w, { parties: [asParty(kind, id)] }),
+          );
+          await softDelete(kind, id);
+          const read = await getContract(db(), at(w.projectManager), made.id);
+          expect(read.parties.map((p) => p.id)).toEqual([made.parties[0]!.id]);
+          await removeContractParty(
+            db(),
+            at(w.projectManager),
+            made.parties[0]!.id,
+            1,
+          );
+          expect(
+            (await getContract(db(), at(w.projectManager), made.id)).parties,
+          ).toEqual([]);
+        },
+      );
+
+      it('refuses to restore a removed party whose person has been deleted since', async () => {
+        const w = await setup();
+        const personId = await seedPerson(database, w.organisationId);
+        const made = await createContract(
+          db(),
+          at(w.projectManager),
+          projectContract(w, { parties: [{ personId, partyRole: 'artist' }] }),
+        );
+        await removeContractParty(
+          db(),
+          at(w.projectManager),
+          made.parties[0]!.id,
+          1,
+        );
+        await softDelete('person', personId);
+        const error = await errorOf(
+          addContractParty(db(), at(w.projectManager), made.id, {
+            personId,
+            partyRole: 'artist',
+          }),
+        );
+        expect(error).toBeInstanceOf(ContractInputError);
+        const [row] = await partiesIn(w.organisationId);
+        expect(row).toMatchObject({ deletedAt: NOW, version: 2 });
       });
     });
 

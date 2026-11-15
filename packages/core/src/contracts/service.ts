@@ -299,10 +299,37 @@ const LINK_TARGETS: Record<ContractLinkEntityType, LinkTarget> = {
 };
 
 /**
- * A link is accepted only when its target exists, is not deleted and is in the
- * contract's organisation. For a project contract, a target that belongs to a
- * project must belong to the contract's own project. One message covers every
- * reason, so a caller learns nothing about records it may not see.
+ * True when the record exists, is not deleted and is in the contract's
+ * organisation. For a project contract, a target that belongs to a project must
+ * belong to the contract's own project.
+ */
+async function isLiveTarget(
+  tx: Tx,
+  contractScope: Scope,
+  target: LinkTarget,
+  entityId: string,
+): Promise<boolean> {
+  const [found] = await tx
+    .select({ one: sql<number>`1` })
+    .from(target.table)
+    .where(
+      and(
+        eq(target.table.id, entityId),
+        eq(target.table.organisationId, contractScope.organisationId),
+        isNull(target.table.deletedAt),
+        contractScope.projectId !== null && target.projectKey !== null
+          ? eq(target.projectKey, contractScope.projectId)
+          : undefined,
+      ),
+    )
+    .limit(1);
+  return found !== undefined;
+}
+
+/**
+ * A link is accepted only when its target is live (see `isLiveTarget`). One
+ * message covers every reason, so a caller learns nothing about records it may
+ * not see.
  */
 async function checkLinkTarget(
   tx: Tx,
@@ -313,24 +340,40 @@ async function checkLinkTarget(
   if (!target) {
     throw new ContractInputError('The link has an unknown entity type');
   }
-  const [found] = await tx
-    .select({ one: sql<number>`1` })
-    .from(target.table)
-    .where(
-      and(
-        eq(target.table.id, link.entityId),
-        eq(target.table.organisationId, contractScope.organisationId),
-        isNull(target.table.deletedAt),
-        contractScope.projectId !== null && target.projectKey !== null
-          ? eq(target.projectKey, contractScope.projectId)
-          : undefined,
-      ),
-    )
-    .limit(1);
-  if (!found) {
+  if (!(await isLiveTarget(tx, contractScope, target, link.entityId))) {
     throw new ContractInputError(
       `The ${link.entityType} to link does not exist, is deleted, or is not in the contract's organisation or project`,
     );
+  }
+}
+
+/**
+ * A party is accepted only when its person or company is live, as for a link.
+ * A party already on a contract stays when its person or company is deleted
+ * later: this runs only when a party is added.
+ */
+async function checkPartyTarget(
+  tx: Tx,
+  contractScope: Scope,
+  party: ContractPartyInput,
+): Promise<void> {
+  for (const [entityType, entityId] of [
+    ['person', party.personId],
+    ['company', party.companyId],
+  ] as const) {
+    if (entityId == null) continue;
+    if (
+      !(await isLiveTarget(
+        tx,
+        contractScope,
+        LINK_TARGETS[entityType],
+        entityId,
+      ))
+    ) {
+      throw new ContractInputError(
+        `The ${entityType} to add as a party does not exist, is deleted, or is not in the contract's organisation`,
+      );
+    }
   }
 }
 
@@ -360,9 +403,9 @@ function linkValues(parent: ContractRow, link: ContractLinkInput) {
  * happens or none of it does, including the change events and their sequence
  * numbers. Needs `contracts:edit`, and `contracts:read-value` as well when it
  * sets an amount or a currency. Throws `ContractAccessDeniedError`,
- * `ContractInputError` for a refused link target (before anything is
+ * `ContractInputError` for a refused party or link target (before anything is
  * written), and `RecordWriteError` when the database refuses a row, for
- * example a repeated party or a person of another organisation.
+ * example a repeated party.
  */
 export async function createContract(
   tx: Tx,
@@ -376,6 +419,9 @@ export async function createContract(
   await requirePermission(tx, ctx, scope, CONTRACTS_EDIT_PERMISSION);
   if (values.currency != null || values.totalValue != null) {
     await requirePermission(tx, ctx, scope, CONTRACTS_READ_VALUE_PERMISSION);
+  }
+  for (const party of values.parties ?? []) {
+    await checkPartyTarget(tx, scope, party);
   }
   const links = values.links ?? [];
   for (const link of links) await checkLinkTarget(tx, scope, link);
@@ -471,8 +517,11 @@ export async function updateContract(
 }
 
 /**
- * Adds a party to a contract. Needs `contracts:edit`. A party removed earlier
- * is restored; a repeated live one is refused by the database.
+ * Adds a party to a contract. Needs `contracts:edit`. The party's person or
+ * company must exist, not be deleted and be in the contract's organisation, or
+ * `ContractInputError` is thrown, also when the party was removed earlier. A
+ * party removed earlier is restored; a repeated live one is refused by the
+ * database.
  */
 export async function addContractParty(
   tx: Tx,
@@ -483,6 +532,7 @@ export async function addContractParty(
   const parent = await findContract(tx, contractId);
   if (!parent) throw new ContractAccessDeniedError(CONTRACTS_EDIT_PERMISSION);
   await requirePermission(tx, ctx, scopeOf(parent), CONTRACTS_EDIT_PERMISSION);
+  await checkPartyTarget(tx, scopeOf(parent), party);
   const values = partyValues(parent, party);
   const [removed] = await tx
     .select()
