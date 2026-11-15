@@ -6,6 +6,7 @@ import {
   lowerCaseCheck,
 } from '../address-columns.js';
 import { sqlList, standardColumns, tenantTable } from '../columns.js';
+import { declareOrganisationLevel } from '../project-resolver.js';
 import { organisation } from './organisation.js';
 import { user } from './user.js';
 
@@ -49,3 +50,6 @@ export const company = tenantTable(
     lowerCaseCheck('company_email_lowercase_check', t.email),
   ],
 );
+
+/** Belongs to the organisation, never to a project: no project_id, no resolver. */
+declareOrganisationLevel(company);

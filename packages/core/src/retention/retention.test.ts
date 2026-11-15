@@ -71,6 +71,54 @@ describe('retentionEndDate', () => {
     ).toBeNull();
   });
 
+  describe('an anchor that is not a known anchor', () => {
+    // Names every object inherits must be refused like any other unknown name.
+    it.each(['nonsense', '', 'constructor', '__proto__', 'toString'])(
+      'throws RangeError for %j',
+      (anchor) => {
+        const call = () =>
+          retentionEndDate({
+            anchor: anchor as never,
+            periodsYears: [10],
+            dates,
+          });
+        expect(call).toThrow(RangeError);
+        expect(call).toThrow('Unknown retention anchor');
+      },
+    );
+
+    it('throws whatever the periods and dates are, so a corrupt anchor is never read as "keep"', () => {
+      for (const periodsYears of [[], [null], [10, null], [10]]) {
+        for (const given of [dates, NO_DATES]) {
+          expect(() =>
+            retentionEndDate({
+              anchor: 'nonsense' as never,
+              periodsYears,
+              dates: given,
+            }),
+          ).toThrow(RangeError);
+        }
+      }
+    });
+
+    it('is told apart from a known anchor with no date, which still gives null', () => {
+      expect(() =>
+        retentionEndDate({
+          anchor: 'nonsense' as never,
+          periodsYears: [10],
+          dates: NO_DATES,
+        }),
+      ).toThrow(RangeError);
+      expect(
+        retentionEndDate({
+          anchor: 'project-wrap',
+          periodsYears: [10],
+          dates: NO_DATES,
+        }),
+      ).toBeNull();
+    });
+  });
+
   it('returns null when any period is null, however long the others are', () => {
     for (const periodsYears of [[null], [10, null], [null, 10, 30]]) {
       expect(

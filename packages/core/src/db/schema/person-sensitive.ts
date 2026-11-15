@@ -14,6 +14,7 @@ import {
   timestamptz,
 } from '../columns.js';
 import { markSensitive } from '../sensitive.js';
+import { declareOrganisationLevel } from '../project-resolver.js';
 import { organisation } from './organisation.js';
 import { person } from './person.js';
 import { user } from './user.js';
@@ -108,3 +109,6 @@ export const personSensitive = tenantTable(
 );
 
 markSensitive(personSensitive, ['payload']);
+
+/** Belongs to the organisation, never to a project: no project_id, no resolver. */
+declareOrganisationLevel(personSensitive);

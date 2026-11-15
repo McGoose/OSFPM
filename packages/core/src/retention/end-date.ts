@@ -77,11 +77,16 @@ const pad = (n: number, width: number) => String(n).padStart(width, '0');
  * Years are added to the calendar date, so 29 February plus a whole number of
  * years is 28 February when the target year has no 29 February.
  *
- * Throws `RangeError` for a period that is not a whole number of years of at
- * least zero, and for a date that does not exist.
+ * Throws `RangeError` for an anchor that is not a known anchor, for a period
+ * that is not a whole number of years of at least zero, and for a date that
+ * does not exist. An unknown anchor is an error, not "no date": returning
+ * `null` for it would keep a record forever without anyone being told.
  */
 export function retentionEndDate(input: RetentionEndInput): string | null {
   const { anchor, periodsYears, dates } = input;
+  if (!Object.hasOwn(DATE_KEY, anchor)) {
+    throw new RangeError('Unknown retention anchor');
+  }
   for (const period of periodsYears) {
     if (period !== null && (!Number.isInteger(period) || period < 0)) {
       throw new RangeError('A retention period is a whole number of years');

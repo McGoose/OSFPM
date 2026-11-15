@@ -3,12 +3,14 @@ import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from './client.js';
 import {
+  declaredRetentionClasses,
   organisationForeignKeyName,
   retentionClassForeignKeyName,
   tenantTableNames,
 } from './columns.js';
 import { newId } from './ids.js';
 import { migrate } from './migrate.js';
+import { hasProjectResolver, isOrganisationLevel } from './project-resolver.js';
 import * as schemaModule from './schema/index.js';
 import {
   department,
@@ -219,6 +221,46 @@ describe('constraint names in the schema', () => {
   });
 });
 
+describe('project resolution in the schema', () => {
+  const tenant = schemaTables.filter((table) =>
+    tenantTableNames().has(getTableName(table)),
+  );
+  const hasProjectId = (table: PgTable) =>
+    getTableConfig(table).columns.some((c) => c.name === 'project_id');
+  const names = (tables: PgTable[]) => tables.map(getTableName).sort();
+
+  it('finds the tenant tables it is meant to check', () => {
+    // Guards against the filters matching nothing and passing for nothing.
+    expect(tenant.filter(hasProjectId).length).toBeGreaterThanOrEqual(5);
+    expect(
+      tenant.filter((table) => !hasProjectId(table)).length,
+    ).toBeGreaterThanOrEqual(5);
+    expect(tenant.some(hasProjectResolver)).toBe(true);
+    expect(tenant.some(isOrganisationLevel)).toBe(true);
+  });
+
+  // A child table with no project_id and no resolver files its changes under
+  // the organisation, as if it belonged to no project, without any error.
+  it('gives every tenant table without a project_id a project resolver or an organisation-level declaration', () => {
+    const undeclared = tenant.filter(
+      (table) =>
+        !hasProjectId(table) &&
+        !hasProjectResolver(table) &&
+        !isOrganisationLevel(table),
+    );
+    expect(names(undeclared)).toEqual([]);
+  });
+
+  it('declares only tables with neither a project_id nor a resolver as organisation-level', () => {
+    const contradicting = tenant.filter(
+      (table) =>
+        isOrganisationLevel(table) &&
+        (hasProjectId(table) || hasProjectResolver(table)),
+    );
+    expect(names(contradicting)).toEqual([]);
+  });
+});
+
 describe.each(testTargets)('database schema on $name', (target) => {
   describe('migrations', () => {
     it('apply to an empty database, and re-running is a no-op', async () => {
@@ -237,6 +279,9 @@ describe.each(testTargets)('database schema on $name', (target) => {
           'change_event',
           'change_seq',
           'company',
+          'contract',
+          'contract_link',
+          'contract_party',
           'department',
           'episode',
           'installation',
@@ -309,7 +354,7 @@ describe.each(testTargets)('database schema on $name', (target) => {
         await cleanup();
       }
     });
-    it('links every retention_class column to retention_class(key) and defaults it to standard', async () => {
+    it('links every retention_class column to retention_class(key) and defaults it to standard, or to the class its table declares', async () => {
       const { database, cleanup } = await target.create();
       try {
         await migrate(database);
@@ -328,9 +373,22 @@ describe.each(testTargets)('database schema on $name', (target) => {
         expect(withColumn.map((r) => r.table_name as string).sort()).toEqual(
           [...tenantTableNames(), 'user'].sort(),
         );
+        const seeded = new Set(
+          (await rows(database, sql`select key from retention_class`)).map(
+            (r) => r.key as string,
+          ),
+        );
         for (const column of withColumn) {
-          expect(column.is_nullable).toBe('NO');
-          expect(column.column_default).toBe("'standard'::text");
+          const table = column.table_name as string;
+          // Standard, unless the table passes `defaultRetentionClass`; then the
+          // migrated database must agree with what the schema declares.
+          const expected = declaredRetentionClasses().get(table) ?? 'standard';
+          expect(column.is_nullable, table).toBe('NO');
+          expect(column.column_default, table).toBe(`'${expected}'::text`);
+          expect(
+            seeded.has(expected),
+            `${table} defaults to ${expected}, which is not a seeded retention class`,
+          ).toBe(true);
         }
         const links = await rows(
           database,
@@ -440,6 +498,9 @@ describe.each(testTargets)('database schema on $name', (target) => {
         'project_membership',
         'project_membership_role',
         'setting_value',
+        'contract',
+        'contract_party',
+        'contract_link',
       ]) {
         it(`${table} has every standard column with the right type and nullability`, async () => {
           const columns = await columnsOf(database, table);
@@ -474,6 +535,9 @@ describe.each(testTargets)('database schema on $name', (target) => {
       it('never generates ids in the database', async () => {
         for (const table of [
           'installation',
+          'contract',
+          'contract_party',
+          'contract_link',
           'legal_hold',
           'organisation',
           'project',

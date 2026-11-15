@@ -1,6 +1,9 @@
 import { and, eq, isNull, or, sql, type SQL } from 'drizzle-orm';
-import { hasOrganisationPermission } from '../access/organisation-permission.js';
-import { hasProjectPermission } from '../access/project-permission.js';
+import { AccessDeniedError } from '../access/access-denied-error.js';
+import {
+  hasScopedPermission,
+  type PermissionScope,
+} from '../access/scoped-permission.js';
 import { legalHold } from '../db/schema/index.js';
 import {
   insertRecord,
@@ -18,9 +21,9 @@ import { LEGAL_HOLD_MANAGE_PERMISSION } from './permissions.js';
  * here purges or erases anything, and nothing calls `isUnderLegalHold` yet.
  *
  * Permission: `legal-hold:manage`. A hold with a project is checked on that
- * project (`hasProjectPermission`); a hold without one, that is a
- * whole-organisation hold or a record hold with no project, is checked in the
- * organisation (`hasOrganisationPermission`).
+ * project; a hold without one, that is a whole-organisation hold or a record
+ * hold with no project, is checked in the organisation
+ * (`hasScopedPermission`).
  *
  * Audit: place and release each write one `audit_event` in the same savepoint
  * as the hold row and its change event, so the three succeed or fail together.
@@ -50,16 +53,6 @@ export type PlaceLegalHoldValues = {
   readonly entityId?: string | null;
   readonly reason: string;
 };
-
-type Operation = 'place' | 'release';
-
-/** The caller may not manage this hold. Carries no ids and no reasons. */
-export class LegalHoldAccessDeniedError extends Error {
-  constructor(readonly operation: Operation) {
-    super(`Managing legal holds denied for ${operation}`);
-    this.name = 'LegalHoldAccessDeniedError';
-  }
-}
 
 /** A reason is missing, or a scope is half set. */
 export class LegalHoldInputError extends Error {
@@ -107,24 +100,17 @@ function auditFor(
   };
 }
 
-async function mayManage(
+function mayManage(
   tx: Tx,
   ctx: LegalHoldContext,
-  hold: { organisationId: string; projectId: string | null },
+  hold: PermissionScope,
 ): Promise<boolean> {
-  return hold.projectId !== null
-    ? hasProjectPermission(
-        tx,
-        ctx.userId,
-        hold.projectId,
-        LEGAL_HOLD_MANAGE_PERMISSION,
-      )
-    : hasOrganisationPermission(
-        tx,
-        ctx.userId,
-        hold.organisationId,
-        LEGAL_HOLD_MANAGE_PERMISSION,
-      );
+  return hasScopedPermission(
+    tx,
+    ctx.userId,
+    hold,
+    LEGAL_HOLD_MANAGE_PERMISSION,
+  );
 }
 
 function requireReason(reason: string, what: string): void {
@@ -134,7 +120,7 @@ function requireReason(reason: string, what: string): void {
 }
 
 /**
- * Places a hold. Throws `LegalHoldAccessDeniedError` (after auditing it) when
+ * Places a hold. Throws `AccessDeniedError` (after auditing it) when
  * the user may not manage holds in that scope, `LegalHoldInputError` for an
  * empty reason or a half-set record, and `RecordWriteError` when the database
  * refuses the row, for example a project of another organisation.
@@ -164,7 +150,8 @@ export async function placeLegalHold(
       category: 'legal-hold.denied',
       action: 'place',
     });
-    throw new LegalHoldAccessDeniedError('place');
+    // The caller named the scope, so the error may say which kind it is.
+    throw new AccessDeniedError(LEGAL_HOLD_MANAGE_PERMISSION, scope);
   }
   return tx.transaction(async (inner) => {
     const now = ctx.clock();
@@ -221,7 +208,10 @@ export async function releaseLegalHold(
       category: 'legal-hold.denied',
       action: 'release',
     });
-    throw new LegalHoldAccessDeniedError('release');
+    // The caller named only an id, so the error does not say which scope the
+    // hold is in: an unknown id has none, and the difference would tell whether
+    // the id exists.
+    throw new AccessDeniedError(LEGAL_HOLD_MANAGE_PERMISSION);
   }
   if (found.releasedAt !== null) {
     throw new RecordStateError('legal_hold', holdId, 'release');

@@ -2,7 +2,10 @@ import { and, eq, isNull } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
 import {
+  company,
   department,
+  episode,
+  location,
   orgMembership,
   orgMembershipRole,
   organisation,
@@ -14,6 +17,7 @@ import {
   projectPerson,
   role,
   rolePermission,
+  unit,
   user,
   type OrgMembershipStatus,
   type OrgRole,
@@ -149,6 +153,79 @@ export async function seedPerson(
     })
     .returning();
   return per!.id;
+}
+
+/** A library company, such as a vendor. */
+export async function seedCompany(
+  database: Database,
+  organisationId: string,
+  options: { name?: string } = {},
+): Promise<string> {
+  const [c] = await database.db
+    .insert(company)
+    .values({
+      ...base(organisationId),
+      name: options.name ?? 'Demo Rentals Ltd',
+      kind: 'vendor',
+    })
+    .returning();
+  return c!.id;
+}
+
+/** A library location, such as a set. */
+export async function seedLocation(
+  database: Database,
+  organisationId: string,
+  options: { name?: string } = {},
+): Promise<string> {
+  const [l] = await database.db
+    .insert(location)
+    .values({
+      ...base(organisationId),
+      name: options.name ?? 'Harbour Warehouse',
+      kind: 'location',
+    })
+    .returning();
+  return l!.id;
+}
+
+/** A second unit of `projectId`; `key` must be new on that project. */
+export async function seedUnit(
+  database: Database,
+  organisationId: string,
+  projectId: string,
+  key = 'second',
+): Promise<string> {
+  const [u] = await database.db
+    .insert(unit)
+    .values({
+      ...base(organisationId),
+      projectId,
+      key,
+      name: `Unit ${key}`,
+      kind: 'second',
+    })
+    .returning();
+  return u!.id;
+}
+
+/** An episode of `projectId`; `number` must be new on that project. */
+export async function seedEpisode(
+  database: Database,
+  organisationId: string,
+  projectId: string,
+  number = '101',
+): Promise<string> {
+  const [e] = await database.db
+    .insert(episode)
+    .values({
+      ...base(organisationId),
+      projectId,
+      number,
+      status: 'planned',
+    })
+    .returning();
+  return e!.id;
 }
 
 /** Engages `personId` on `projectId`. */

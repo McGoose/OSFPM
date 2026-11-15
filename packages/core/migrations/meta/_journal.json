@@ -127,6 +127,13 @@
       "when": 1794718226844,
       "tag": "0017_org_membership_role",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1794722613757,
+      "tag": "0018_contracts",
+      "breakpoints": true
     }
   ]
 }

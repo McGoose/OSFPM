@@ -9,6 +9,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { addressColumns, countryCheck } from '../address-columns.js';
 import { sqlList, standardColumns, tenantTable } from '../columns.js';
+import { declareOrganisationLevel } from '../project-resolver.js';
 import { company } from './company.js';
 import { organisation } from './organisation.js';
 import { person } from './person.js';
@@ -88,3 +89,6 @@ export const location = tenantTable(
     ),
   ],
 );
+
+/** Belongs to the organisation, never to a project: no project_id, no resolver. */
+declareOrganisationLevel(location);
