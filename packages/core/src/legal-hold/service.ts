@@ -1,6 +1,8 @@
 import { and, eq, isNull, or, sql, type SQL } from 'drizzle-orm';
-import { hasOrganisationPermission } from '../access/organisation-permission.js';
-import { hasProjectPermission } from '../access/project-permission.js';
+import {
+  hasScopedPermission,
+  type PermissionScope,
+} from '../access/scoped-permission.js';
 import { legalHold } from '../db/schema/index.js';
 import {
   insertRecord,
@@ -18,9 +20,9 @@ import { LEGAL_HOLD_MANAGE_PERMISSION } from './permissions.js';
  * here purges or erases anything, and nothing calls `isUnderLegalHold` yet.
  *
  * Permission: `legal-hold:manage`. A hold with a project is checked on that
- * project (`hasProjectPermission`); a hold without one, that is a
- * whole-organisation hold or a record hold with no project, is checked in the
- * organisation (`hasOrganisationPermission`).
+ * project; a hold without one, that is a whole-organisation hold or a record
+ * hold with no project, is checked in the organisation
+ * (`hasScopedPermission`).
  *
  * Audit: place and release each write one `audit_event` in the same savepoint
  * as the hold row and its change event, so the three succeed or fail together.
@@ -107,24 +109,17 @@ function auditFor(
   };
 }
 
-async function mayManage(
+function mayManage(
   tx: Tx,
   ctx: LegalHoldContext,
-  hold: { organisationId: string; projectId: string | null },
+  hold: PermissionScope,
 ): Promise<boolean> {
-  return hold.projectId !== null
-    ? hasProjectPermission(
-        tx,
-        ctx.userId,
-        hold.projectId,
-        LEGAL_HOLD_MANAGE_PERMISSION,
-      )
-    : hasOrganisationPermission(
-        tx,
-        ctx.userId,
-        hold.organisationId,
-        LEGAL_HOLD_MANAGE_PERMISSION,
-      );
+  return hasScopedPermission(
+    tx,
+    ctx.userId,
+    hold,
+    LEGAL_HOLD_MANAGE_PERMISSION,
+  );
 }
 
 function requireReason(reason: string, what: string): void {

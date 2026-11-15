@@ -9,8 +9,10 @@ import {
   type SQL,
 } from 'drizzle-orm';
 import type { AnyPgColumn, PgTable } from 'drizzle-orm/pg-core';
-import { hasOrganisationPermission } from '../access/organisation-permission.js';
-import { hasProjectPermission } from '../access/project-permission.js';
+import {
+  hasScopedPermission,
+  type PermissionScope,
+} from '../access/scoped-permission.js';
 import {
   company,
   contract,
@@ -45,10 +47,9 @@ import {
  * concern. Nothing here stores files, signatures or reminders.
  *
  * Permissions: `contracts:read`, `contracts:edit` and `contracts:read-value`.
- * A contract with a project is checked on that project
- * (`hasProjectPermission`); an organisation-level contract, one with no
- * project, is checked in the organisation (`hasOrganisationPermission`). Roles
- * of one scope grant nothing in the other.
+ * A contract with a project is checked on that project; an organisation-level
+ * contract, one with no project, is checked in the organisation
+ * (`hasScopedPermission`). Roles of one scope grant nothing in the other.
  *
  * Amounts: `total_value` and `currency` reach only users holding
  * `contracts:read-value`. For everyone else the two keys are absent from every
@@ -169,11 +170,6 @@ export type ContractView = Omit<ContractRow, 'currency' | 'totalValue'> &
     readonly links: ContractLinkRow[];
   };
 
-type Scope = {
-  readonly organisationId: string;
-  readonly projectId: string | null;
-};
-
 function writeContext(ctx: ContractContext): WriteContext {
   return {
     actor: { type: 'user', id: ctx.userId },
@@ -183,28 +179,17 @@ function writeContext(ctx: ContractContext): WriteContext {
   };
 }
 
-function scopeOf(row: Scope): Scope {
+function scopeOf(row: PermissionScope): PermissionScope {
   return { organisationId: row.organisationId, projectId: row.projectId };
-}
-
-function holds(
-  tx: Tx,
-  ctx: ContractContext,
-  scope: Scope,
-  key: string,
-): Promise<boolean> {
-  return scope.projectId !== null
-    ? hasProjectPermission(tx, ctx.userId, scope.projectId, key)
-    : hasOrganisationPermission(tx, ctx.userId, scope.organisationId, key);
 }
 
 async function requirePermission(
   tx: Tx,
   ctx: ContractContext,
-  scope: Scope,
+  scope: PermissionScope,
   key: string,
 ): Promise<void> {
-  if (!(await holds(tx, ctx, scope, key))) {
+  if (!(await hasScopedPermission(tx, ctx.userId, scope, key))) {
     throw new ContractAccessDeniedError(key);
   }
 }
@@ -305,7 +290,7 @@ const LINK_TARGETS: Record<ContractLinkEntityType, LinkTarget> = {
  */
 async function isLiveTarget(
   tx: Tx,
-  contractScope: Scope,
+  contractScope: PermissionScope,
   target: LinkTarget,
   entityId: string,
 ): Promise<boolean> {
@@ -333,7 +318,7 @@ async function isLiveTarget(
  */
 async function checkLinkTarget(
   tx: Tx,
-  contractScope: Scope,
+  contractScope: PermissionScope,
   link: ContractLinkInput,
 ): Promise<void> {
   const target = LINK_TARGETS[link.entityType] as LinkTarget | undefined;
@@ -354,7 +339,7 @@ async function checkLinkTarget(
  */
 async function checkPartyTarget(
   tx: Tx,
-  contractScope: Scope,
+  contractScope: PermissionScope,
   party: ContractPartyInput,
 ): Promise<void> {
   for (const [entityType, entityId] of [
@@ -412,7 +397,7 @@ export async function createContract(
   ctx: ContractContext,
   values: CreateContractValues,
 ): Promise<ContractView> {
-  const scope: Scope = {
+  const scope: PermissionScope = {
     organisationId: values.organisationId,
     projectId: values.projectId ?? null,
   };
@@ -460,9 +445,9 @@ export async function createContract(
     }
     return parent;
   });
-  const canSeeValue = await holds(
+  const canSeeValue = await hasScopedPermission(
     tx,
-    ctx,
+    ctx.userId,
     scope,
     CONTRACTS_READ_VALUE_PERMISSION,
   );
@@ -512,7 +497,12 @@ export async function updateContract(
   );
   const canSeeValue =
     changesAmount ||
-    (await holds(tx, ctx, scope, CONTRACTS_READ_VALUE_PERMISSION));
+    (await hasScopedPermission(
+      tx,
+      ctx.userId,
+      scope,
+      CONTRACTS_READ_VALUE_PERMISSION,
+    ));
   return (await viewsOf(tx, [updated], canSeeValue))[0]!;
 }
 
@@ -670,9 +660,9 @@ export async function getContract(
   if (!found) throw new ContractAccessDeniedError(CONTRACTS_READ_PERMISSION);
   const scope = scopeOf(found);
   await requirePermission(tx, ctx, scope, CONTRACTS_READ_PERMISSION);
-  const canSeeValue = await holds(
+  const canSeeValue = await hasScopedPermission(
     tx,
-    ctx,
+    ctx.userId,
     scope,
     CONTRACTS_READ_VALUE_PERMISSION,
   );
@@ -689,14 +679,14 @@ export async function listContracts(
   ctx: ContractContext,
   filter: ContractFilter,
 ): Promise<ContractView[]> {
-  const scope: Scope = {
+  const scope: PermissionScope = {
     organisationId: filter.organisationId,
     projectId: filter.projectId ?? null,
   };
   await requirePermission(tx, ctx, scope, CONTRACTS_READ_PERMISSION);
-  const canSeeValue = await holds(
+  const canSeeValue = await hasScopedPermission(
     tx,
-    ctx,
+    ctx.userId,
     scope,
     CONTRACTS_READ_VALUE_PERMISSION,
   );
