@@ -10,6 +10,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { sqlList, standardColumns, tenantTable } from '../columns.js';
 import type { ProjectResolver } from '../project-resolver.js';
+import { markSensitive } from '../sensitive.js';
 import { organisation } from './organisation.js';
 import { project } from './project.js';
 import { user } from './user.js';
@@ -54,8 +55,10 @@ export type ContractStatus = (typeof CONTRACT_STATUSES)[number];
  * `contract`.
  *
  * `territories` holds ISO 3166-1 alpha-2 codes, or `WW` for worldwide.
- * `total_value` is a decimal with four places, in `currency`. Dates are
- * calendar dates, not instants, so they carry no time zone.
+ * `total_value` is a decimal with four places, in `currency`. It is the one
+ * sensitive column: the write helper keeps its value out of change events and
+ * records only that it changed (see `markSensitive` below). Dates are calendar
+ * dates, not instants, so they carry no time zone.
  */
 export const contract = tenantTable(
   'contract',
@@ -111,6 +114,14 @@ export const contract = tenantTable(
     ),
   ],
 );
+
+/**
+ * Contract amounts must never reach `change_event`, which anyone who may read
+ * a project's changes can read. The event still names `total_value` in
+ * `changed_fields`, so a change is visible without the number. `currency` is
+ * not an amount and stays in the event.
+ */
+markSensitive(contract, ['totalValue']);
 
 /**
  * The project of a record that belongs to a contract and has no `project_id`
