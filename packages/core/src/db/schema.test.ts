@@ -503,6 +503,8 @@ describe.each(testTargets)('database schema on $name', (target) => {
         'contract',
         'contract_party',
         'contract_link',
+        'account_chart',
+        'account',
       ]) {
         it(`${table} has every standard column with the right type and nullability`, async () => {
           const columns = await columnsOf(database, table);
@@ -537,6 +539,8 @@ describe.each(testTargets)('database schema on $name', (target) => {
       it('never generates ids in the database', async () => {
         for (const table of [
           'installation',
+          'account',
+          'account_chart',
           'contract',
           'contract_party',
           'contract_link',
