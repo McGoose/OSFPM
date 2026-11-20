@@ -141,6 +141,13 @@
       "when": 1795207023615,
       "tag": "0019_charts_of_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1795212943560,
+      "tag": "0020_cost_lines",
+      "breakpoints": true
     }
   ]
 }

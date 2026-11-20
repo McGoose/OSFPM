@@ -49,6 +49,13 @@ export const unit = tenantTable(
     }),
     // Target for composite tenant foreign keys in later tables.
     unique('unit_organisation_id_id_unique').on(t.organisationId, t.id),
+    // Target for the cost line foreign key, which keeps a line in the same
+    // project as its unit.
+    unique('unit_organisation_project_id_unique').on(
+      t.organisationId,
+      t.projectId,
+      t.id,
+    ),
     unique('unit_project_key_unique').on(t.projectId, t.key),
     // At most one live main unit per project; a deleted one frees the slot.
     uniqueIndex('unit_project_main_unique')

@@ -49,6 +49,9 @@ export const account = tenantTable(
       columns: [t.organisationId, t.chartId],
       foreignColumns: [accountChart.organisationId, accountChart.id],
     }),
+    // Target for the composite tenant foreign key of cost lines, which book to
+    // an account without naming its chart.
+    unique('account_organisation_id_id_unique').on(t.organisationId, t.id),
     // Target for the parent key below, which must stay inside one chart.
     unique('account_organisation_id_chart_id_id_unique').on(
       t.organisationId,

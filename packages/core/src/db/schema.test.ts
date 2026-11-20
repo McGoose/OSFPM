@@ -333,6 +333,8 @@ describe.each(testTargets)('database schema on $name', (target) => {
           'contract',
           'contract_link',
           'contract_party',
+          'cost_line',
+          'cost_line_scheme',
           'department',
           'episode',
           'installation',
@@ -629,6 +631,8 @@ describe.each(testTargets)('database schema on $name', (target) => {
         'contract_link',
         'account_chart',
         'account',
+        'cost_line',
+        'cost_line_scheme',
       ]) {
         it(`${table} has every standard column with the right type and nullability`, async () => {
           const columns = await columnsOf(database, table);
@@ -668,6 +672,8 @@ describe.each(testTargets)('database schema on $name', (target) => {
           'contract',
           'contract_party',
           'contract_link',
+          'cost_line',
+          'cost_line_scheme',
           'legal_hold',
           'organisation',
           'project',
