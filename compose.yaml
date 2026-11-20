@@ -1,0 +1,42 @@
+# OSFPM local development: PostgreSQL 16 with a persistent volume,
+# plus a one-off test runner (Node 26 + PostgreSQL 16, same as CI).
+#
+#   docker compose up -d db                 start the database
+#   docker compose run --rm --build test    run the full suite in a container
+#   docker compose down                     stop (data is kept in the volume)
+#   docker compose down -v                  stop and DELETE the database volume
+
+name: osfpm
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: osfpm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: osfpm
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Bound to localhost only, so the database is not reachable from the network.
+      - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U osfpm -d osfpm']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  test:
+    build:
+      context: .
+      target: test
+    profiles: ['test']
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://osfpm:${POSTGRES_PASSWORD}@db:5432/osfpm
+
+volumes:
+  pgdata:
