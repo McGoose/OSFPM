@@ -29,6 +29,11 @@ DATABASE_URL=postgres://osfpm:<POSTGRES_PASSWORD>@127.0.0.1:5432/osfpm pnpm test
 
 The tests create and drop their own throwaway databases on that server and never touch the `osfpm` database itself.
 
+Troubleshooting:
+
+- Every `docker compose` command, including `down`, needs a `.env` with `POSTGRES_PASSWORD` set.
+- If you change `POSTGRES_PASSWORD` after the first start, run `docker compose down -v` first. This deletes the database volume, and the test database with it.
+
 ## Licence
 
 SPDX-License-Identifier: `AGPL-3.0-only`. The full text is in [LICENSE](LICENSE).
