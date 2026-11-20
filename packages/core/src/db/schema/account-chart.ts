@@ -27,8 +27,8 @@ import { user } from './user.js';
  * copy never follows later changes to the template.
  *
  * Retention class `financial-record`: a chart is needed to read cost lines for as
- * long as the cost lines are kept (source: prompt P-02i; the class is seeded in
- * `0013_seed_retention_classes.sql`).
+ * long as the cost lines are kept (source: `src/retention/README.md`; the class
+ * is seeded in `0013_seed_retention_classes.sql`).
  *
  * Two partial unique indexes, written by hand in the migration to add NULLS NOT
  * DISTINCT, which Drizzle cannot express on an index (see
