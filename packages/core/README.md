@@ -1,6 +1,6 @@
 # @osfpm/core
 
-The database layer and shared services of OSFPM: schema, write helper, access checks, sensitive data, production structure, retention, legal holds and contracts. Other modules and the future API build on it. They use its services and events and never read each other's tables.
+The database layer and shared services of OSFPM: schema, write helper, access checks, sensitive data, production structure, retention, legal holds, contracts and charts of accounts. Other modules and the future API build on it. They use its services and events and never read each other's tables.
 
 `src/index.ts` exports only a placeholder version constant today. Import from the module folders by path.
 
@@ -15,6 +15,7 @@ The database layer and shared services of OSFPM: schema, write helper, access ch
 | `src/retention/`    | Retention classes' shipped periods and the end-date calculation                         |
 | `src/legal-hold/`   | Placing, releasing and checking legal holds                                             |
 | `src/contracts/`    | The contracts registry, with amounts hidden from those without `contracts:read-value`   |
+| `src/accounts/`     | Charts of accounts: organisation templates, project copies and their account trees      |
 | `migrations/`       | Forward-only SQL migrations and Drizzle snapshots. Never edit one that has been applied |
 | `drizzle.config.ts` | Drizzle Kit settings; the `db:generate` script writes a migration from the schema       |
 
