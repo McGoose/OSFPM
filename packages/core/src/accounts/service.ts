@@ -37,8 +37,10 @@ import {
  * list names the scope itself, so its error does. Charts of accounts are not
  * sensitive personal data, so a denial writes no audit event.
  *
- * Accounts are removed by soft delete. Their codes are unique among live
- * accounts only, so adding a removed code again creates a new account.
+ * Accounts and charts are removed by soft delete. Codes and keys are unique
+ * among live records only, so adding a removed code, or creating a chart with a
+ * removed key, makes a new record. A removed chart also gives up its place as
+ * the default of its scope.
  */
 
 /** Who is acting, and on which server and clock. Always a user. */
@@ -108,6 +110,24 @@ export type CopyChartInput = {
   readonly name?: string;
   /** Makes the copy the project's default chart. Defaults to false. */
   readonly makeDefault?: boolean;
+};
+
+/**
+ * The fields of a chart that can change. Its project and the template it was
+ * copied from cannot, and any other key in the object is ignored. `key` and
+ * `format` are lower-case letters and digits joined by hyphens; the database
+ * refuses anything else (`RecordWriteError`).
+ */
+export type ChartChanges = {
+  readonly name?: string;
+  /** A live key is unique per scope. */
+  readonly key?: string;
+  readonly format?: string;
+  /**
+   * `true` makes this the default chart of its scope and takes the default from
+   * the old one. `false` leaves the scope with no default.
+   */
+  readonly isDefault?: boolean;
 };
 
 /** An account to add. Leave out `parentId` for a top-level account. */
@@ -315,14 +335,17 @@ async function findDefaultChart(tx: Tx, scope: PermissionScope) {
  * Takes the default away from the scope's current default chart, so a new
  * default can take its place: the unique index allows one live default per
  * scope. Runs inside the caller's savepoint, before the new chart is written.
+ * `keepId` names the chart that is about to become the default: when it already
+ * is the default there is nothing to clear.
  */
 async function clearDefault(
   tx: Tx,
   write: WriteContext,
   scope: PermissionScope,
+  keepId?: string,
 ) {
   const current = await findDefaultChart(tx, scope);
-  if (current) {
+  if (current && current.id !== keepId) {
     await updateRecord(
       tx,
       accountChart,
@@ -374,6 +397,90 @@ export async function createChart(
     );
   });
   return viewOf(tx, created);
+}
+
+/**
+ * Changes fields of a chart. Needs `accounts:edit` on the chart's scope. Setting
+ * `isDefault` to true takes the default from the scope's old default chart in
+ * the same savepoint, so the scope never has two defaults, and if the update
+ * fails, for example on a stale `version`, the old default stays. Changes that
+ * alter no field write nothing and return the current chart (see
+ * `updateRecord`).
+ *
+ * @throws AccessDeniedError, with no scope, for a chart that is unknown, removed
+ * or forbidden: all three look the same, so ids cannot be probed.
+ * @throws VersionConflictError for a stale `version`.
+ * @throws RecordWriteError when the database refuses a value, for example a key
+ * already live in the scope or one that is not lower case and hyphens.
+ */
+export async function updateChart(
+  tx: Tx,
+  ctx: AccountContext,
+  id: string,
+  version: number,
+  changes: ChartChanges,
+): Promise<AccountChartView> {
+  const found = await findChart(tx, id);
+  if (!found) throw new AccessDeniedError(ACCOUNTS_EDIT_PERMISSION);
+  const scope = scopeOf(found);
+  await requireOnRecord(tx, ctx, scope, ACCOUNTS_EDIT_PERMISSION);
+  // Named fields only: a key the type does not list, such as `projectId`, never
+  // reaches the write.
+  const patch: UpdatePatch<typeof accountChart> = {
+    name: changes.name,
+    key: changes.key,
+    format: changes.format,
+    isDefault: changes.isDefault,
+  };
+  const updated = await tx.transaction(async (inner) => {
+    const write = writeContext(ctx);
+    if (changes.isDefault === true) {
+      await clearDefault(inner, write, scope, id);
+    }
+    return updateRecord(inner, accountChart, id, version, patch, write);
+  });
+  return viewOf(tx, updated);
+}
+
+/**
+ * Removes a chart and all its live accounts by soft delete, in one savepoint:
+ * either all of it is removed or none, change events and their sequence numbers
+ * included. Needs `accounts:edit` on the chart's scope. The accounts go without
+ * the check for live children that `removeAccount` makes, because the whole tree
+ * goes. Accounts that were already removed are left as they were. The chart's
+ * key and its place as the default of its scope are free afterwards. Charts
+ * copied from a template are not touched when the template is removed.
+ *
+ * @throws AccessDeniedError, with no scope, for a chart that is unknown, removed
+ * or forbidden.
+ * @throws VersionConflictError for a stale `version` of the chart.
+ * @throws RecordWriteError when the database refuses a write.
+ */
+export async function removeChart(
+  tx: Tx,
+  ctx: AccountContext,
+  id: string,
+  version: number,
+): Promise<AccountChartRow> {
+  const found = await findChart(tx, id);
+  if (!found) throw new AccessDeniedError(ACCOUNTS_EDIT_PERMISSION);
+  await requireOnRecord(tx, ctx, scopeOf(found), ACCOUNTS_EDIT_PERMISSION);
+  return tx.transaction(async (inner) => {
+    const write = writeContext(ctx);
+    // The chart first, so a stale `version` is refused before any account is
+    // touched.
+    const removed = await softDeleteRecord(
+      inner,
+      accountChart,
+      id,
+      version,
+      write,
+    );
+    for (const row of inTreeOrder(await liveAccountsOf(inner, id))) {
+      await softDeleteRecord(inner, account, row.id, row.version, write);
+    }
+    return removed;
+  });
 }
 
 /**
