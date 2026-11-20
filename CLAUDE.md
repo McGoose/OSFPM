@@ -85,6 +85,7 @@ Read-only reference at tag `prototype-final`. Port only what a prompt names.
 - Install: `pnpm install`
 - Test: `pnpm test` (PGlite only)
 - Test on PostgreSQL too: `DATABASE_URL=postgres://user:pass@host:5432/postgres pnpm test`; tests create and drop their own throwaway databases.
+- No local PostgreSQL? See "Run the tests with Docker" in `README.md`.
 - Lint: `pnpm lint`
 - Format: `pnpm format` (check only: `pnpm format:check`)
 - Typecheck: `pnpm typecheck`
