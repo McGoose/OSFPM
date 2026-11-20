@@ -21,9 +21,11 @@ COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN --mount=type=cache,id=osfpm-pnpm-store,target=/home/node/.pnpm-store,uid=1000,gid=1000 \
     pnpm fetch --frozen-lockfile --store-dir /home/node/.pnpm-store
 
-# Copy the source and install offline from the cached store.
+# Copy the source and install from the cached store. --prefer-offline uses the
+# network only for packages the cache no longer has (BuildKit can prune it), so a
+# pruned cache makes the build slower instead of failing it.
 FROM deps AS test
 COPY --chown=node:node . .
 RUN --mount=type=cache,id=osfpm-pnpm-store,target=/home/node/.pnpm-store,uid=1000,gid=1000 \
-    pnpm install --offline --frozen-lockfile --store-dir /home/node/.pnpm-store
+    pnpm install --frozen-lockfile --prefer-offline --store-dir /home/node/.pnpm-store
 CMD ["pnpm", "test"]
