@@ -138,6 +138,55 @@ function userValues(overrides: Partial<typeof user.$inferInsert> = {}) {
 
 const NAME_LIMIT = 63;
 
+/**
+ * Unique indexes and constraints that have a nullable column and are not NULLS
+ * NOT DISTINCT, because several NULLs are meant to be allowed. Name of the index
+ * or constraint, then why. Adding an entry needs a reason a reviewer can check.
+ */
+const SEVERAL_NULLS_ALLOWED: Record<string, string> = {
+  person_organisation_user_unique:
+    'Most people have no user account, so many rows with a NULL user_id are normal; the key only stops one user being two people in an organisation',
+};
+
+/**
+ * Every unique index or constraint of the migrated database, primary keys apart,
+ * that has a nullable column among its key columns, with whether it is NULLS NOT
+ * DISTINCT. Expression columns have no attribute and are skipped. Sorted by name
+ * in JavaScript, because the database collation orders underscores differently.
+ */
+async function uniqueKeysWithNullableColumns(database: Database) {
+  const found = await rows(
+    database,
+    sql`select i.relname as name,
+               c.relname as table_name,
+               x.indnullsnotdistinct as nulls_not_distinct,
+               (select array_to_string(array_agg(a.attname::text order by k.ord), ',')
+                  from unnest(x.indkey::int2[]) with ordinality as k(attnum, ord)
+                  join pg_attribute a
+                    on a.attrelid = x.indrelid and a.attnum = k.attnum
+                 where k.ord <= x.indnkeyatts and not a.attnotnull) as nullable_columns,
+               (select array_to_string(array_agg(a.attname::text order by k.ord), ',')
+                  from unnest(x.indkey::int2[]) with ordinality as k(attnum, ord)
+                  join pg_attribute a
+                    on a.attrelid = x.indrelid and a.attnum = k.attnum
+                 where k.ord <= x.indnkeyatts) as key_columns
+        from pg_index x
+        join pg_class c on c.oid = x.indrelid
+        join pg_class i on i.oid = x.indexrelid
+        where x.indisunique and not x.indisprimary
+          and c.relnamespace = 'public'::regnamespace`,
+  );
+  return found
+    .filter((r) => r.nullable_columns !== null)
+    .map((r) => ({
+      name: r.name as string,
+      table: r.table_name as string,
+      nullsNotDistinct: r.nulls_not_distinct as boolean,
+      columns: (r.key_columns as string).split(','),
+    }))
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+}
+
 const schemaTables = Object.values(schemaModule).filter((value) =>
   is(value, PgTable),
 );
@@ -274,6 +323,8 @@ describe.each(testTargets)('database schema on $name', (target) => {
               where table_schema = 'public' order by table_name`,
         );
         expect(tables.map((t) => t.table_name)).toEqual([
+          'account',
+          'account_chart',
           'audit_event',
           'block',
           'change_event',
@@ -475,6 +526,81 @@ describe.each(testTargets)('database schema on $name', (target) => {
     });
   });
 
+  // CLAUDE.md, Data rules: a unique key with a nullable column is NULLS NOT
+  // DISTINCT unless several NULLs are meant to be allowed. Drizzle cannot tell
+  // an index to be, so the migration does it by hand and only the migrated
+  // database shows whether it was done (`pg_index.indnullsnotdistinct`).
+  describe('unique keys with a nullable column', () => {
+    it('are all NULLS NOT DISTINCT, except the ones that allow several NULLs on purpose', async () => {
+      const { database, cleanup } = await createMigratedDatabase(target);
+      try {
+        const found = await uniqueKeysWithNullableColumns(database);
+        // Guards against the query matching nothing and passing for nothing.
+        expect(found.length).toBeGreaterThanOrEqual(8);
+        expect(
+          found.filter((key) => key.nullsNotDistinct).map((key) => key.name),
+        ).toEqual(
+          expect.arrayContaining([
+            'account_chart_default_unique',
+            'account_chart_organisation_project_key_unique',
+            'change_seq_organisation_project_unique',
+            'contract_party_contract_person_company_role_unique',
+            'department_organisation_project_key_unique',
+            'role_organisation_project_key_unique',
+            'setting_value_organisation_project_key_unique',
+          ]),
+        );
+        const plain = found
+          .filter((key) => !key.nullsNotDistinct)
+          .map((key) => key.name)
+          .sort();
+        // Equal, not a subset: an entry that no longer matches a plain key is
+        // stale and must go, and a new plain key must be fixed or listed.
+        expect(plain).toEqual(Object.keys(SEVERAL_NULLS_ALLOWED).sort());
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it('are found by the check, which flags a plain index, a partial one and a constraint, and passes NULLS NOT DISTINCT and NOT NULL columns', async () => {
+      const { database, cleanup } = await target.create();
+      try {
+        await database.db.execute(
+          sql`create table scratch_a (x uuid, y text, z text not null)`,
+        );
+        await database.db.execute(
+          sql`create unique index scratch_plain on scratch_a (x, y)`,
+        );
+        await database.db.execute(
+          sql`create unique index scratch_distinct on scratch_a (x, y) nulls not distinct`,
+        );
+        await database.db.execute(
+          sql`create unique index scratch_partial on scratch_a (x) where z = 'live'`,
+        );
+        await database.db.execute(
+          sql`alter table scratch_a add constraint scratch_constraint unique (y)`,
+        );
+        await database.db.execute(
+          sql`create unique index scratch_not_null on scratch_a (z)`,
+        );
+        await database.db.execute(
+          sql`create table scratch_b (p uuid primary key, q text not null, unique (p, q))`,
+        );
+        const found = await uniqueKeysWithNullableColumns(database);
+        expect(
+          found.map((key) => [key.name, key.nullsNotDistinct, key.columns]),
+        ).toEqual([
+          ['scratch_constraint', false, ['y']],
+          ['scratch_distinct', true, ['x', 'y']],
+          ['scratch_partial', false, ['x']],
+          ['scratch_plain', false, ['x', 'y']],
+        ]);
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
   describe('constraints', () => {
     let database: Database;
     let cleanup: () => Promise<void>;
@@ -501,6 +627,8 @@ describe.each(testTargets)('database schema on $name', (target) => {
         'contract',
         'contract_party',
         'contract_link',
+        'account_chart',
+        'account',
       ]) {
         it(`${table} has every standard column with the right type and nullability`, async () => {
           const columns = await columnsOf(database, table);
@@ -535,6 +663,8 @@ describe.each(testTargets)('database schema on $name', (target) => {
       it('never generates ids in the database', async () => {
         for (const table of [
           'installation',
+          'account',
+          'account_chart',
           'contract',
           'contract_party',
           'contract_link',

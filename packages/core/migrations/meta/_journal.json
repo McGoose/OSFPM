@@ -134,6 +134,13 @@
       "when": 1794722613757,
       "tag": "0018_contracts",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1795207023615,
+      "tag": "0019_charts_of_accounts",
+      "breakpoints": true
     }
   ]
 }
