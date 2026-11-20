@@ -1,10 +1,15 @@
-import { and, asc, eq, isNull, type SQL } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, type SQL } from 'drizzle-orm';
 import { AccessDeniedError } from '../access/access-denied-error.js';
 import {
   hasScopedPermission,
   type PermissionScope,
 } from '../access/scoped-permission.js';
-import { account, accountChart, project } from '../db/schema/index.js';
+import {
+  account,
+  accountChart,
+  costLine,
+  project,
+} from '../db/schema/index.js';
 import {
   insertRecord,
   RecordStateError,
@@ -22,7 +27,8 @@ import {
 /**
  * Charts of accounts: an organisation keeps template charts, and each project
  * copies one and edits its own copy. Cost lines, budgets and file import or
- * export are not here.
+ * export are not here, but cost lines are booked to a project's accounts, so an
+ * account or chart with a live cost line cannot be removed (`AccountInUseError`).
  *
  * Permissions: `accounts:read` and `accounts:edit`. A project chart is checked
  * on its project; an organisation template, one with no project, is checked in
@@ -77,6 +83,24 @@ export class AccountHasChildrenError extends RecordStateError {
   constructor(entityId: string) {
     super('account', entityId, 'delete');
     this.message = `Cannot delete account ${entityId}: it has live child accounts`;
+  }
+}
+
+/**
+ * An account, or a chart with such an account, cannot be removed while a live
+ * cost line is booked to it: the line would point at an account that is gone. It
+ * is a `RecordStateError`, as `AccountHasChildrenError` is, with its own
+ * message, because the stock one says the record is already deleted. Remove or
+ * rebook the cost lines first. The error says nothing about the lines beyond
+ * their existence: no ids, no amounts. Nothing was written.
+ */
+export class AccountInUseError extends RecordStateError {
+  constructor(entityType: 'account' | 'account_chart', entityId: string) {
+    super(entityType, entityId, 'delete');
+    this.message =
+      entityType === 'account'
+        ? `Cannot delete account ${entityId}: a live cost line is booked to it`
+        : `Cannot delete account_chart ${entityId}: a live cost line is booked to one of its accounts`;
   }
 }
 
@@ -239,6 +263,39 @@ async function findAccount(tx: Tx, id: string) {
   if (!found) return undefined;
   const chart = await findChart(tx, found.chartId);
   return chart ? { account: found, chart } : undefined;
+}
+
+/**
+ * True when a live cost line is booked to any account matching `accounts`. The
+ * matching accounts are locked first, and the lines are read after, so a cost
+ * line being written right now, which holds a share lock on its account (see the
+ * costs service), either finishes before the check or waits for the removal.
+ * Without the lock the check could pass just before such a line commits, and the
+ * account would be removed under it. The locks last until the caller's
+ * transaction ends. Accounts and cost lines are both core tables, so this is
+ * the one place the accounts folder reads `cost_line`: the rule is an integrity
+ * check of the account, not a report on cost lines.
+ */
+async function hasLiveCostLines(tx: Tx, accounts: SQL): Promise<boolean> {
+  await tx
+    .select({ id: account.id })
+    .from(account)
+    .where(accounts)
+    .for('update');
+  const [found] = await tx
+    .select({ id: costLine.id })
+    .from(costLine)
+    .where(
+      and(
+        isNull(costLine.deletedAt),
+        inArray(
+          costLine.accountId,
+          tx.select({ id: account.id }).from(account).where(accounts),
+        ),
+      ),
+    )
+    .limit(1);
+  return found !== undefined;
 }
 
 /** The live accounts of a chart, in no particular order. */
@@ -453,8 +510,13 @@ export async function updateChart(
  * and restoring it later cannot give its scope a second one. Charts copied from
  * a template are not touched when the template is removed.
  *
+ * A chart with a live cost line booked to one of its accounts is not removed:
+ * the check runs before anything is written.
+ *
  * @throws AccessDeniedError, with no scope, for a chart that is unknown, removed
  * or forbidden.
+ * @throws AccountInUseError, a `RecordStateError`, while a live cost line is
+ * booked to one of the chart's accounts.
  * @throws VersionConflictError for a stale `version` of the chart.
  * @throws RecordWriteError when the database refuses a write.
  */
@@ -469,6 +531,14 @@ export async function removeChart(
   await requireOnRecord(tx, ctx, scopeOf(found), ACCOUNTS_EDIT_PERMISSION);
   return tx.transaction(async (inner) => {
     const write = writeContext(ctx);
+    if (
+      await hasLiveCostLines(
+        inner,
+        and(eq(account.chartId, id), isNull(account.deletedAt))!,
+      )
+    ) {
+      throw new AccountInUseError('account_chart', id);
+    }
     // The chart first, so a stale `version` is refused before any account is
     // touched. `is_default` goes in the same write: the unique index ignores a
     // removed row, but a restore clears the deletion mark only, and a removed
@@ -710,11 +780,14 @@ export async function updateAccount(
 
 /**
  * Removes an account by soft delete. Needs `accounts:edit` on its chart's scope.
- * Its code is free to use again afterwards.
+ * Its code is free to use again afterwards. An account with a live cost line
+ * booked to it is not removed.
  *
  * @throws AccessDeniedError, with no scope, as `updateAccount`.
  * @throws AccountHasChildrenError, a `RecordStateError`, while the account has
  * live children; remove or move them first.
+ * @throws AccountInUseError, a `RecordStateError`, while a live cost line is
+ * booked to the account; remove or rebook the cost lines first.
  * @throws VersionConflictError for a stale `version`.
  */
 export async function removeAccount(
@@ -737,6 +810,9 @@ export async function removeAccount(
     .where(and(eq(account.parentId, id), isNull(account.deletedAt)))
     .limit(1);
   if (child) throw new AccountHasChildrenError(id);
+  if (await hasLiveCostLines(tx, eq(account.id, id))) {
+    throw new AccountInUseError('account', id);
+  }
   return softDeleteRecord(tx, account, id, version, writeContext(ctx));
 }
 

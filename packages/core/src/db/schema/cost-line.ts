@@ -10,6 +10,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { sqlList, standardColumns, tenantTable } from '../columns.js';
 import type { ProjectResolver } from '../project-resolver.js';
+import { markSensitive } from '../sensitive.js';
 import { account } from './account.js';
 import { company } from './company.js';
 import { episode } from './episode.js';
@@ -72,7 +73,9 @@ export type ProductionPhase = (typeof PRODUCTION_PHASES)[number];
  * `amount` is in `currency`, and `amount_project_currency` is the same money in
  * the project's currency. Both are decimals with four places, and
  * `fx_rate` has ten: money is never floating point. Negative amounts are
- * allowed, for credits and refunds. When `currency` is the project's currency,
+ * allowed, for credits and refunds. Both amounts are sensitive: the write helper
+ * keeps their values out of change events (see `markSensitive` below), and the
+ * costs service shows them only to holders of `costs:read`. When `currency` is the project's currency,
  * `fx_rate` is NULL and the two amounts are equal; otherwise `fx_rate` is
  * required and the service has the database compute
  * `amount_project_currency` from it. Those two rules need the project's
@@ -186,6 +189,15 @@ export const costLine = tenantTable(
     check('cost_line_description_check', sql`${t.description} <> ''`),
   ],
 );
+
+/**
+ * Amounts must never reach `change_event`, which anyone who may read a project's
+ * changes can read, and what a line costs is what people are paid (CLAUDE.md,
+ * Privacy rule). The event still names the field in `changed_fields`, so a
+ * change is visible without the number. `currency` and `fx_rate` are not
+ * amounts and stay in the event.
+ */
+markSensitive(costLine, ['amount', 'amountProjectCurrency']);
 
 /**
  * The project of a record that belongs to a cost line and has no `project_id`

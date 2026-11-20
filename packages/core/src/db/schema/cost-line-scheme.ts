@@ -14,6 +14,7 @@ import {
   timestamptz,
 } from '../columns.js';
 import { registerProjectResolver } from '../project-resolver.js';
+import { markSensitive } from '../sensitive.js';
 import { costLine, costLineProjectResolver } from './cost-line.js';
 import { organisation } from './organisation.js';
 import { user } from './user.js';
@@ -42,7 +43,8 @@ export type CostLineSchemeStatus = (typeof COST_LINE_SCHEME_STATUSES)[number];
  *
  * `qualifying_amount` is the part of the line that qualifies, and only a
  * `qualifying` tag may hold one. The service keeps it between zero and the
- * line's `amount_project_currency`, with the same sign. `decided_by` and
+ * line's `amount_project_currency`, with the same sign. The write helper keeps
+ * it out of change events, as it does the line's amounts. `decided_by` and
  * `decided_at` record who made the decision and when, and are both set or both
  * empty. Visibility defaults to `private` and the retention class to
  * `financial-record`, as for the cost line.
@@ -102,6 +104,13 @@ export const costLineScheme = tenantTable(
       .where(sql`${t.deletedAt} is null`),
   ],
 );
+
+/**
+ * The qualifying amount is part of what a line costs, so like the line's own
+ * amounts it never reaches `change_event` (see `markSensitive` on `cost_line`).
+ * The event still names `qualifying_amount` in `changed_fields`.
+ */
+markSensitive(costLineScheme, ['qualifyingAmount']);
 
 /** Has no `project_id`: its project is the one its cost line belongs to. */
 registerProjectResolver(costLineScheme, costLineProjectResolver, {
