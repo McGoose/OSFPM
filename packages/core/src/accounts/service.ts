@@ -39,8 +39,8 @@ import {
  *
  * Accounts and charts are removed by soft delete. Codes and keys are unique
  * among live records only, so adding a removed code, or creating a chart with a
- * removed key, makes a new record. A removed chart also gives up its place as
- * the default of its scope.
+ * removed key, makes a new record. A removed chart is no longer the default of
+ * its scope.
  */
 
 /** Who is acting, and on which server and clock. Always a user. */
@@ -448,8 +448,10 @@ export async function updateChart(
  * included. Needs `accounts:edit` on the chart's scope. The accounts go without
  * the check for live children that `removeAccount` makes, because the whole tree
  * goes. Accounts that were already removed are left as they were. The chart's
- * key and its place as the default of its scope are free afterwards. Charts
- * copied from a template are not touched when the template is removed.
+ * key is free afterwards, and so is its place as the default of its scope: the
+ * same write sets `is_default` to false, so a removed chart is never a default
+ * and restoring it later cannot give its scope a second one. Charts copied from
+ * a template are not touched when the template is removed.
  *
  * @throws AccessDeniedError, with no scope, for a chart that is unknown, removed
  * or forbidden.
@@ -468,13 +470,16 @@ export async function removeChart(
   return tx.transaction(async (inner) => {
     const write = writeContext(ctx);
     // The chart first, so a stale `version` is refused before any account is
-    // touched.
+    // touched. `is_default` goes in the same write: the unique index ignores a
+    // removed row, but a restore clears the deletion mark only, and a removed
+    // chart that kept the mark would then clash with the scope's new default.
     const removed = await softDeleteRecord(
       inner,
       accountChart,
       id,
       version,
       write,
+      { isDefault: false },
     );
     for (const row of inTreeOrder(await liveAccountsOf(inner, id))) {
       await softDeleteRecord(inner, account, row.id, row.version, write);

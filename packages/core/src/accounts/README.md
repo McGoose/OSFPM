@@ -21,7 +21,7 @@ const chart = await copyChartToProject(tx, ctx, {
 - A parent is always in the same chart. An update that would make an account its own ancestor is refused (`AccountInputError`), and an account with live children cannot be removed (`AccountHasChildrenError`, a `RecordStateError`).
 - Making a chart the default (`createChart`, `updateChart`, `copyChartToProject`) takes the default from the scope's old one in the same savepoint. A scope is the organisation's templates, or one project.
 - `removeChart` removes the chart and all its live accounts in one savepoint, or nothing. The check for live children belongs to `removeAccount` alone, because the whole tree goes. Charts copied from a removed template stay.
-- Keys and codes are unique among live records only, so a removed one can be used again as a new record, and a removed chart gives up its place as the default.
+- Keys and codes are unique among live records only, so a removed one can be used again as a new record, and `removeChart` sets `is_default` to false in the same write, so a removed chart is never a default and a later restore cannot give its scope a second one.
 - A call by id denies an unknown, removed or other organisation's record exactly like a forbidden one, and names no scope. Create and list do name it.
 - Charts of accounts are not sensitive personal data, so a denial writes no audit event. Both tables use the `financial-record` retention class.
 

@@ -30,6 +30,7 @@ import {
 import {
   RecordStateError,
   RecordWriteError,
+  restoreRecord,
   VersionConflictError,
 } from '../db/write.js';
 import {
@@ -934,6 +935,75 @@ describe.each(testTargets)('charts of accounts on $name', (target) => {
           })
         ).map((c) => c.id),
       ).toEqual([again.id]);
+    });
+
+    it('clears is_default in the same write, so a removed default is no default and a restore cannot give its scope a second one', async () => {
+      const w = await setup();
+      type Make = (
+        overrides: Partial<Parameters<typeof createChart>[2]>,
+      ) => Promise<AccountChartRow>;
+      const scopes: { userId: string; projectId: string | null; make: Make }[] =
+        [
+          {
+            userId: w.projectManager,
+            projectId: w.projectId,
+            make: (overrides) => projectChartIn(w, overrides),
+          },
+          {
+            userId: w.orgManager,
+            projectId: null,
+            make: (overrides) => templateIn(w, overrides),
+          },
+        ];
+      for (const scope of scopes) {
+        const old = await scope.make({ key: 'old', isDefault: true });
+        const removed = await removeChart(
+          db(),
+          at(scope.userId),
+          old.id,
+          old.version,
+        );
+        expect(removed.deletedAt).not.toBeNull();
+        expect(removed.isDefault).toBe(false);
+        // The place is free: another chart becomes the scope's default.
+        const next = await scope.make({ key: 'next', isDefault: true });
+        // No service call restores a chart yet, so the write helper does: it
+        // clears the deletion mark and nothing else.
+        const restored = await restoreRecord(
+          db(),
+          accountChart,
+          old.id,
+          removed.version,
+          {
+            actor: { type: 'user', id: scope.userId },
+            originServer: ORIGIN,
+            clock: () => NOW,
+          },
+        );
+        expect(restored).toMatchObject({ deletedAt: null, isDefault: false });
+        expect(
+          (await chartsIn(w.organisationId))
+            .filter((c) => c.projectId === scope.projectId && c.isDefault)
+            .map((c) => c.id),
+        ).toEqual([next.id]);
+        // The removal event says the default was given up.
+        const event = (await eventsIn(w.organisationId)).find(
+          (e) => e.entityId === old.id && e.action === 'delete',
+        )!;
+        expect(event.changedFields).toContain('is_default');
+        expect(event.before).toMatchObject({ is_default: true });
+        expect(event.after).toMatchObject({ is_default: false });
+      }
+    });
+
+    it('leaves is_default out of the removal event of a chart that was not the default', async () => {
+      const w = await setup();
+      const chart = await projectChartIn(w, { key: 'plain' });
+      await removeChart(db(), at(w.projectManager), chart.id, chart.version);
+      const event = (await eventsIn(w.organisationId)).find(
+        (e) => e.entityId === chart.id && e.action === 'delete',
+      )!;
+      expect(event.changedFields).not.toContain('is_default');
     });
 
     it('needs accounts:edit on the chart’s scope, and refuses an unknown or removed chart exactly like a forbidden one', async () => {
