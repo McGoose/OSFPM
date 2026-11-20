@@ -30,7 +30,6 @@ import {
 import {
   RecordStateError,
   RecordWriteError,
-  softDeleteRecord,
   VersionConflictError,
 } from '../db/write.js';
 import {
@@ -47,7 +46,9 @@ import {
   getChart,
   listCharts,
   removeAccount,
+  removeChart,
   updateAccount,
+  updateChart,
   type AccountChartRow,
   type AccountContext,
   type AccountInput,
@@ -482,13 +483,492 @@ describe.each(testTargets)('charts of accounts on $name', (target) => {
     });
   });
 
-  /** Removes a chart as its organisation's manager. The service has no call for it yet. */
-  const removeChart = (w: World, chart: AccountChartRow) =>
-    softDeleteRecord(db(), accountChart, chart.id, chart.version, {
-      actor: { type: 'user', id: w.orgManager },
-      originServer: ORIGIN,
-      clock: () => NOW,
+  /**
+   * Removes a chart through the service, as the manager of its scope: the
+   * project's for a project chart, the organisation's for a template.
+   */
+  const removeChartOf = (w: World, chart: AccountChartRow) =>
+    removeChart(
+      db(),
+      at(chart.projectId === null ? w.orgManager : w.projectManager),
+      chart.id,
+      chart.version,
+    );
+
+  describe('updateChart', () => {
+    it('changes the name, the key and the format, and bumps the version', async () => {
+      const w = await setup();
+      const chart = await projectChartIn(w);
+      await addAccount(db(), at(w.projectManager), chart.id, {
+        code: '1000',
+        name: 'Above the line',
+      });
+      const updated = await updateChart(
+        db(),
+        at(w.projectManager),
+        chart.id,
+        chart.version,
+        {
+          name: 'The Last Withdrawal budget',
+          key: 'tlw-budget',
+          format: 'mmb',
+        },
+      );
+      expect(updated).toMatchObject({
+        id: chart.id,
+        name: 'The Last Withdrawal budget',
+        key: 'tlw-budget',
+        format: 'mmb',
+        projectId: w.projectId,
+        version: 2,
+        updatedBy: w.projectManager,
+      });
+      expect(updated.accounts.map((a) => a.code)).toEqual(['1000']);
+      const [event] = (await eventsIn(w.organisationId)).filter(
+        (e) => e.entityType === 'account_chart' && e.action === 'update',
+      );
+      expect(event).toMatchObject({ projectId: w.projectId });
+      expect([...event!.changedFields].sort()).toEqual([
+        'format',
+        'key',
+        'name',
+      ]);
     });
+
+    it('makes the chart the default of its scope and takes the default from the old one in the same savepoint, leaving the other scope alone', async () => {
+      const w = await setup();
+      const first = await projectChartIn(w, { key: 'first', isDefault: true });
+      const templateDefault = await templateIn(w, { isDefault: true });
+      const second = await projectChartIn(w, { key: 'second' });
+      const updated = await updateChart(
+        db(),
+        at(w.projectManager),
+        second.id,
+        second.version,
+        { isDefault: true },
+      );
+      expect(updated.isDefault).toBe(true);
+      const found = await chartsIn(w.organisationId);
+      expect(
+        found
+          .filter((c) => c.isDefault)
+          .map((c) => c.id)
+          .sort(),
+      ).toEqual([second.id, templateDefault.id].sort());
+      expect(found.find((c) => c.id === first.id)).toMatchObject({
+        isDefault: false,
+        version: 2,
+      });
+      // The old default is cleared first, as the unique index allows one.
+      expect(
+        (await eventsIn(w.organisationId))
+          .filter((e) => e.projectId === w.projectId)
+          .map((e) => [e.entityId, e.action, e.seq]),
+      ).toEqual([
+        [first.id, 'create', 1],
+        [second.id, 'create', 2],
+        [first.id, 'update', 3],
+        [second.id, 'update', 4],
+      ]);
+    });
+
+    it('clears nothing when the chart already is the default', async () => {
+      const w = await setup();
+      const chart = await projectChartIn(w, { isDefault: true });
+      const updated = await updateChart(
+        db(),
+        at(w.projectManager),
+        chart.id,
+        chart.version,
+        { isDefault: true, name: 'Renamed' },
+      );
+      expect(updated).toMatchObject({
+        isDefault: true,
+        name: 'Renamed',
+        version: 2,
+      });
+      const updates = (await eventsIn(w.organisationId)).filter(
+        (e) => e.action === 'update',
+      );
+      expect(updates.map((e) => [e.entityId, e.changedFields])).toEqual([
+        [chart.id, ['name']],
+      ]);
+    });
+
+    it('can give up the default, which leaves the scope with none until another chart takes it', async () => {
+      const w = await setup();
+      const first = await projectChartIn(w, { key: 'first', isDefault: true });
+      const second = await projectChartIn(w, { key: 'second' });
+      const given = await updateChart(
+        db(),
+        at(w.projectManager),
+        first.id,
+        first.version,
+        { isDefault: false },
+      );
+      expect(given.isDefault).toBe(false);
+      expect(
+        (await chartsIn(w.organisationId)).filter((c) => c.isDefault),
+      ).toEqual([]);
+      const taken = await updateChart(
+        db(),
+        at(w.projectManager),
+        second.id,
+        second.version,
+        { isDefault: true },
+      );
+      expect(taken.isDefault).toBe(true);
+    });
+
+    it('keeps the old default when the update is refused, for a stale version and for a key already live', async () => {
+      const w = await setup();
+      await projectChartIn(w, { key: 'first', isDefault: true });
+      const second = await projectChartIn(w, { key: 'second' });
+      const before = await snapshot(w);
+      const stale = await errorOf(
+        updateChart(db(), at(w.projectManager), second.id, 9, {
+          isDefault: true,
+        }),
+      );
+      expect(stale).toBeInstanceOf(VersionConflictError);
+      expect(await snapshot(w)).toEqual(before);
+      const duplicate = await errorOf(
+        updateChart(db(), at(w.projectManager), second.id, second.version, {
+          key: 'first',
+          isDefault: true,
+        }),
+      );
+      expect(duplicate).toBeInstanceOf(RecordWriteError);
+      expect(duplicate).toMatchObject({
+        code: SQLSTATE.uniqueViolation,
+        constraint: 'account_chart_organisation_project_key_unique',
+      });
+      expect(await snapshot(w)).toEqual(before);
+    });
+
+    it('lets the database refuse a key or a format that is not lower case and hyphens', async () => {
+      const w = await setup();
+      const chart = await projectChartIn(w);
+      const before = await snapshot(w);
+      const badKey = await errorOf(
+        updateChart(db(), at(w.projectManager), chart.id, chart.version, {
+          key: 'Bad Key',
+        }),
+      );
+      expect(badKey).toMatchObject({
+        code: SQLSTATE.checkViolation,
+        constraint: 'account_chart_key_check',
+      });
+      const badFormat = await errorOf(
+        updateChart(db(), at(w.projectManager), chart.id, chart.version, {
+          format: 'Pretty_Format',
+        }),
+      );
+      expect(badFormat).toMatchObject({
+        code: SQLSTATE.checkViolation,
+        constraint: 'account_chart_format_check',
+      });
+      expect(await snapshot(w)).toEqual(before);
+    });
+
+    it('writes nothing for a change that alters no field', async () => {
+      const w = await setup();
+      const chart = await projectChartIn(w);
+      const before = await snapshot(w);
+      const same = await updateChart(
+        db(),
+        at(w.projectManager),
+        chart.id,
+        chart.version,
+        { name: chart.name },
+      );
+      expect(same.version).toBe(1);
+      expect(await snapshot(w)).toEqual(before);
+    });
+
+    it('ignores keys the type does not list: the project and the template a chart was copied from cannot change', async () => {
+      const w = await setup();
+      const t = await buildTemplate(w);
+      const copy = await copyChartToProject(db(), at(w.copier), {
+        sourceChartId: t.template.id,
+        projectId: w.projectId,
+      });
+      const other = await projectChartIn(w, { key: 'other' });
+      const hostile = JSON.parse(
+        `{"name":"Renamed","projectId":null,"copiedFromChartId":"${other.id}",` +
+          `"organisationId":"${newId()}","__proto__":{"key":"hacked"}}`,
+      ) as Parameters<typeof updateChart>[4];
+      const updated = await updateChart(
+        db(),
+        at(w.projectManager),
+        copy.id,
+        copy.version,
+        hostile,
+      );
+      expect(updated).toMatchObject({
+        name: 'Renamed',
+        key: 'standard',
+        projectId: w.projectId,
+        copiedFromChartId: t.template.id,
+        organisationId: w.organisationId,
+      });
+    });
+
+    it('needs accounts:edit on the chart’s scope, and refuses an unknown or removed chart exactly like a forbidden one', async () => {
+      const w = await setup();
+      const chart = await projectChartIn(w);
+      const template = await templateIn(w);
+      const removed = await projectChartIn(w, { key: 'removed' });
+      await removeChartOf(w, removed);
+      const before = await snapshot(w);
+      const changes = { name: 'No' };
+      for (const userId of [w.outsider, w.projectReader, w.orgManager]) {
+        const error = await errorOf(
+          updateChart(db(), at(userId), chart.id, chart.version, changes),
+        );
+        expect(error).toBeInstanceOf(AccessDeniedError);
+        expect(error).toMatchObject(denied(EDIT));
+        // The caller named the chart by id, so the scope is not revealed.
+        expect((error as AccessDeniedError).scope).toBeUndefined();
+      }
+      for (const userId of [w.outsider, w.orgReader, w.projectManager]) {
+        const error = await errorOf(
+          updateChart(db(), at(userId), template.id, template.version, changes),
+        );
+        expect(error).toMatchObject(denied(EDIT));
+      }
+      const forbidden = await errorOf(
+        updateChart(db(), at(w.outsider), chart.id, chart.version, changes),
+      );
+      for (const id of [newId(), removed.id]) {
+        const error = await errorOf(
+          updateChart(db(), at(w.projectManager), id, 1, changes),
+        );
+        expect(shapeOf(error)).toEqual(shapeOf(forbidden));
+      }
+      expect(await snapshot(w)).toEqual(before);
+      expect(await auditIn(w.organisationId)).toEqual([]);
+    });
+
+    it('edits a template in the organisation', async () => {
+      const w = await setup();
+      const template = await templateIn(w);
+      const updated = await updateChart(
+        db(),
+        at(w.orgManager),
+        template.id,
+        template.version,
+        { name: 'House chart', isDefault: true },
+      );
+      expect(updated).toMatchObject({
+        projectId: null,
+        name: 'House chart',
+        isDefault: true,
+      });
+      const events = (await eventsIn(w.organisationId)).filter(
+        (e) => e.action === 'update',
+      );
+      expect(events.map((e) => e.projectId)).toEqual([null]);
+    });
+  });
+
+  describe('removeChart', () => {
+    it('removes the chart and all its live accounts, leaves an account that was already removed as it was, and keeps every row', async () => {
+      const w = await setup();
+      const t = await buildTemplate(w);
+      const storedBefore = await accountsIn(w.organisationId);
+      const retiredBefore = storedBefore.find((a) => a.id === t.retired.id)!;
+      expect(retiredBefore.deletedAt).not.toBeNull();
+      const removed = await removeChart(
+        db(),
+        at(w.orgManager),
+        t.template.id,
+        t.template.version,
+      );
+      expect(removed).toMatchObject({
+        id: t.template.id,
+        version: 2,
+        deletedBy: w.orgManager,
+      });
+      expect(removed.deletedAt).toEqual(NOW);
+      const stored = await accountsIn(w.organisationId);
+      expect(stored).toHaveLength(6);
+      for (const row of stored) {
+        expect(row.deletedAt).not.toBeNull();
+        if (row.id === t.retired.id) expect(row).toEqual(retiredBefore);
+        else expect(row).toMatchObject({ version: 2, deletedBy: w.orgManager });
+      }
+      expect(await chartsIn(w.organisationId)).toHaveLength(1);
+    });
+
+    it('writes the chart first and then each account in tree order, in the chart’s own sequence', async () => {
+      const w = await setup();
+      const t = await buildTemplate(w);
+      const codes = new Map(
+        (await accountsIn(w.organisationId)).map((a) => [a.id, a.code]),
+      );
+      await removeChart(
+        db(),
+        at(w.orgManager),
+        t.template.id,
+        t.template.version,
+      );
+      const events = (await eventsIn(w.organisationId)).slice(-6);
+      // The template's build used numbers 1 to 8.
+      expect(
+        events.map((e) => [
+          e.entityType === 'account' ? codes.get(e.entityId) : e.entityType,
+          e.action,
+          e.seq,
+          e.projectId,
+        ]),
+      ).toEqual([
+        ['account_chart', 'delete', 9, null],
+        ['1000', 'delete', 10, null],
+        ['1100', 'delete', 11, null],
+        ['1120', 'delete', 12, null],
+        ['1110', 'delete', 13, null],
+        ['2000', 'delete', 14, null],
+      ]);
+    });
+
+    it('files the removal of a project chart in the project’s sequence and leaves the organisation’s alone', async () => {
+      const w = await setup();
+      const chart = await projectChartIn(w);
+      for (const code of ['1000', '1100']) {
+        await addAccount(db(), at(w.projectManager), chart.id, {
+          code,
+          name: code,
+        });
+      }
+      await removeChart(db(), at(w.projectManager), chart.id, chart.version);
+      const events = await eventsIn(w.organisationId);
+      expect(events.map((e) => [e.action, e.projectId, e.seq])).toEqual([
+        ['create', w.projectId, 1],
+        ['create', w.projectId, 2],
+        ['create', w.projectId, 3],
+        ['delete', w.projectId, 4],
+        ['delete', w.projectId, 5],
+        ['delete', w.projectId, 6],
+      ]);
+      expect(
+        (await sequencesIn(w.organisationId)).map((s) => s.projectId),
+      ).toEqual([w.projectId]);
+    });
+
+    it('leaves the chart, the accounts and the counter as they were when a write fails halfway', async () => {
+      const w = await setup();
+      const t = await buildTemplate(w);
+      const before = await snapshot(w);
+      // A removal reads the clock three times: for `deleted_at`, for the row and
+      // for its event. The ninth read fails: the chart and the first account are
+      // removed, and the second account's row is in when its event cannot be.
+      let reads = 0;
+      const failing: AccountContext = {
+        ...at(w.orgManager),
+        clock: () => {
+          reads += 1;
+          if (reads > 8) throw new Error('The clock failed');
+          return NOW;
+        },
+      };
+      const error = await errorOf(
+        removeChart(db(), failing, t.template.id, t.template.version),
+      );
+      expect(error).toBeInstanceOf(RecordWriteError);
+      expect(reads).toBe(9);
+      expect(await snapshot(w)).toEqual(before);
+      // The counter went back with the rollback: a retry gets the next number.
+      await removeChart(
+        db(),
+        at(w.orgManager),
+        t.template.id,
+        t.template.version,
+      );
+      const events = await eventsIn(w.organisationId);
+      expect(events.at(-6)).toMatchObject({
+        entityType: 'account_chart',
+        action: 'delete',
+        seq: 9,
+      });
+    });
+
+    it('refuses a stale version before it touches an account', async () => {
+      const w = await setup();
+      const t = await buildTemplate(w);
+      const before = await snapshot(w);
+      const error = await errorOf(
+        removeChart(db(), at(w.orgManager), t.template.id, 5),
+      );
+      expect(error).toBeInstanceOf(VersionConflictError);
+      expect(await snapshot(w)).toEqual(before);
+    });
+
+    it('frees the key and the default place, and leaves charts copied from the removed template as they were', async () => {
+      const w = await setup();
+      const t = await buildTemplate(w);
+      const copy = await copyChartToProject(db(), at(w.copier), {
+        sourceChartId: t.template.id,
+        projectId: w.projectId,
+        makeDefault: true,
+      });
+      await removeChart(
+        db(),
+        at(w.orgManager),
+        t.template.id,
+        t.template.version,
+      );
+      const again = await templateIn(w, { isDefault: true });
+      expect(again).toMatchObject({ key: 'standard', isDefault: true });
+      expect(again.id).not.toBe(t.template.id);
+      const kept = await getChart(db(), at(w.projectManager), copy.id);
+      expect(kept).toMatchObject({
+        isDefault: true,
+        copiedFromChartId: t.template.id,
+      });
+      expect(kept.accounts.map((a) => a.code)).toEqual(TREE_ORDER);
+      expect(
+        (
+          await listCharts(db(), at(w.orgReader), {
+            organisationId: w.organisationId,
+          })
+        ).map((c) => c.id),
+      ).toEqual([again.id]);
+    });
+
+    it('needs accounts:edit on the chart’s scope, and refuses an unknown or removed chart exactly like a forbidden one', async () => {
+      const w = await setup();
+      const chart = await projectChartIn(w);
+      const template = await templateIn(w);
+      const before = await snapshot(w);
+      for (const userId of [w.outsider, w.projectReader, w.orgManager]) {
+        const error = await errorOf(
+          removeChart(db(), at(userId), chart.id, chart.version),
+        );
+        expect(error).toBeInstanceOf(AccessDeniedError);
+        expect(error).toMatchObject(denied(EDIT));
+        expect((error as AccessDeniedError).scope).toBeUndefined();
+      }
+      for (const userId of [w.outsider, w.orgReader, w.projectManager]) {
+        const error = await errorOf(
+          removeChart(db(), at(userId), template.id, template.version),
+        );
+        expect(error).toMatchObject(denied(EDIT));
+      }
+      expect(await snapshot(w)).toEqual(before);
+      const forbidden = await errorOf(
+        removeChart(db(), at(w.outsider), chart.id, chart.version),
+      );
+      await removeChartOf(w, chart);
+      for (const id of [newId(), chart.id]) {
+        const error = await errorOf(
+          removeChart(db(), at(w.projectManager), id, 2),
+        );
+        expect(shapeOf(error)).toEqual(shapeOf(forbidden));
+      }
+      expect(await auditIn(w.organisationId)).toEqual([]);
+    });
+  });
 
   describe('copyChartToProject', () => {
     const copyAs = (
@@ -684,7 +1164,7 @@ describe.each(testTargets)('charts of accounts on $name', (target) => {
       await buildTemplate(w);
       const projectChart = await projectChartIn(w, { key: 'mine' });
       const removed = await templateIn(w, { key: 'gone' });
-      await removeChart(w, removed);
+      await removeChartOf(w, removed);
       const other = await setup();
       const otherTemplate = await templateIn(other);
       const before = await snapshot(w);
@@ -949,7 +1429,7 @@ describe.each(testTargets)('charts of accounts on $name', (target) => {
       const w = await setup();
       const chart = await projectChartIn(w);
       const removed = await projectChartIn(w, { key: 'removed' });
-      await removeChart(w, removed);
+      await removeChartOf(w, removed);
       const input = { code: '1000', name: 'Above the line' };
       const forbidden = await errorOf(
         addAccount(db(), at(w.outsider), chart.id, input),
@@ -1329,7 +1809,7 @@ describe.each(testTargets)('charts of accounts on $name', (target) => {
       const w = await setup();
       const chart = await projectChartIn(w);
       const removed = await projectChartIn(w, { key: 'removed' });
-      await removeChart(w, removed);
+      await removeChartOf(w, removed);
       const forbidden = await errorOf(getChart(db(), at(w.outsider), chart.id));
       for (const id of [newId(), removed.id]) {
         const error = await errorOf(getChart(db(), at(w.projectManager), id));
@@ -1352,11 +1832,11 @@ describe.each(testTargets)('charts of accounts on $name', (target) => {
       await templateIn(w, { key: 'b-template' });
       await templateIn(w, { key: 'a-template' });
       const removedTemplate = await templateIn(w, { key: 'c-template' });
-      await removeChart(w, removedTemplate);
+      await removeChartOf(w, removedTemplate);
       await projectChartIn(w, { key: 'p-two' });
       await projectChartIn(w, { key: 'p-one' });
       const removedProjectChart = await projectChartIn(w, { key: 'p-gone' });
-      await removeChart(w, removedProjectChart);
+      await removeChartOf(w, removedProjectChart);
       await createChart(db(), at(w.projectManager), {
         organisationId: w.organisationId,
         projectId: second,
