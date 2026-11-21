@@ -17,8 +17,10 @@ import {
  * admin and so on) and grants nothing by itself: owners and admins hold a
  * permission only when a role linked to them has it, like everyone else.
  * Invited and removed members hold nothing, and neither do members of other
- * organisations. Organisation roles do not grant project permissions; see
- * `hasProjectPermission`.
+ * organisations. A grant's `reach` makes no difference here: `own-scope` and
+ * `all-projects` grants both count at organisation level. Whether an
+ * organisation role also grants on projects is `hasProjectPermission`'s
+ * question, and only an `all-projects` grant does.
  *
  * Server-side only: permission checks never run on a client (CLAUDE.md, Data
  * rules). The general policy engine comes later and may reuse this.

@@ -162,6 +162,13 @@
       "when": 1795261645163,
       "tag": "0022_project_currency_locked",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1795265044452,
+      "tag": "0023_role_permission_reach",
+      "breakpoints": true
     }
   ]
 }

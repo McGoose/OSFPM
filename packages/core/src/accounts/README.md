@@ -15,7 +15,7 @@ const chart = await copyChartToProject(tx, ctx, {
 
 **Rules you must not break**
 
-- A chart with no `project_id` is an organisation template, checked in the organisation. A project chart is checked on its project. Roles of one scope grant nothing in the other.
+- A chart with no `project_id` is an organisation template, checked in the organisation. A project chart is checked on its project. A role of one scope grants nothing in the other, except that an organisation role's grant with `reach = 'all-projects'` also applies on every project of the organisation (see `src/access/README.md`).
 - Copying needs `accounts:read` on the organisation and `accounts:edit` on the project. The copy is atomic: the chart and every live account, or nothing.
 - A chart is a copy, not a link: later changes to the template never reach it. `copied_from_chart_id` only records where it came from.
 - A parent is always in the same chart. An update that would make an account its own ancestor is refused (`AccountInputError`), and an account with live children cannot be removed (`AccountHasChildrenError`, a `RecordStateError`).

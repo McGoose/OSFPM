@@ -24,6 +24,7 @@ import {
   type ProjectMembershipStatus,
   type ProjectPersonEngagement,
   type ProjectPersonStatus,
+  type RolePermissionReach,
 } from '../db/schema/index.js';
 
 /**
@@ -340,7 +341,8 @@ export async function grantOnProject(
  *
  * `linked: false` creates the membership and the role but no link, to show
  * that the tier alone grants nothing. `departmentId` limits each permission to
- * that department. `linkId` is null when no link was made.
+ * that department. `reach` is each grant's reach: `own-scope` unless
+ * `all-projects` is asked for. `linkId` is null when no link was made.
  */
 export async function grantOnOrganisation(
   database: Database,
@@ -353,6 +355,7 @@ export async function grantOnOrganisation(
     deleted?: boolean;
     linked?: boolean;
     departmentId?: string | null;
+    reach?: RolePermissionReach;
   } = {},
 ): Promise<{ membershipId: string; roleId: string; linkId: string | null }> {
   const [existing] = await database.db
@@ -386,6 +389,7 @@ export async function grantOnOrganisation(
         roleId: roleRow.id,
         permissionKey: key,
         departmentId: options.departmentId ?? null,
+        reach: options.reach ?? 'own-scope',
       })
       .onConflictDoNothing();
   }

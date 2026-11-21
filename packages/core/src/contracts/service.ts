@@ -50,7 +50,11 @@ import {
  * Permissions: `contracts:read`, `contracts:edit` and `contracts:read-value`.
  * A contract with a project is checked on that project; an organisation-level
  * contract, one with no project, is checked in the organisation
- * (`hasScopedPermission`). Roles of one scope grant nothing in the other.
+ * (`hasScopedPermission`). A role of one scope grants nothing in the other,
+ * except that an organisation role's grant with `reach = 'all-projects'` also
+ * applies on every project of the organisation. `contracts:read-value` is
+ * sensitive and never reaches all projects, so amounts on a project contract
+ * need project membership.
  *
  * Amounts: `total_value` and `currency` reach only users holding
  * `contracts:read-value`. For everyone else the two keys are absent from every

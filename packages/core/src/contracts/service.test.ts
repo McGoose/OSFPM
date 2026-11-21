@@ -1285,7 +1285,7 @@ describe.each(testTargets)('contracts on $name', (target) => {
           .totalValue,
       ).toBe('125000.5000');
 
-      // Roles of the other scope grant nothing.
+      // Own-scope grants of the other scope grant nothing.
       for (const [userId, id] of [
         [w.projectManager, organisationLevel.id],
         [w.orgManager, projectLevel.id],

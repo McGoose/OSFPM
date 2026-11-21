@@ -19,7 +19,7 @@ const view = await createContract(tx, ctx, {
 
 - `total_value` and `currency` reach only holders of `contracts:read-value`. For everyone else the keys are absent from every result, including a create or update, never `null` or `0`. Setting either needs that permission too.
 - `total_value` is tagged sensitive, so change events never hold it.
-- A contract with a project is checked on that project, and one without in the organisation. Roles of one scope grant nothing in the other.
+- A contract with a project is checked on that project, and one without in the organisation. A role of one scope grants nothing in the other, except that an organisation role's grant with `reach = 'all-projects'` also applies on every project of the organisation. `contracts:read-value` is sensitive, so it never reaches all projects: seeing a project contract's amounts needs project membership (see `src/access/README.md`).
 - A call by id denies an unknown, deleted or other organisation's contract exactly like a forbidden one, and names no scope. Create and list do name it.
 - Contracts are not sensitive personal data, so a denial writes no audit event.
 - A party or link target must be live and in the contract's organisation. Parties and links are soft-deleted, and adding one again restores it.

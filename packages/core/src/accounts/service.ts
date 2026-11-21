@@ -34,9 +34,11 @@ import {
  *
  * Permissions: `accounts:read` and `accounts:edit`. A project chart is checked
  * on its project; an organisation template, one with no project, is checked in
- * the organisation (`hasScopedPermission`). Roles of one scope grant nothing in
- * the other. Copying a template into a project needs `accounts:read` on the
- * organisation and `accounts:edit` on the project.
+ * the organisation (`hasScopedPermission`). A role of one scope grants nothing
+ * in the other, except that an organisation role's grant with `reach =
+ * 'all-projects'` also applies on every project of the organisation. Copying a
+ * template into a project needs `accounts:read` on the organisation and
+ * `accounts:edit` on the project.
  *
  * A call that names a chart or an account by id, and a copy, which names two,
  * fails with `AccessDeniedError` when the record does not exist, is removed or

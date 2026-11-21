@@ -40,6 +40,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Where a denial is audited, the event is written before the typed error is thrown. Callers catch the error inside the transaction and commit, so the audit event survives.
 - Tenant tables are defined with `tenantTable()`, never bare `pgTable`.
 - Permission checks run only on the server through the policy engine.
+- Organisation role grants reach projects only with `reach = 'all-projects'`, never for sensitive permissions.
 - Every endpoint gets a test proving 403 without access and no sensitive fields without `sensitive:read`.
 - A string from a caller never indexes a plain object and never goes through `in`. Use Object.hasOwn, a Map, or check it against the constant list first.
 - A guard that checks for live rows pointing at a record locks them (FOR UPDATE on the record, FOR SHARE on the reference) so a concurrent write can't slip past it.

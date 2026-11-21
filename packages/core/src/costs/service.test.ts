@@ -162,7 +162,7 @@ describe.each(testTargets)('cost lines on $name', (target) => {
     accountsEditor: string; // accounts:edit
     // On another project of the same organisation.
     elsewhere: string; // read, edit, tag-schemes
-    // In the organisation: grants nothing on a project.
+    // In the organisation, with own-scope grants: nothing on a project.
     orgManager: string;
     outsider: string;
   };
