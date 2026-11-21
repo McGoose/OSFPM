@@ -83,14 +83,14 @@ Troubleshooting:
 
 ## Start the API
 
-Set exactly one database setting. The API has no authentication yet, so keep it on your own machine.
+Set exactly one database setting, and `OSFPM_PUBLIC_URL`, the URL you open the server at. There is no way to sign in yet, so keep it on your own machine.
 
 ```sh
 # Small install: PGlite, stored in a directory
-OSFPM_DATA_DIR=./data pnpm --filter @osfpm/api start
+OSFPM_PUBLIC_URL=http://localhost:3000 OSFPM_DATA_DIR=./data pnpm --filter @osfpm/api start
 
 # Standard install: PostgreSQL
-DATABASE_URL=postgres://user:pass@host:5432/dbname pnpm --filter @osfpm/api start
+OSFPM_PUBLIC_URL=https://osfpm.example.org DATABASE_URL=postgres://user:pass@host:5432/dbname pnpm --filter @osfpm/api start
 ```
 
 Then:
@@ -99,7 +99,7 @@ Then:
 curl http://127.0.0.1:3000/api/v1/health
 ```
 
-The server does not run migrations. The settings, the routes and how to add one are in [packages/api/README.md](packages/api/README.md).
+The server applies pending migrations when it starts; set `OSFPM_AUTO_MIGRATE=false` to stop that. The settings, the routes and how to add one are in [packages/api/README.md](packages/api/README.md).
 
 ## Contributing
 

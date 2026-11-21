@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { z } from 'zod';
 
 /** The log levels the server accepts. `silent` turns logging off. */
@@ -25,6 +26,21 @@ export type Config = {
   readonly host: string;
   readonly port: number;
   readonly logLevel: LogLevel;
+  /**
+   * The origin of `OSFPM_PUBLIC_URL`, written as a browser writes it in an
+   * `Origin` header. It is the only origin allowed to send a state-changing
+   * request that carries a session cookie.
+   */
+  readonly publicOrigin: string;
+  /** Run pending migrations when the server starts (`OSFPM_AUTO_MIGRATE`). */
+  readonly autoMigrate: boolean;
+  /**
+   * The reverse proxies whose `X-Forwarded-For` is believed (`OSFPM_TRUSTED_PROXIES`):
+   * IP addresses, CIDR ranges, or the names `loopback`, `linklocal` and
+   * `uniquelocal`. Empty, the default, believes no header and takes the address
+   * of the connection.
+   */
+  readonly trustedProxies: readonly string[];
 };
 
 /**
@@ -49,6 +65,70 @@ function isPostgresUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * The hosts that may use plain `http`, for development on one machine. Browsers
+ * that treat `http://localhost` as a secure context, as Chrome and Firefox do,
+ * accept a `Secure` cookie there. Compared
+ * against the parsed host name, never as a prefix of the text:
+ * `http://localhost.example.org` and `http://localhost@example.org` are not
+ * local.
+ */
+const LOCAL_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1']);
+
+/**
+ * True for `https://…` and for `http://` on `localhost` or `127.0.0.1` with any
+ * port. Anything else, including plain `http` on a public host, would send the
+ * session cookie in the clear.
+ */
+function isAllowedPublicUrl(value: string): boolean {
+  try {
+    const { protocol, hostname } = new URL(value);
+    return (
+      protocol === 'https:' ||
+      (protocol === 'http:' && LOCAL_HOSTS.has(hostname))
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** The names `proxy-addr`, which Fastify uses, accepts for a group of addresses. */
+const PROXY_RANGE_NAMES: ReadonlySet<string> = new Set([
+  'loopback',
+  'linklocal',
+  'uniquelocal',
+]);
+
+/**
+ * True for one entry of `OSFPM_TRUSTED_PROXIES`: an IP address, a CIDR range with
+ * a prefix from 1 to the length of the address, or one of `PROXY_RANGE_NAMES`.
+ * A range of `/0` is refused, because trusting every address lets any caller
+ * write its own in the header. A host name is refused: it would have to be
+ * looked up, and the answer could change.
+ */
+function isTrustedProxyEntry(entry: string): boolean {
+  if (PROXY_RANGE_NAMES.has(entry)) return true;
+  const parts = entry.split('/');
+  if (parts.length > 2) return false;
+  const [address, prefix] = parts;
+  const version = isIP(address ?? '');
+  if (version === 0) return false;
+  if (prefix === undefined) return true;
+  if (!/^\d{1,3}$/.test(prefix)) return false;
+  const length = Number(prefix);
+  return length >= 1 && length <= (version === 4 ? 32 : 128);
+}
+
+/** The entries of `OSFPM_TRUSTED_PROXIES`, trimmed, and the names in lower case. */
+function proxyEntries(value: string): string[] {
+  return value.split(',').map((entry) => {
+    const trimmed = entry.trim();
+    return PROXY_RANGE_NAMES.has(trimmed.toLowerCase())
+      ? trimmed.toLowerCase()
+      : trimmed;
+  });
 }
 
 const environmentSchema = z.object({
@@ -76,6 +156,33 @@ const environmentSchema = z.object({
     .transform((value) => value.toLowerCase())
     .pipe(z.enum(LOG_LEVELS))
     .default('info'),
+  // The text of a wrong value is never repeated: a refine message is fixed.
+  OSFPM_PUBLIC_URL: z
+    .string(
+      'is required: the URL users open, such as https://osfpm.example.org',
+    )
+    .refine(
+      isAllowedPublicUrl,
+      'must be an https:// URL, or http://localhost or http://127.0.0.1 with any port',
+    ),
+  // `true` or `false` in any case, like LOG_LEVEL. Other spellings (`1`, `yes`)
+  // are refused rather than guessed: a typo must not skip the migrations.
+  OSFPM_AUTO_MIGRATE: z
+    .string()
+    .transform((value) => value.toLowerCase())
+    .pipe(z.enum(['true', 'false']))
+    .transform((value) => value === 'true')
+    .default(true),
+  // A list, so a refused entry cannot be named without echoing it: the message
+  // is fixed, and has no example in it that a value could be mistaken for.
+  OSFPM_TRUSTED_PROXIES: z
+    .string()
+    .refine(
+      (value) => proxyEntries(value).every(isTrustedProxyEntry),
+      'must be a comma-separated list of IP addresses, CIDR ranges (never a range of everything), or the names loopback, linklocal and uniquelocal',
+    )
+    .transform(proxyEntries)
+    .default([]),
 });
 
 const VARIABLES = Object.keys(environmentSchema.shape);
@@ -83,8 +190,9 @@ const VARIABLES = Object.keys(environmentSchema.shape);
 /**
  * Reads and validates the configuration from `env` (the process environment
  * by default). Exactly one of `DATABASE_URL` (PostgreSQL) or `OSFPM_DATA_DIR`
- * (PGlite, for small installs) must be set. An empty variable counts as not
- * set, so an `.env` file may list a variable it leaves blank.
+ * (PGlite, for small installs) must be set, and so must `OSFPM_PUBLIC_URL`.
+ * An empty variable counts as not set, so an `.env` file may list a variable
+ * it leaves blank.
  *
  * @throws ConfigError listing every problem found. The server entry prints it
  * and stops. Values are never part of the message.
@@ -127,5 +235,9 @@ export function loadConfig(
     host: values.HOST,
     port: values.PORT,
     logLevel: values.LOG_LEVEL,
+    // `origin` is the form a browser sends: lower case, default port left out.
+    publicOrigin: new URL(values.OSFPM_PUBLIC_URL).origin,
+    autoMigrate: values.OSFPM_AUTO_MIGRATE,
+    trustedProxies: values.OSFPM_TRUSTED_PROXIES,
   };
 }

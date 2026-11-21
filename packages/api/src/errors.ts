@@ -14,6 +14,7 @@ import {
   RecordWriteError,
   VersionConflictError,
 } from '@osfpm/core/src/db/write.js';
+import { InstallationMissingError } from '@osfpm/core/src/installation/server-id.js';
 import { LegalHoldInputError } from '@osfpm/core/src/legal-hold/service.js';
 import {
   ComplianceReportDeniedError,
@@ -36,6 +37,63 @@ export class ServiceUnavailableError extends Error {
     this.name = 'ServiceUnavailableError';
   }
 }
+
+/**
+ * The server is listening but has not finished starting: the migrations and the
+ * permission sync are still to do, or the database cannot be reached yet. Maps
+ * to a 503 problem `starting` for every route but the two health routes. The
+ * message and the response say nothing about why.
+ */
+export class StartingError extends Error {
+  constructor() {
+    super('The server has not finished starting');
+    this.name = 'StartingError';
+  }
+}
+
+/**
+ * The route needs a signed-in user and the request has none. Maps to a 401.
+ * The message is the same whatever the reason (no cookie, an unknown token, an
+ * expired or revoked session, a disabled user), so a caller learns nothing
+ * about which it was.
+ */
+export class AuthenticationRequiredError extends Error {
+  constructor() {
+    super('The request has no valid session');
+    this.name = 'AuthenticationRequiredError';
+  }
+}
+
+/**
+ * A request that changes data, with a session cookie, did not come from this
+ * server's own origin (cross-site request forgery defence). Maps to a 403. The
+ * message names neither the expected origin nor the one that was sent.
+ */
+export class OriginMismatchError extends Error {
+  constructor() {
+    super('The Origin header is not the public origin');
+    this.name = 'OriginMismatchError';
+  }
+}
+
+/**
+ * The caller has used up the requests the auth routes allow from one address
+ * (see `AUTH_RATE_LIMIT`). Maps to a 429. The message and the response name
+ * neither the address nor the limit; the route sets `Retry-After` itself.
+ */
+export class RateLimitedError extends Error {
+  constructor() {
+    super('The auth rate limit was exceeded');
+    this.name = 'RateLimitedError';
+  }
+}
+
+/**
+ * What a client reads when it has no usable session. One text for every cause,
+ * so the response never says whether the cookie was missing, unknown, expired,
+ * revoked or the user disabled.
+ */
+const AUTHENTICATION_REQUIRED_DETAIL = 'Sign in to use this.';
 
 /** One row of `PROBLEM_TABLE`. */
 export type ProblemRule = {
@@ -64,6 +122,49 @@ export type ProblemRule = {
  * record learns nothing from the refusal (see `AccessDeniedError`).
  */
 export const PROBLEM_TABLE: readonly ProblemRule[] = [
+  {
+    errorClass: AuthenticationRequiredError,
+    status: 401,
+    code: 'authentication-required',
+    title: 'Authentication required',
+    detail: AUTHENTICATION_REQUIRED_DETAIL,
+  },
+  {
+    // Thrown by the auth services for a state the caller cannot fix, such as a
+    // disabled user or a user who is not there. Every reason is the same answer:
+    // the reason is for the audit trail, and a client must not be able to tell
+    // an account that exists from one that does not.
+    errorClass: AuthStateError,
+    status: 401,
+    code: 'authentication-required',
+    title: 'Authentication required',
+    detail: AUTHENTICATION_REQUIRED_DETAIL,
+  },
+  {
+    // A value the server chose, such as a session method or a revoke reason,
+    // that the auth services refuse. Its message names the field, so the
+    // response has fixed text.
+    errorClass: AuthInputError,
+    status: 400,
+    code: 'bad-request',
+    title: 'Bad request',
+    detail: 'A value in the request is not accepted.',
+  },
+  {
+    errorClass: OriginMismatchError,
+    status: 403,
+    code: 'origin-mismatch',
+    title: 'Origin mismatch',
+    detail:
+      'This request did not come from the address this server is used at.',
+  },
+  {
+    errorClass: RateLimitedError,
+    status: 429,
+    code: 'rate-limited',
+    title: 'Too many requests',
+    detail: 'Too many requests. Wait a little, then try again.',
+  },
   {
     errorClass: AccessDeniedError,
     status: 403,
@@ -150,6 +251,13 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
     detail: null,
   },
   {
+    errorClass: StartingError,
+    status: 503,
+    code: 'starting',
+    title: 'Starting',
+    detail: 'The server is starting. Try again shortly.',
+  },
+  {
     errorClass: ServiceUnavailableError,
     status: 503,
     code: 'service-unavailable',
@@ -183,14 +291,9 @@ export const INTERNAL_ERRORS: readonly {
     reason: 'Raised when the server starts, never while it serves a request.',
   },
   {
-    errorClass: AuthInputError,
+    errorClass: InstallationMissingError,
     reason:
-      'Thrown by the auth services for a value the server chose (a session method or a revoke reason), not one a client sent. No route calls them yet; the login routes map it, or validate first, when they land.',
-  },
-  {
-    errorClass: AuthStateError,
-    reason:
-      'Thrown by the auth services for a state the caller has to handle, such as a disabled user. No route calls them yet; the login routes decide what each reason means to a client, and must not tell them apart where that would say whether an account exists.',
+      'A request with a valid session has an installation behind it, because sessions are only made after setup has created the row. If it is missing, the database is damaged: a bug or a fault, not something the caller did.',
   },
 ];
 
@@ -223,6 +326,18 @@ export const problemSchema = z.object({
 
 /** A problem response body. */
 export type Problem = z.infer<typeof problemSchema>;
+
+/**
+ * The OpenAPI entry for a response that is a problem (`application/problem+json`
+ * with `problemSchema`), for a route's `response` map, next to its Zod success
+ * schema. It only documents the answer: the error handler sends it.
+ */
+export function problemResponse(description: string) {
+  return {
+    description,
+    content: { 'application/problem+json': { schema: problemSchema } },
+  };
+}
 
 /** The media type of every error response. */
 export const PROBLEM_CONTENT_TYPE = 'application/problem+json; charset=utf-8';

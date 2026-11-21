@@ -392,6 +392,34 @@ describe.each(testTargets)('sessions on $name', (target) => {
       expect((await sessionRow(created.id)).revokedAt).toEqual(at(MINUTE));
     });
 
+    it('accepts user-revoked, the reason when a user ends another of their own sessions, and records it', async () => {
+      const userId = await seedActiveUser(database);
+      const mine = await createSession(db(), {
+        userId,
+        method: 'password',
+        now: T0,
+      });
+      const other = await createSession(db(), {
+        userId,
+        method: 'passkey',
+        now: T0,
+      });
+      expect(
+        await revokeSession(db(), other.session.id, {
+          reason: 'user-revoked',
+          now: at(MINUTE),
+        }),
+      ).toBe(true);
+      expect((await sessionRow(other.session.id)).revokedReason).toBe(
+        'user-revoked',
+      );
+      expect(await validateSession(db(), other.token, at(MINUTE))).toBeNull();
+      // The session that did the revoking is untouched.
+      expect(
+        await validateSession(db(), mine.token, at(MINUTE)),
+      ).not.toBeNull();
+    });
+
     it('refuses a reason that is not on the list', async () => {
       const userId = await seedActiveUser(database);
       const { session: created } = await createSession(db(), {

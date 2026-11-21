@@ -1,7 +1,11 @@
 import { and, eq, isNull } from 'drizzle-orm';
 import type { ActorType } from '../db/columns.js';
-import { installation, user, type UserStatus } from '../db/schema/index.js';
+import { user, type UserStatus } from '../db/schema/index.js';
 import { RecordWriteError, recordAudit, type Tx } from '../db/write.js';
+import {
+  getServerId,
+  InstallationMissingError,
+} from '../installation/server-id.js';
 import { AuthInputError, AuthStateError } from './errors.js';
 
 /**
@@ -67,10 +71,12 @@ export function recordAuthAudit(
 }
 
 /**
- * The id of this server, read from the single `installation` row. Rows the
- * auth services write carry it as `origin_server`; a session or a code belongs
- * to this server and is never federated. With `lock` the row is held until the
- * transaction ends, which serialises the setup-code operations.
+ * The id of this server, from `getServerId` (`installation/server-id.ts`), the
+ * one reader of the single `installation` row. Rows the auth services write
+ * carry it as `origin_server`; a session or a code belongs to this server and is
+ * never federated. With `lock` the row is held until the transaction ends, which
+ * serialises the setup-code operations. This is `getServerId` with the auth
+ * services' own error; other code, such as the API, calls `getServerId`.
  *
  * @throws AuthStateError `installation-missing` when there is no row yet.
  */
@@ -78,10 +84,15 @@ export async function serverId(
   tx: Tx,
   options: { lock?: boolean } = {},
 ): Promise<string> {
-  const query = tx.select({ id: installation.id }).from(installation).limit(1);
-  const [row] = await (options.lock ? query.for('update') : query);
-  if (!row) throw new AuthStateError('installation-missing');
-  return row.id;
+  try {
+    return await getServerId(tx, options);
+  } catch (error) {
+    // The auth services answer in their own terms.
+    if (error instanceof InstallationMissingError) {
+      throw new AuthStateError('installation-missing');
+    }
+    throw error;
+  }
 }
 
 /**

@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { testTargets } from '@osfpm/core/src/db/test-support.js';
 import { API_PREFIX } from './api-version.js';
+import { SESSION_COOKIE } from './auth/cookie.js';
 import { loggerOptions, REDACTED } from './logging.js';
 import { createTestApp } from './test-support.js';
 
@@ -15,6 +16,7 @@ const echoRoute: FastifyPluginAsync = (app) => {
   app.withTypeProvider<ZodTypeProvider>().post(
     '/test/echo/:id',
     {
+      config: { auth: 'none' },
       schema: {
         params: z.object({ id: z.string() }),
         body: z.looseObject({}),
@@ -28,47 +30,57 @@ const echoRoute: FastifyPluginAsync = (app) => {
   );
   // A route that logs the whole request and reply objects, as a careless
   // handler might.
-  app
-    .withTypeProvider<ZodTypeProvider>()
-    .get(
-      '/test/whole/:id',
-      { schema: { params: z.object({ id: z.string() }) } },
-      (request, reply) => {
-        request.log.info({ req: request, res: reply }, 'logged whole');
-        return { ok: true };
-      },
-    );
+  app.withTypeProvider<ZodTypeProvider>().get(
+    '/test/whole/:id',
+    {
+      config: { auth: 'none' },
+      schema: { params: z.object({ id: z.string() }) },
+    },
+    (request, reply) => {
+      request.log.info({ req: request, res: reply }, 'logged whole');
+      return { ok: true };
+    },
+  );
   // Routes that go wrong in ways Fastify itself reports. Fastify's messages
   // for these name the full URL, query included.
-  app.get('/test/twice', async (_request, reply) => {
-    await reply.send({ first: true });
-    return reply.send({ second: true });
-  });
-  app.get('/test/headers-sent', (_request, reply) => {
-    reply.raw.writeHead(200, { 'content-type': 'text/plain' });
-    reply.raw.write('partial');
-    return reply.send({ late: true });
-  });
+  app.get(
+    '/test/twice',
+    { config: { auth: 'none' } },
+    async (_request, reply) => {
+      await reply.send({ first: true });
+      return reply.send({ second: true });
+    },
+  );
+  app.get(
+    '/test/headers-sent',
+    { config: { auth: 'none' } },
+    (_request, reply) => {
+      reply.raw.writeHead(200, { 'content-type': 'text/plain' });
+      reply.raw.write('partial');
+      return reply.send({ late: true });
+    },
+  );
   // Lines a careless handler writes by hand, under keys with no serialiser.
-  app
-    .withTypeProvider<ZodTypeProvider>()
-    .get(
-      '/test/by-hand',
-      { schema: { querystring: z.looseObject({}) } },
-      (request) => {
-        request.log.info({ headers: request.headers }, 'headers by hand');
-        request.log.info({ query: request.query }, 'query by hand');
-        request.log.info({ request }, 'request by hand');
-        request.log.info({ url: request.url }, 'url by hand');
-        request.log.info(
-          { nested: { deep: { 'x-auth-token': SECRET, kept: 'kept-value' } } },
-          'nested by hand',
-        );
-        request.log.error(new Error(`an error that quotes ${SECRET}`));
-        request.log.error({ err: new Error(`quotes ${SECRET} too`) });
-        return { ok: true };
-      },
-    );
+  app.withTypeProvider<ZodTypeProvider>().get(
+    '/test/by-hand',
+    {
+      config: { auth: 'none' },
+      schema: { querystring: z.looseObject({}) },
+    },
+    (request) => {
+      request.log.info({ headers: request.headers }, 'headers by hand');
+      request.log.info({ query: request.query }, 'query by hand');
+      request.log.info({ request }, 'request by hand');
+      request.log.info({ url: request.url }, 'url by hand');
+      request.log.info(
+        { nested: { deep: { 'x-auth-token': SECRET, kept: 'kept-value' } } },
+        'nested by hand',
+      );
+      request.log.error(new Error(`an error that quotes ${SECRET}`));
+      request.log.error({ err: new Error(`quotes ${SECRET} too`) });
+      return { ok: true };
+    },
+  );
   return Promise.resolve();
 };
 
@@ -266,5 +278,60 @@ describe('the two layers that keep credentials out of a log', () => {
     await app.close();
     expect(lines.join('')).not.toContain(SECRET);
     expect(lines.join('')).toContain(REDACTED);
+  });
+});
+
+describe('the session cookie in a log line', () => {
+  /** The real logger options, writing to `lines`, and nothing else around them. */
+  async function logger(...removed: ('redact' | 'hooks')[]) {
+    const lines: string[] = [];
+    const options = {
+      ...(loggerOptions({
+        level: 'info',
+        stream: { write: (line) => void lines.push(line) },
+      }) as Record<string, unknown>),
+    };
+    for (const name of removed) delete options[name];
+    const app = Fastify({ logger: options as never });
+    await app.ready();
+    return { app, lines };
+  }
+
+  it('masks a key named like the cookie, at any depth, in any case', async () => {
+    const { app, lines } = await logger();
+    app.log.info(
+      {
+        cookies: { [SESSION_COOKIE]: `${SECRET}-a`, theme: 'dark' },
+        deep: { deeper: { [SESSION_COOKIE.toUpperCase()]: `${SECRET}-b` } },
+        [SESSION_COOKIE]: `${SECRET}-c`,
+      },
+      'a line written by hand',
+    );
+    await app.close();
+    const log = lines.join('');
+    expect(log).not.toContain(SECRET);
+    expect(log).toContain(REDACTED);
+    // What is not secret is still there.
+    expect(log).toContain('dark');
+  });
+
+  it('masks the cookie inside a string: a pasted Cookie header, a message, a field value', async () => {
+    const { app, lines } = await logger();
+    app.log.info(
+      { header: `theme=dark; ${SESSION_COOKIE}=${SECRET}-a; other=kept` },
+      `the cookie was ${SESSION_COOKIE}=${SECRET}-b`,
+    );
+    await app.close();
+    const log = lines.join('');
+    expect(log).not.toContain(SECRET);
+    expect(log).toContain('theme=dark');
+    expect(log).toContain('other=kept');
+  });
+
+  it('does it in the formatter, so the redact paths are not what the guarantee rests on', async () => {
+    const { app, lines } = await logger('redact');
+    app.log.info({ cookies: { [SESSION_COOKIE]: SECRET } }, 'by hand');
+    await app.close();
+    expect(lines.join('')).not.toContain(SECRET);
   });
 });

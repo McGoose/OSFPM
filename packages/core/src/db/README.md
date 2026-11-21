@@ -4,7 +4,7 @@ The database layer: clients, the Drizzle schema, the write helper and the column
 
 **Entry points**
 
-- `createDatabase` and `migrate`: PostgreSQL or PGlite, one migration set (`client.ts`, `migrate.ts`).
+- `createDatabase` and `migrate`: PostgreSQL or PGlite, one migration set (`client.ts`, `migrate.ts`). On PostgreSQL `migrate` holds an advisory lock for its whole run (`MIGRATION_LOCK_KEY`), so servers that start together take turns; PGlite takes no lock.
 - `insertRecord`, `updateRecord`, `softDeleteRecord`, `restoreRecord` and `recordAudit` (`write.ts`). `lockProjectChanges` (also `write.ts`) takes a project's change counter, for a service that must lock a record before it writes: queue on the counter first, as the helper does, then take the record lock, or it can deadlock with a helper write.
 - `tenantTable`, `securityTable` and `standardColumns` (`columns.ts`); one file per table in `schema/`.
 
@@ -20,4 +20,4 @@ The database layer: clients, the Drizzle schema, the write helper and the column
 - Migrations are forward-only. Put a comment above each hand-written SQL block, such as the append-only triggers, and say so in the commit message.
 - Name foreign keys `<table>_<target>_fk`. A key that starts with `organisation_id` keeps the reference inside one organisation.
 
-**Tests:** `schema.test.ts` checks every table's structure and constraints. `change-log.test.ts` and `write-project.test.ts` cover the write helper. `production-structure.test.ts`, `library.test.ts` and `retention-class.test.ts` cover their tables. `test-support.ts` provides the PGlite and PostgreSQL targets.
+**Tests:** `schema.test.ts` checks every table's structure and constraints. `change-log.test.ts` and `write-project.test.ts` cover the write helper. `production-structure.test.ts`, `library.test.ts` and `retention-class.test.ts` cover their tables. `migrate.test.ts` checks the migration lock: the order of its calls everywhere, and on PostgreSQL only, two migrators at once and one that waits for a held lock. `test-support.ts` provides the PGlite and PostgreSQL targets.
