@@ -70,9 +70,7 @@ async function withMigrationLock(
   const holder = await pool.connect();
   try {
     // MUTATION: asks for the key but takes no lock.
-    await holder.query('select $1::bigint', [
-      MIGRATION_LOCK_KEY,
-    ]);
+    await holder.query('select $1::bigint', [MIGRATION_LOCK_KEY]);
     await work();
   } finally {
     try {
