@@ -30,6 +30,7 @@ import {
 } from '../db/schema/index.js';
 import {
   insertRecord,
+  lockProjectChanges,
   softDeleteRecord,
   updateRecord,
   type Tx,
@@ -65,8 +66,9 @@ import {
  * is `round(amount * fx_rate, 4)`, rounding halves away from zero. An amount
  * has at most four places and a rate ten; more is refused rather than rounded.
  * A line is priced in the project's currency under a share lock on the project,
- * because the database refuses to change that currency while the project has
- * live cost lines.
+ * taken after the project's change counter (see `requireInProject`), because
+ * the database refuses to change that currency while the project has live cost
+ * lines.
  *
  * A call that names a cost line by id fails with `AccessDeniedError` when the
  * line does not exist, is removed or belongs to another organisation, exactly
@@ -245,11 +247,17 @@ function scopeOf(row: CostLineRow): PermissionScope {
 /**
  * For a project the caller named: the error says it is a project. The project
  * must exist in the named organisation, or the answer is the same as for a
- * forbidden one. `lockProject` reads the project with a share lock, which holds
- * until the transaction ends: a call that prices a line against the project's
- * currency sets it, so that a change of that currency, which the database
- * refuses while live cost lines exist, waits for the line to commit and then
- * sees it (`0022_project_currency_locked.sql`).
+ * forbidden one. `lockProject` is for a call that prices a line against the
+ * project's currency, and it takes two locks that hold until the transaction
+ * ends, in this order. First the project's change counter
+ * (`lockProjectChanges`), which every write through the write helper takes
+ * before it locks a record, so a project update, which locks the project row,
+ * and this call cannot each wait for what the other holds. Then a share lock on
+ * the project row. A change of the project's currency, which the database
+ * refuses while live cost lines exist, then waits for the line to commit and
+ * sees it, or has committed first and is seen here, so a line is never priced
+ * in a currency the project no longer has (`0022_project_currency_locked.sql`).
+ * Locks are taken only for a caller who holds the permission.
  */
 async function requireInProject(
   tx: Tx,
@@ -259,6 +267,9 @@ async function requireInProject(
   lockProject = false,
 ) {
   const allowed = await hasScopedPermission(tx, ctx.userId, scope, key);
+  if (allowed && lockProject) {
+    await lockProjectChanges(tx, scope.organisationId, scope.projectId);
+  }
   const query = tx
     .select({ id: project.id, currency: project.currency })
     .from(project)
@@ -482,7 +493,9 @@ async function priceLine(
  * chart of the line's own project. The account is read with a share lock, which
  * holds until the transaction ends, so `removeAccount` and `removeChart` (which
  * lock the account before they look for cost lines) cannot remove it between
- * this check and the write. One message covers an unknown, removed, foreign and
+ * this check and the write. Both sides queue on the project's change counter
+ * before they lock the account (`lockProjectChanges`), so neither can wait for
+ * what the other holds. One message covers an unknown, removed, foreign and
  * wrong-project account, so a caller learns nothing about accounts it was not
  * given; a postable account is the only reason named on its own, and only once
  * the account is known to be in the project's chart.
@@ -721,6 +734,16 @@ export async function updateCostLine(
     organisationId: found.organisationId,
     projectId: found.projectId,
   };
+  const repricing =
+    changes.amount !== undefined ||
+    changes.currency !== undefined ||
+    changes.fxRate !== undefined;
+  // A call that will lock an account or the project queues on the project's
+  // change counter first, as `requireInProject` explains, and the permission
+  // was checked above.
+  if (changes.accountId !== undefined || repricing) {
+    await lockProjectChanges(tx, found.organisationId, found.projectId);
+  }
   if (changes.accountId !== undefined) {
     await checkAccount(tx, where, changes.accountId);
   }
@@ -742,11 +765,7 @@ export async function updateCostLine(
     episodeId: changes.episodeId,
   });
   let priced: Awaited<ReturnType<typeof priceLine>> | undefined;
-  if (
-    changes.amount !== undefined ||
-    changes.currency !== undefined ||
-    changes.fxRate !== undefined
-  ) {
+  if (repricing) {
     // Share-locked, as in `createCostLine`: the line is priced in this currency.
     const [owner] = await tx
       .select({ currency: project.currency })

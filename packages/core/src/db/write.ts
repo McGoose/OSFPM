@@ -276,6 +276,41 @@ async function nextSeq(
 }
 
 /**
+ * Takes the change counter of a project, and keeps it until the transaction
+ * ends. Every write through this helper takes that counter before it locks the
+ * record it changes (see the comment in `modifyRecord`), so all writers in a
+ * project queue on it in the same order. A service that locks a record of the
+ * project first and writes afterwards goes in the opposite order, and can
+ * deadlock with a writer that goes through the helper: each waits for the lock
+ * the other holds. So a service that reads something and then writes on the
+ * strength of it, such as a guard that no live cost line points at an account,
+ * or a price in the project's currency, calls this first, and takes any record
+ * lock (`FOR UPDATE`, `FOR SHARE`) only after it.
+ *
+ * Takes the counter row if there is one. A project made through the helper has
+ * one from the start; one made by direct inserts, which only tests do, has none
+ * until its first write, and then nothing is locked. Checks no permission, and
+ * is for services that have already checked it: a caller who holds the counter
+ * holds up every writer in the project.
+ */
+export async function lockProjectChanges(
+  tx: Tx,
+  organisationId: string,
+  projectId: string,
+): Promise<void> {
+  await tx
+    .select({ lastSeq: changeSeq.lastSeq })
+    .from(changeSeq)
+    .where(
+      and(
+        eq(changeSeq.organisationId, organisationId),
+        eq(changeSeq.projectId, projectId),
+      ),
+    )
+    .for('update');
+}
+
+/**
  * Database-column-name view of `row`, limited to `keys`, without sensitive
  * values. This is the one place values are kept out of change events.
  */

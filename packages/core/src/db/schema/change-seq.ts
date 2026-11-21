@@ -5,7 +5,9 @@ import { project } from './project.js';
 /**
  * Counter behind `change_event.seq`: one row per project, plus one per
  * organisation (`project_id` NULL) for organisation-level changes. Helper
- * table, so it carries no standard columns. Only the write helper touches it.
+ * table, so it carries no standard columns. Only the write helper touches it:
+ * `insertRecord` and the other writes number changes with it, and
+ * `lockProjectChanges` lets a service queue on a project's row first.
  */
 export const changeSeq = pgTable(
   'change_seq',

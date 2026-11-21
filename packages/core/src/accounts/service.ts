@@ -12,6 +12,7 @@ import {
 } from '../db/schema/index.js';
 import {
   insertRecord,
+  lockProjectChanges,
   RecordStateError,
   softDeleteRecord,
   updateRecord,
@@ -280,17 +281,29 @@ async function findAccount(tx: Tx, id: string) {
 }
 
 /**
- * True when a live cost line is booked to any account matching `accounts`. The
- * matching accounts are locked first, and the lines are read after, so a cost
- * line being written right now, which holds a share lock on its account (see the
- * costs service), either finishes before the check or waits for the removal.
- * Without the lock the check could pass just before such a line commits, and the
- * account would be removed under it. The locks last until the caller's
- * transaction ends. Accounts and cost lines are both core tables, so this is
- * the one place the accounts folder reads `cost_line`: the rule is an integrity
- * check of the account, not a report on cost lines.
+ * True when a live cost line is booked to any account matching `accounts`.
+ * Cost lines belong to projects, so for a project chart the project's change
+ * counter is taken first (`lockProjectChanges`), as every write in the project
+ * does before it locks a record: taking an account lock first would deadlock
+ * with a cost line being written at the same moment. A template chart has no
+ * project and no cost lines, so it takes no counter. Then the matching accounts
+ * are locked and the lines are read after, so a cost line being written right
+ * now, which holds a share lock on its account (see the costs service), either
+ * finishes before the check or waits for the removal. Without the locks the
+ * check could pass just before such a line commits, and the account would be
+ * removed under it. The locks last until the caller's transaction ends.
+ * Accounts and cost lines are both core tables, so this is the one place the
+ * accounts folder reads `cost_line`: the rule is an integrity check of the
+ * account, not a report on cost lines.
  */
-async function hasLiveCostLines(tx: Tx, accounts: SQL): Promise<boolean> {
+async function hasLiveCostLines(
+  tx: Tx,
+  scope: PermissionScope,
+  accounts: SQL,
+): Promise<boolean> {
+  if (scope.projectId !== null) {
+    await lockProjectChanges(tx, scope.organisationId, scope.projectId);
+  }
   await tx
     .select({ id: account.id })
     .from(account)
@@ -548,6 +561,7 @@ export async function removeChart(
     if (
       await hasLiveCostLines(
         inner,
+        scopeOf(found),
         and(eq(account.chartId, id), isNull(account.deletedAt))!,
       )
     ) {
@@ -767,7 +781,7 @@ export async function updateAccount(
   if (
     changes.isPostable === false &&
     found.account.isPostable &&
-    (await hasLiveCostLines(tx, eq(account.id, id)))
+    (await hasLiveCostLines(tx, scopeOf(found.chart), eq(account.id, id)))
   ) {
     throw new AccountInUseError('account', id, 'stop-posting');
   }
@@ -840,7 +854,7 @@ export async function removeAccount(
     .where(and(eq(account.parentId, id), isNull(account.deletedAt)))
     .limit(1);
   if (child) throw new AccountHasChildrenError(id);
-  if (await hasLiveCostLines(tx, eq(account.id, id))) {
+  if (await hasLiveCostLines(tx, scopeOf(found.chart), eq(account.id, id))) {
     throw new AccountInUseError('account', id);
   }
   return softDeleteRecord(tx, account, id, version, writeContext(ctx));

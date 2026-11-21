@@ -5,7 +5,7 @@ The database layer: clients, the Drizzle schema, the write helper and the column
 **Entry points**
 
 - `createDatabase` and `migrate`: PostgreSQL or PGlite, one migration set (`client.ts`, `migrate.ts`).
-- `insertRecord`, `updateRecord`, `softDeleteRecord`, `restoreRecord` and `recordAudit` (`write.ts`).
+- `insertRecord`, `updateRecord`, `softDeleteRecord`, `restoreRecord` and `recordAudit` (`write.ts`). `lockProjectChanges` (also `write.ts`) takes a project's change counter, for a service that must lock a record before it writes: queue on the counter first, as the helper does, then take the record lock, or it can deadlock with a helper write.
 - `tenantTable` and `standardColumns` (`columns.ts`); one file per table in `schema/`.
 
 **Rules you must not break**
