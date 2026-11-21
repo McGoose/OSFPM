@@ -27,6 +27,10 @@ export type UserStatus = (typeof USER_STATUSES)[number];
  * phone, address or medical data (CLAUDE.md, Privacy rule): those belong to
  * `person` and `person_sensitive`.
  *
+ * Written only by the core services named in `SERVICE_WRITTEN_TABLES` (the auth
+ * service now), never through the write helper, and audited, not change-logged
+ * (CLAUDE.md, Data rules).
+ *
  * `email` is stored normalised: lower case, with no spaces at either end. The
  * `user_email_normalised_check` CHECK enforces it, so the unique index on `email`
  * means one account per address however a caller typed it, and a login can look

@@ -24,6 +24,7 @@ Pass the transaction handle to every function, and the time as `now`. The servic
 
 - Tables in `SECURITY_TABLES` are written only here, directly, never through the write helper. Their changes are audited, not change-logged. `src/db/write-helper-scan.test.ts` fails when another file writes them, or when a tenant table is written outside the write helper.
 - A raw token, code or password is never stored, logged, audited or returned after it is first given out, and neither is a hash of one. `listUserSessions` and `validateSession` return no hash.
+- `user` and `installation` are written only by the services named in `SERVICE_WRITTEN_TABLES`, which is `auth` for both today, and never through the write helper. Here, `disableUser`, `enableUser` and `createSession` write `user`, and each is audited. The scan in `write-helper-scan.test.ts` enforces it.
 - Every database failure becomes a `RecordWriteError` with the SQLSTATE and constraint name only (`guardedAuth`), because driver messages carry the query parameters, which here are hashes.
 - A string from a caller is checked against a constant list (`SESSION_METHODS`, `SESSION_REVOKE_REASONS`, the code alphabet) and never used as a key.
 - Lock order: a service that checks a user's state and then writes takes the user row first (`lockUser`); the setup-code functions take the `installation` row. Nothing here touches a project, so the project change counter does not come into it.

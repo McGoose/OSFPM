@@ -35,6 +35,7 @@ export * from './retention-class.js';
 export * from './role-permission.js';
 export * from './role.js';
 export * from './security-tables.js';
+export * from './service-written-tables.js';
 export * from './session.js';
 export * from './setting-value.js';
 export * from './setup-code.js';

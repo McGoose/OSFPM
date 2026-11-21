@@ -10,17 +10,18 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getTableName, is } from 'drizzle-orm';
-import { PgTable } from 'drizzle-orm/pg-core';
+import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 import { securityTableNames, tenantTableNames } from './columns.js';
 import * as schemaModule from './schema/index.js';
 
 /**
  * CLAUDE.md, Data rules: tenant records are written only through the write
- * helper, and tables in `SECURITY_TABLES` only by the auth service. This scans
- * the source for a Drizzle write that names such a table outside the one place
- * allowed to. The sets of tables come from the schema, not from a list kept
- * here.
+ * helper, tables in `SECURITY_TABLES` only by the auth service, and the tables
+ * in `SERVICE_WRITTEN_TABLES` (`user`, `installation`) only by the services
+ * named for them. This scans the source for a Drizzle write that names such a
+ * table outside the places allowed to. The sets of tables, and the services
+ * named for the last kind, come from the schema, not from a list kept here.
  *
  * It sees `.insert(x)`, `.update(x)` and `.delete(x)` where `x` is the table's
  * exported identifier, and raw SQL that names the table. Tests and test-support
@@ -113,6 +114,98 @@ describe('who may write tenant and security tables', () => {
 
   it('writes security tables only in the auth service', () => {
     expect(violations(PACKAGES, security, AUTH_SERVICE)).toEqual([]);
+  });
+
+  describe('user and installation', () => {
+    const entries = schemaModule.SERVICE_WRITTEN_TABLES.map((entry) => ({
+      name: getTableName(entry.table),
+      table: entry.table,
+      allowed: entry.services.map((service) => `core/src/${service}/`),
+    }));
+
+    it('are the two tables the Data rule names', () => {
+      // The names in CLAUDE.md. A third table needs the rule changed too.
+      expect(entries.map((entry) => entry.name).sort()).toEqual([
+        'installation',
+        'user',
+      ]);
+      for (const entry of entries) {
+        expect(tablesNamed(new Set([entry.name])), entry.name).toHaveLength(1);
+      }
+    });
+
+    it('are install-level: no organisation_id, so never a tenant table, a security table, or one the write helper takes', () => {
+      for (const entry of entries) {
+        const columns = getTableConfig(entry.table).columns.map((c) => c.name);
+        expect(columns, entry.name).not.toContain('organisation_id');
+        expect(tenantTableNames().has(entry.name), entry.name).toBe(false);
+        expect(securityTableNames().has(entry.name), entry.name).toBe(false);
+      }
+    });
+
+    it('are written only by services that exist, and each has source files', () => {
+      const files = sourceFiles(PACKAGES).map((file) =>
+        relative(PACKAGES, file).split(sep).join('/'),
+      );
+      for (const entry of entries) {
+        expect(entry.allowed.length, entry.name).toBeGreaterThan(0);
+        for (const folder of entry.allowed) {
+          expect(
+            files.some((file) => file.startsWith(folder)),
+            `${entry.name} names ${folder}, which has no source files`,
+          ).toBe(true);
+        }
+      }
+    });
+
+    it.each(entries.map((entry) => [entry.name, entry] as const))(
+      'writes %s only in the services named for it',
+      (name, entry) => {
+        expect(
+          violations(PACKAGES, tablesNamed(new Set([name])), entry.allowed),
+        ).toEqual([]);
+      },
+    );
+
+    it('catches a write to either table outside the named services', () => {
+      const root = mkdtempSync(join(tmpdir(), 'osfpm-write-scan-'));
+      try {
+        const write = (path: string, text: string) => {
+          mkdirSync(dirname(join(root, path)), { recursive: true });
+          writeFileSync(join(root, path), text);
+        };
+        write('core/src/auth/sessions.ts', 'await tx.update(user).set(x);');
+        write(
+          'core/src/projects/oops.ts',
+          'await tx.update(user).set({ status: x });',
+        );
+        // A service that is not named (yet) may not write `installation`.
+        write(
+          'core/src/setup/later.ts',
+          'await tx.update(installation).set(x);',
+        );
+        write(
+          'core/src/costs/raw.ts',
+          'await tx.execute(sql`update "user" set x = 1`);',
+        );
+        write('core/src/costs/read.ts', 'await tx.select().from(user);');
+        write(
+          'core/src/access/test-fixtures.ts',
+          'await tx.insert(user).values(row);',
+        );
+        const tables = [
+          { identifier: 'user', name: 'user' },
+          { identifier: 'installation', name: 'installation' },
+        ];
+        expect(violations(root, tables, ['core/src/auth/'])).toEqual([
+          'core/src/costs/raw.ts',
+          'core/src/projects/oops.ts',
+          'core/src/setup/later.ts',
+        ]);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
   });
 
   it('catches a file that writes a table outside its allowed place', () => {

@@ -8,6 +8,10 @@ import { newId } from '../ids.js';
  * At most one row may exist, enforced by a unique index on a constant.
  * `setup_completed_at` is NULL until the first administrator has been created
  * (SC-10); `auth/setup-code.ts` reads it through `isSetupComplete`.
+ *
+ * Written only by the core services named in `SERVICE_WRITTEN_TABLES` (the auth
+ * service now, the setup service later), never through the write helper, and
+ * audited, not change-logged (CLAUDE.md, Data rules).
  */
 export const installation = pgTable(
   'installation',
