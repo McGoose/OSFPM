@@ -18,6 +18,7 @@ import type { Database, SchemaDb } from '../db/client.js';
 import {
   account,
   accountChart,
+  changeSeq,
   costLine,
   project,
 } from '../db/schema/index.js';
@@ -38,6 +39,13 @@ import {
 import { seedAccount, seedChart } from './test-fixtures.js';
 
 const NOW = new Date(Date.UTC(2026, 1, 1, 12));
+
+/** The write context of the records a test writes through the helper, as the system. */
+const write: WriteContext = {
+  actor: { type: 'system', id: null },
+  originServer: ORIGIN,
+  clock: () => NOW,
+};
 
 /** The PostgreSQL target, when `DATABASE_URL` names a server. PGlite has one connection, so it cannot run this. */
 const postgres = testTargets.find((target) => target.name === 'postgres');
@@ -144,16 +152,47 @@ describe.skipIf(postgres === undefined)(
       await cleanup();
     });
 
-    /** An organisation with a postable account, and a user for each side. */
-    async function world() {
+    /**
+     * An organisation with a postable account, and a user for each side. With
+     * `warmCounter` the chart and the account are written through the write
+     * helper, which gives the project its change counter row, as a project made
+     * with `createProject` has from the start. Without it they are inserted
+     * directly, as the fixtures do, and the project has no counter row yet.
+     */
+    async function world(warmCounter = false) {
       const org = await seedOrganisation(database);
-      const accountId = await seedAccount(
-        database,
-        org.organisationId,
-        await seedChart(database, org.organisationId, {
-          projectId: org.projectId,
-        }),
-      );
+      const chartId = warmCounter
+        ? (
+            await insertRecord(
+              db(),
+              accountChart,
+              {
+                ...base(org.organisationId),
+                projectId: org.projectId,
+                key: 'house',
+                name: 'House chart',
+              },
+              write,
+            )
+          ).id
+        : await seedChart(database, org.organisationId, {
+            projectId: org.projectId,
+          });
+      const accountId = warmCounter
+        ? (
+            await insertRecord(
+              db(),
+              account,
+              {
+                ...base(org.organisationId),
+                chartId,
+                code: '5100',
+                name: 'Camera',
+              },
+              write,
+            )
+          ).id
+        : await seedAccount(database, org.organisationId, chartId);
       const user = async (keys: string[]) => {
         const userId = await seedUser(database);
         await grantOnProject(
@@ -197,6 +236,23 @@ describe.skipIf(postgres === undefined)(
       };
     }
 
+    /** Whether the project has a row in `change_seq`, the counter every writer in it queues on. */
+    const hasChangeCounter = async (w: {
+      organisationId: string;
+      projectId: string;
+    }) =>
+      (
+        await db()
+          .select({ lastSeq: changeSeq.lastSeq })
+          .from(changeSeq)
+          .where(
+            and(
+              eq(changeSeq.organisationId, w.organisationId),
+              eq(changeSeq.projectId, w.projectId),
+            ),
+          )
+      ).length === 1;
+
     /** How many live cost lines of the organisation point at a removed account. */
     const danglingLines = async (organisationId: string) => {
       const [row] = await db()
@@ -222,61 +278,87 @@ describe.skipIf(postgres === undefined)(
     const succeeded = (outcomes: PromiseSettledResult<unknown>[]) =>
       outcomes.filter((outcome) => outcome.status === 'fulfilled').length;
 
+    /**
+     * The race, in a project that has a change counter row or not. The booking
+     * open first, then the removal open first, then both at once twelve times.
+     * Every project is checked for the counter it is meant to have, so a test
+     * cannot quietly run the other configuration.
+     */
+    async function raceRemovalAgainstBooking(warmCounter: boolean) {
+      const checked = async (w: Awaited<ReturnType<typeof world>>) => {
+        expect(
+          await hasChangeCounter(w),
+          'the project’s change counter row',
+        ).toBe(warmCounter);
+        return w;
+      };
+
+      // The booking is open first: the removal has to wait for it, then finds
+      // the line and refuses.
+      const bookingFirst = await checked(await world(warmCounter));
+      const [booking, removal] = await interleave(
+        db(),
+        bookingFirst.book,
+        bookingFirst.remove,
+      );
+      expect(booking.status).toBe('fulfilled');
+      expect(removal.status).toBe('rejected');
+      expect((removal as PromiseRejectedResult).reason).toBeInstanceOf(
+        AccountInUseError,
+      );
+      expect(succeeded([booking, removal])).toBe(1);
+      expect(await danglingLines(bookingFirst.organisationId)).toBe(0);
+
+      // The removal is open first: the booking has to wait for it, then finds
+      // the account gone and refuses.
+      const removalFirst = await checked(await world(warmCounter));
+      const [removed, booked] = await interleave(
+        db(),
+        removalFirst.remove,
+        removalFirst.book,
+      );
+      expect(removed.status).toBe('fulfilled');
+      expect(booked.status).toBe('rejected');
+      expect((booked as PromiseRejectedResult).reason).toBeInstanceOf(
+        CostLineInputError,
+      );
+      expect(succeeded([removed, booked])).toBe(1);
+      expect(await danglingLines(removalFirst.organisationId)).toBe(0);
+
+      // Both start at once, with no ordering forced, a number of times. Which
+      // one wins varies; that one wins and the other loses never does.
+      let bookingWins = 0;
+      let removalWins = 0;
+      for (let round = 0; round < 12; round += 1) {
+        const w = await checked(await world(warmCounter));
+        const outcomes = await Promise.allSettled([
+          db().transaction((tx) => w.book(tx)),
+          db().transaction((tx) => w.remove(tx)),
+        ]);
+        expect(succeeded(outcomes), `round ${round}`).toBe(1);
+        if (outcomes[0].status === 'fulfilled') bookingWins += 1;
+        else removalWins += 1;
+        expect(await danglingLines(w.organisationId), `round ${round}`).toBe(0);
+      }
+      expect(bookingWins + removalWins).toBe(12);
+    }
+
     it(
       'lets exactly one of them succeed, in either order, and leaves no live cost line on a removed account',
       { timeout: 120_000 },
-      async () => {
-        // The booking is open first: the removal has to wait for it, then finds
-        // the line and refuses.
-        const bookingFirst = await world();
-        const [booking, removal] = await interleave(
-          db(),
-          bookingFirst.book,
-          bookingFirst.remove,
-        );
-        expect(booking.status).toBe('fulfilled');
-        expect(removal.status).toBe('rejected');
-        expect((removal as PromiseRejectedResult).reason).toBeInstanceOf(
-          AccountInUseError,
-        );
-        expect(succeeded([booking, removal])).toBe(1);
-        expect(await danglingLines(bookingFirst.organisationId)).toBe(0);
+      () => raceRemovalAgainstBooking(false),
+    );
 
-        // The removal is open first: the booking has to wait for it, then finds
-        // the account gone and refuses.
-        const removalFirst = await world();
-        const [removed, booked] = await interleave(
-          db(),
-          removalFirst.remove,
-          removalFirst.book,
-        );
-        expect(removed.status).toBe('fulfilled');
-        expect(booked.status).toBe('rejected');
-        expect((booked as PromiseRejectedResult).reason).toBeInstanceOf(
-          CostLineInputError,
-        );
-        expect(succeeded([removed, booked])).toBe(1);
-        expect(await danglingLines(removalFirst.organisationId)).toBe(0);
-
-        // Both start at once, with no ordering forced, a number of times. Which
-        // one wins varies; that one wins and the other loses never does.
-        let bookingWins = 0;
-        let removalWins = 0;
-        for (let round = 0; round < 12; round += 1) {
-          const w = await world();
-          const outcomes = await Promise.allSettled([
-            db().transaction((tx) => w.book(tx)),
-            db().transaction((tx) => w.remove(tx)),
-          ]);
-          expect(succeeded(outcomes), `round ${round}`).toBe(1);
-          if (outcomes[0].status === 'fulfilled') bookingWins += 1;
-          else removalWins += 1;
-          expect(await danglingLines(w.organisationId), `round ${round}`).toBe(
-            0,
-          );
-        }
-        expect(bookingWins + removalWins).toBe(12);
-      },
+    // The case that matters in practice: every project made with `createProject`
+    // has its change counter from the start, and every writer in it queues on
+    // that counter before it locks a record. The test above, whose fixture
+    // project has none yet, shows that the record locks alone exclude; this one
+    // shows that the pair still does with the counter in place, and that the
+    // counter and the record locks do not deadlock.
+    it(
+      'does the same in a project that has its change counter row, as every real project has',
+      { timeout: 120_000 },
+      () => raceRemovalAgainstBooking(true),
     );
   },
 );
@@ -299,11 +381,6 @@ describe.skipIf(postgres === undefined)(
     let database: Database;
     let cleanup: () => Promise<void>;
     const db = () => database.db;
-    const write: WriteContext = {
-      actor: { type: 'system', id: null },
-      originServer: ORIGIN,
-      clock: () => NOW,
-    };
 
     beforeAll(async () => {
       ({ database, cleanup } = await createMigratedDatabase(postgres!));
