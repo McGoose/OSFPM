@@ -20,6 +20,7 @@ import {
   AccountInUseError,
   removeAccount,
   removeChart,
+  updateAccount,
   type AccountContext,
 } from '../accounts/service.js';
 import type { Database } from '../db/client.js';
@@ -1959,6 +1960,100 @@ describe.each(testTargets)('cost lines on $name', (target) => {
       });
       await removeAccount(db(), accountsCtx(w), spare, 1);
       await inputError(create(w, { accountId: spare }));
+    });
+
+    describe('making an account non-postable', () => {
+      it('is refused while a live cost line is booked to the account, writing nothing', async () => {
+        const w = await setup();
+        await seeded(w);
+        const before = await snapshot(w);
+        const row = await accountRow(w.accountId);
+        const failure = await updateAccount(
+          db(),
+          accountsCtx(w),
+          w.accountId,
+          row.version,
+          { isPostable: false },
+        ).catch((e: unknown) => e);
+        expect(failure).toBeInstanceOf(AccountInUseError);
+        // A RecordStateError, as the refusal to remove it is, and the error says
+        // which change was refused.
+        expect(failure).toBeInstanceOf(RecordStateError);
+        expect(failure).toMatchObject({ attempted: 'stop-posting' });
+        expect((failure as Error).message).toContain('non-postable');
+        expect(await snapshot(w)).toEqual(before);
+        expect(await accountRow(w.accountId)).toEqual(row);
+        // The same account is still refused for a removal, with the other `attempted`.
+        const removal = await removeAccount(
+          db(),
+          accountsCtx(w),
+          w.accountId,
+          row.version,
+        ).catch((e: unknown) => e);
+        expect(removal).toMatchObject({ attempted: 'remove' });
+      });
+
+      it('is allowed once the live cost lines are gone, and then no new line can be booked to it', async () => {
+        const w = await setup();
+        const line = await seeded(w);
+        await removeCostLine(db(), at(w.manager), line.id, 1);
+        const row = await accountRow(w.accountId);
+        const updated = await updateAccount(
+          db(),
+          accountsCtx(w),
+          w.accountId,
+          row.version,
+          { isPostable: false },
+        );
+        expect(updated.isPostable).toBe(false);
+        await inputError(create(w));
+      });
+
+      it('does not block other edits of an account in use, or setting it postable when it already is', async () => {
+        const w = await setup();
+        await seeded(w);
+        let row = await accountRow(w.accountId);
+        row = await updateAccount(
+          db(),
+          accountsCtx(w),
+          w.accountId,
+          row.version,
+          {
+            name: 'Camera department',
+            glCode: '5100-GL',
+            sortOrder: 4,
+            isPostable: true,
+          },
+        );
+        expect(row).toMatchObject({
+          name: 'Camera department',
+          glCode: '5100-GL',
+          sortOrder: 4,
+          isPostable: true,
+        });
+      });
+
+      it('does not count a line booked to another account, and a non-postable account can be made postable again', async () => {
+        const w = await setup();
+        await seeded(w);
+        const spare = await seedAccount(database, w.organisationId, w.chartId, {
+          code: '5950',
+        });
+        const off = await updateAccount(db(), accountsCtx(w), spare, 1, {
+          isPostable: false,
+        });
+        expect(off.isPostable).toBe(false);
+        const on = await updateAccount(
+          db(),
+          accountsCtx(w),
+          spare,
+          off.version,
+          {
+            isPostable: true,
+          },
+        );
+        expect(on.isPostable).toBe(true);
+      });
     });
   });
 });

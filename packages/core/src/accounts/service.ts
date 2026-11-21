@@ -28,7 +28,8 @@ import {
  * Charts of accounts: an organisation keeps template charts, and each project
  * copies one and edits its own copy. Cost lines, budgets and file import or
  * export are not here, but cost lines are booked to a project's accounts, so an
- * account or chart with a live cost line cannot be removed (`AccountInUseError`).
+ * account or chart with a live cost line cannot be removed, and such an account
+ * cannot be made non-postable (`AccountInUseError`).
  *
  * Permissions: `accounts:read` and `accounts:edit`. A project chart is checked
  * on its project; an organisation template, one with no project, is checked in
@@ -88,19 +89,32 @@ export class AccountHasChildrenError extends RecordStateError {
 
 /**
  * An account, or a chart with such an account, cannot be removed while a live
- * cost line is booked to it: the line would point at an account that is gone. It
- * is a `RecordStateError`, as `AccountHasChildrenError` is, with its own
- * message, because the stock one says the record is already deleted. Remove or
- * rebook the cost lines first. The error says nothing about the lines beyond
- * their existence: no ids, no amounts. Nothing was written.
+ * cost line is booked to it: the line would point at an account that is gone.
+ * For the same reason an account cannot stop being postable while one is. It is
+ * a `RecordStateError`, as `AccountHasChildrenError` is, with its own message,
+ * because the stock one says the record is already deleted. `attempted` says
+ * which change was refused (`RecordStateError.operation` has no value for the
+ * second one, so it reads `delete` in both cases). Remove or rebook the cost
+ * lines first. The error says nothing about the lines beyond their existence: no
+ * ids, no amounts. Nothing was written.
  */
 export class AccountInUseError extends RecordStateError {
-  constructor(entityType: 'account' | 'account_chart', entityId: string) {
+  /** The change that was refused: removing the account or chart, or making an account non-postable. */
+  readonly attempted: 'remove' | 'stop-posting';
+
+  constructor(
+    entityType: 'account' | 'account_chart',
+    entityId: string,
+    attempted: 'remove' | 'stop-posting' = 'remove',
+  ) {
     super(entityType, entityId, 'delete');
+    this.attempted = attempted;
     this.message =
-      entityType === 'account'
-        ? `Cannot delete account ${entityId}: a live cost line is booked to it`
-        : `Cannot delete account_chart ${entityId}: a live cost line is booked to one of its accounts`;
+      attempted === 'stop-posting'
+        ? `Cannot make account ${entityId} non-postable: a live cost line is booked to it`
+        : entityType === 'account'
+          ? `Cannot delete account ${entityId}: a live cost line is booked to it`
+          : `Cannot delete account_chart ${entityId}: a live cost line is booked to one of its accounts`;
   }
 }
 
@@ -718,10 +732,16 @@ export async function addAccount(
  * account itself or one of its descendants. Changes that alter no field write
  * nothing and return the current account (see `updateRecord`).
  *
+ * An account with a live cost line booked to it stays postable: `isPostable:
+ * false` is refused until the lines are removed or rebooked. Other changes to
+ * such an account are allowed.
+ *
  * @throws AccessDeniedError, with no scope, for an account that is unknown,
  * removed or forbidden, or whose chart is removed.
  * @throws AccountInputError for a parent that is not in the chart, or one that
  * would make the account its own ancestor.
+ * @throws AccountInUseError, a `RecordStateError`, when `isPostable` is set to
+ * false while a live cost line is booked to the account.
  * @throws VersionConflictError for a stale `version`.
  * @throws RecordWriteError when the database refuses a value, for example a code
  * already live in the chart.
@@ -741,6 +761,16 @@ export async function updateAccount(
     scopeOf(found.chart),
     ACCOUNTS_EDIT_PERMISSION,
   );
+  // Only the change from postable to non-postable matters: an account that is
+  // already non-postable has no cost lines to protect, and an unrelated edit of
+  // an account in use must not be blocked.
+  if (
+    changes.isPostable === false &&
+    found.account.isPostable &&
+    (await hasLiveCostLines(tx, eq(account.id, id)))
+  ) {
+    throw new AccountInUseError('account', id, 'stop-posting');
+  }
   if (changes.parentId != null) {
     const parentOf = new Map(
       (await liveAccountsOf(tx, found.chart.id)).map((row) => [
