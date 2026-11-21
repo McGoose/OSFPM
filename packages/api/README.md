@@ -45,12 +45,12 @@ An empty variable counts as not set.
 
 All routes are under `/api/v1`. None needs authentication yet.
 
-| Route                      | Answer                                                                             |
-| -------------------------- | ---------------------------------------------------------------------------------- |
-| `GET /api/v1/health`       | `200 {"status":"ok"}`: the process is alive                                        |
-| `GET /api/v1/health/ready` | `200 {"status":"ready"}` when the database answers a trivial query, else a 503     |
-| `GET /api/v1/meta`         | Package name and version, API version `v1`, and the database kind. Nothing secret  |
-| `GET /api/v1/openapi.json` | The OpenAPI 3.1 document, generated from the Zod route schemas. There is no web UI |
+| Route                      | Answer                                                                                                    |
+| -------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `GET /api/v1/health`       | `200 {"status":"ok"}`: the process is alive                                                               |
+| `GET /api/v1/health/ready` | `200 {"status":"ready"}` when the database answers a trivial query, else a 503                            |
+| `GET /api/v1/meta`         | Product name (`OSFPM`), package name and version, API version `v1`, and the database kind. Nothing secret |
+| `GET /api/v1/openapi.json` | The OpenAPI 3.1 document, generated from the Zod route schemas. There is no web UI                        |
 
 Every response carries an `X-Request-Id` header: a UUIDv7 made by the server. An ID sent by the caller is ignored.
 

@@ -220,12 +220,13 @@ describe.each(testTargets)('the routes on $name', (target) => {
   });
 
   describe('GET /api/v1/meta', () => {
-    it('names the package, its version, the API version and the database kind, and nothing else', async () => {
+    it('names the product and the package, the version, the API version and the database kind, and nothing else', async () => {
       const response = await get('/meta');
       expect(response.statusCode).toBe(200);
       expect(response.headers['x-request-id']).toMatch(UUID_V7);
       expect(response.json()).toEqual({
-        name: PACKAGE_NAME,
+        name: 'OSFPM',
+        package: '@osfpm/api',
         version: PACKAGE_VERSION,
         apiVersion: 'v1',
         database: target.name === 'pglite' ? 'pglite' : 'postgresql',
