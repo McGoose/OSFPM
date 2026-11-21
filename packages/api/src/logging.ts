@@ -1,4 +1,5 @@
 import { LogController, type FastifyServerOptions } from 'fastify';
+import { SESSION_COOKIE } from './auth/cookie.js';
 import type { LogLevel } from './config.js';
 
 /**
@@ -44,23 +45,42 @@ const REDACT_PATHS = [
   'res.headers["set-cookie"]',
 ];
 
+/** `text` with every character that means something in a regular expression escaped. */
+const escapeForRegExp = (text: string) =>
+  text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 /**
- * Keys whose value is never logged, at any depth: credentials, and anything
- * named like a token (a header such as `x-auth-token`, a query parameter such as
- * `api_token`).
+ * Keys whose value is never logged, at any depth: credentials, anything named
+ * like a token (a header such as `x-auth-token`, a query parameter such as
+ * `api_token`), and the session cookie by its name, wherever a parsed cookie
+ * object ends up in a line.
  */
-const SECRET_KEY =
-  /token|^(?:authorization|proxy-authorization|cookie|set-cookie)$/i;
+const SECRET_KEY = new RegExp(
+  `token|${escapeForRegExp(SESSION_COOKIE)}|^(?:authorization|proxy-authorization|cookie|set-cookie)$`,
+  'i',
+);
 
 /** A query parameter named like a token, inside a URL or a message: `?token=abc`. */
 const TOKEN_PARAMETER = /([?&;][^=&;\s"']*token[^=&;\s"']*=)[^&;\s"']*/gi;
 
+/**
+ * The session cookie as text, `__Host-osfpm_session=abc`, wherever it sits in a
+ * string: a pasted `Cookie` header, a message. It has no `?`, `&` or `;` in front
+ * when it comes first, which is why `TOKEN_PARAMETER` does not see it.
+ */
+const SESSION_COOKIE_PAIR = new RegExp(
+  `(${escapeForRegExp(SESSION_COOKIE)}=)[^;&\\s"']*`,
+  'gi',
+);
+
 /** How deep a logged object is searched. Deeper than this is cut off, which also ends a cycle. */
 const MAX_DEPTH = 8;
 
-/** Masks the value of every token-named query parameter in `text`. */
+/** Masks the value of every token-named query parameter and of the session cookie in `text`. */
 function maskTokenParameters(text: string): string {
-  return text.replace(TOKEN_PARAMETER, `$1${REDACTED}`);
+  return text
+    .replace(TOKEN_PARAMETER, `$1${REDACTED}`)
+    .replace(SESSION_COOKIE_PAIR, `$1${REDACTED}`);
 }
 
 /** Top-level keys that the serialisers below already reduce to safe fields. */

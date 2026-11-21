@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { newId } from '@osfpm/core/src/db/ids.js';
 import { testTargets } from '@osfpm/core/src/db/test-support.js';
-import { createTestApp, UUID_V7 } from './test-support.js';
+import { createTestApp, TEST_PUBLIC_ORIGIN, UUID_V7 } from './test-support.js';
 
 describe.each(testTargets)('the app on $name', (target) => {
   let ctx: Awaited<ReturnType<typeof createTestApp>>;
@@ -82,7 +82,7 @@ describe('the app without a logger', () => {
     const { buildApp } = await import('./app.js');
     const { createDatabase } = await import('@osfpm/core/src/db/client.js');
     const database = createDatabase({ driver: 'pglite' });
-    const app = buildApp({ db: database });
+    const app = buildApp({ db: database, publicOrigin: TEST_PUBLIC_ORIGIN });
     try {
       const response = await app.inject({ method: 'GET', url: '/nowhere' });
       expect(response.statusCode).toBe(404);

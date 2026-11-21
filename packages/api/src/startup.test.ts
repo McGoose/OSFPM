@@ -20,6 +20,7 @@ import {
 } from '@osfpm/core/src/db/test-support.js';
 import { API_PREFIX } from './api-version.js';
 import { buildApp } from './app.js';
+import { TEST_PUBLIC_ORIGIN } from './test-support.js';
 import { PERMISSION_LISTS, runStartup, type StartupSteps } from './startup.js';
 
 /** A promise that is settled from outside, to hold a step half way. */
@@ -102,7 +103,7 @@ describe.each(testTargets)('start-up on $name', (target: TestTarget) => {
   beforeEach(async () => {
     created = await target.create();
     database = created.database;
-    app = buildApp({ db: database });
+    app = buildApp({ db: database, publicOrigin: TEST_PUBLIC_ORIGIN });
   });
   afterEach(async () => {
     await app.close();

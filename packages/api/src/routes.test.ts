@@ -13,7 +13,7 @@ import {
 import { API_PREFIX } from './api-version.js';
 import { buildApp } from './app.js';
 import { PACKAGE_NAME, PACKAGE_VERSION } from './package-info.js';
-import { createTestApp, UUID_V7 } from './test-support.js';
+import { createTestApp, TEST_PUBLIC_ORIGIN, UUID_V7 } from './test-support.js';
 
 /** The API package's own `package.json`, read from the file. */
 const packageJson = JSON.parse(
@@ -175,7 +175,7 @@ describe.each(testTargets)('the routes on $name', (target) => {
 
     it('does not need the database', async () => {
       const database = await closedDatabase(target);
-      const app = buildApp({ db: database });
+      const app = buildApp({ db: database, publicOrigin: TEST_PUBLIC_ORIGIN });
       try {
         const response = await app.inject({
           method: 'GET',
@@ -198,7 +198,7 @@ describe.each(testTargets)('the routes on $name', (target) => {
 
     it('is a 503 problem when the database is closed, and says nothing about why', async () => {
       const database = await closedDatabase(target);
-      const app = buildApp({ db: database });
+      const app = buildApp({ db: database, publicOrigin: TEST_PUBLIC_ORIGIN });
       // Ready, so the 503 below is the closed database and not unfinished start-up.
       app.readiness.markReady();
       try {
@@ -427,7 +427,7 @@ describe('the readiness check when the database is slow', () => {
 
   it('answers 503 after two seconds, and starts one query however many probes arrive', async () => {
     const { database, pending } = controlledDatabase();
-    const app = buildApp({ db: database });
+    const app = buildApp({ db: database, publicOrigin: TEST_PUBLIC_ORIGIN });
     app.readiness.markReady();
     await app.ready();
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
@@ -461,7 +461,7 @@ describe('the readiness check when the database is slow', () => {
 
   it('answers 200 when the database answers within the limit', async () => {
     const { database, pending } = controlledDatabase();
-    const app = buildApp({ db: database });
+    const app = buildApp({ db: database, publicOrigin: TEST_PUBLIC_ORIGIN });
     app.readiness.markReady();
     await app.ready();
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });

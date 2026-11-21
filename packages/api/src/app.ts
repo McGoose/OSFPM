@@ -1,3 +1,4 @@
+import cookie from '@fastify/cookie';
 import swagger from '@fastify/swagger';
 import Fastify from 'fastify';
 import {
@@ -8,6 +9,7 @@ import {
 import type { Database } from '@osfpm/core/src/db/client.js';
 import { newId } from '@osfpm/core/src/db/ids.js';
 import { API_PREFIX } from './api-version.js';
+import { authPlugin } from './auth/plugin.js';
 import { handleFrameworkError, registerErrorHandling } from './errors.js';
 import {
   createLogController,
@@ -47,6 +49,11 @@ export type BuildAppOptions = {
    * never closes it: whoever opened it does, after `app.close()`.
    */
   readonly db: Database;
+  /**
+   * The origin of `OSFPM_PUBLIC_URL` (`Config.publicOrigin`): the only `Origin`
+   * a request that changes data and carries a session cookie may have.
+   */
+  readonly publicOrigin: string;
   /** Leave out for no logging. See `loggerOptions` for what a line holds. */
   readonly logger?: LoggerSettings;
 };
@@ -56,8 +63,9 @@ export type BuildAppOptions = {
  * server entry can call `app.listen()`. Routes live under `/api/v1`, one
  * Fastify plugin per area, so a module adds its own plugin and its routes
  * share nothing with the others by accident. CORS is off: the API is same-origin
- * by default. Authentication is not added yet. Every error, and every unknown
- * route, is answered as a problem response (see `registerErrorHandling`).
+ * by default. Every route needs a signed-in user unless it says otherwise in
+ * `config.auth` (see `authPlugin`). Every error, and every unknown route, is
+ * answered as a problem response (see `registerErrorHandling`).
  *
  * The app starts not ready: it does not migrate or sync anything itself (see
  * `runStartup`), and `/health/ready` answers 503 until that has run.
@@ -107,6 +115,11 @@ export function buildApp(options: BuildAppOptions) {
     reply.header('x-request-id', request.id);
     done();
   });
+
+  // The cookie parser first, then the auth plugin that reads what it parsed.
+  // Both register on the whole app, before any route, so every route has them.
+  void app.register(cookie);
+  void app.register(authPlugin, { publicOrigin: options.publicOrigin });
 
   app.addHook('onResponse', (request, reply, done) => {
     request.log.info(

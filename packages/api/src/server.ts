@@ -95,6 +95,7 @@ export async function startServer(
   const database = createDatabase(config.database);
   const app = buildApp({
     db: database,
+    publicOrigin: config.publicOrigin,
     logger: {
       level: config.logLevel,
       ...(options.logStream ? { stream: options.logStream } : {}),

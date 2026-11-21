@@ -17,6 +17,7 @@ export const metaRoutes: FastifyPluginAsyncZod = (app) => {
   app.get(
     '/meta',
     {
+      config: { auth: 'none' },
       schema: {
         summary: 'Server information',
         response: {

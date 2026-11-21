@@ -31,7 +31,9 @@ import {
 } from '@osfpm/core/src/sensitive/service.js';
 import { API_PREFIX } from './api-version.js';
 import {
+  AuthenticationRequiredError,
   INTERNAL_ERRORS,
+  OriginMismatchError,
   PROBLEM_TABLE,
   ServiceUnavailableError,
 } from './errors.js';
@@ -88,6 +90,8 @@ const fixtures = new Map<abstract new (...args: never[]) => Error, () => Error>(
       ServiceUnavailableError,
       () => new ServiceUnavailableError(`the database at db.internal is down`),
     ],
+    [AuthenticationRequiredError, () => new AuthenticationRequiredError()],
+    [OriginMismatchError, () => new OriginMismatchError()],
     [
       SensitivePayloadInvalidError,
       () =>
@@ -140,7 +144,10 @@ const testRoutes: FastifyPluginAsync = (app) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
   typed.get(
     '/test/throw/:name',
-    { schema: { params: z.object({ name: z.string() }) } },
+    {
+      config: { auth: 'none' },
+      schema: { params: z.object({ name: z.string() }) },
+    },
     (request) => {
       const make = thrown.get(request.params.name);
       if (make === undefined) throw new Error('no such test error');
@@ -150,6 +157,7 @@ const testRoutes: FastifyPluginAsync = (app) => {
   typed.post(
     '/test/validate',
     {
+      config: { auth: 'none' },
       schema: {
         querystring: z.object({ page: z.coerce.number().int() }),
         body: z.object({
@@ -164,6 +172,7 @@ const testRoutes: FastifyPluginAsync = (app) => {
   typed.post(
     '/test/record',
     {
+      config: { auth: 'none' },
       schema: {
         body: z.object({
           attributes: z.record(z.string(), z.object({ amount: z.number() })),

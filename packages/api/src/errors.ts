@@ -37,6 +37,31 @@ export class ServiceUnavailableError extends Error {
   }
 }
 
+/**
+ * The route needs a signed-in user and the request has none. Maps to a 401.
+ * The message is the same whatever the reason (no cookie, an unknown token, an
+ * expired or revoked session, a disabled user), so a caller learns nothing
+ * about which it was.
+ */
+export class AuthenticationRequiredError extends Error {
+  constructor() {
+    super('The request has no valid session');
+    this.name = 'AuthenticationRequiredError';
+  }
+}
+
+/**
+ * A request that changes data, with a session cookie, did not come from this
+ * server's own origin (cross-site request forgery defence). Maps to a 403. The
+ * message names neither the expected origin nor the one that was sent.
+ */
+export class OriginMismatchError extends Error {
+  constructor() {
+    super('The Origin header is not the public origin');
+    this.name = 'OriginMismatchError';
+  }
+}
+
 /** One row of `PROBLEM_TABLE`. */
 export type ProblemRule = {
   /** Matched with `instanceof`, so a subclass takes its parent's row. */
@@ -64,6 +89,21 @@ export type ProblemRule = {
  * record learns nothing from the refusal (see `AccessDeniedError`).
  */
 export const PROBLEM_TABLE: readonly ProblemRule[] = [
+  {
+    errorClass: AuthenticationRequiredError,
+    status: 401,
+    code: 'authentication-required',
+    title: 'Authentication required',
+    detail: 'Sign in to use this.',
+  },
+  {
+    errorClass: OriginMismatchError,
+    status: 403,
+    code: 'origin-mismatch',
+    title: 'Origin mismatch',
+    detail:
+      'This request did not come from the address this server is used at.',
+  },
   {
     errorClass: AccessDeniedError,
     status: 403,

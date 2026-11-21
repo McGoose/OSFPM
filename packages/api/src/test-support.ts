@@ -7,6 +7,12 @@ export const UUID_V7 =
   /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 /**
+ * The public origin of every test app: the only `Origin` its requests with a
+ * session cookie may carry. An invented host, never a real one.
+ */
+export const TEST_PUBLIC_ORIGIN = 'https://osfpm.example.test';
+
+/**
  * An app over a throwaway, empty database on `target`, with the log lines it
  * writes collected in `lines`. The database is not migrated, and no start-up
  * runs, so the app is marked ready by hand where `runStartup` would do it.
@@ -20,6 +26,7 @@ export async function createTestApp(
   const lines: string[] = [];
   const app = buildApp({
     db: database,
+    publicOrigin: TEST_PUBLIC_ORIGIN,
     logger: {
       level: options.logLevel ?? 'info',
       stream: { write: (line) => void lines.push(line) },
