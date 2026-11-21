@@ -127,15 +127,27 @@ const problems = (root: string) =>
     );
 
 const SRC = fileURLToPath(new URL('.', import.meta.url));
+const API_SRC = fileURLToPath(new URL('../../api/src/', import.meta.url));
 
-describe('JSDoc on every export in packages/core/src', () => {
-  it('has a JSDoc on every export', () => {
+describe('JSDoc on every export in the packages', () => {
+  it('has a JSDoc on every export in packages/core/src', () => {
     const found = scanExports(SRC);
     // Guards against scanning the wrong folder and passing for nothing.
     expect(
       found.some((f) => f.file === 'db/write.ts' && f.name === 'insertRecord'),
     ).toBe(true);
     expect(problems(SRC)).toEqual([]);
+  });
+
+  // One scan for every package, so the rule has one definition. The core's
+  // tests reach into the API's folder rather than copy the scan.
+  it('has a JSDoc on every export in packages/api/src', () => {
+    const found = scanExports(API_SRC);
+    // Guards against scanning the wrong folder and passing for nothing.
+    expect(
+      found.some((f) => f.file === 'api-version.ts' && f.name === 'API_PREFIX'),
+    ).toBe(true);
+    expect(problems(API_SRC)).toEqual([]);
   });
 
   describe('the scan itself', () => {
