@@ -1,7 +1,6 @@
 # syntax=docker/dockerfile:1
-# OSFPM development and test image.
-# There is no HTTP server yet, so this image runs the test suite.
-# A production image (API + worker) comes once the HTTP framework is chosen.
+# OSFPM development and test image. It only runs the test suite.
+# A production image (API + worker) is a later step.
 
 ARG NODE_VERSION=26
 
