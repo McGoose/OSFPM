@@ -12,6 +12,7 @@ import {
   AccountInUseError,
   AccountInputError,
 } from '@osfpm/core/src/accounts/service.js';
+import { AuthInputError, AuthStateError } from '@osfpm/core/src/auth/errors.js';
 import { ContractInputError } from '@osfpm/core/src/contracts/service.js';
 import { CostLineInputError } from '@osfpm/core/src/costs/service.js';
 import {
@@ -109,6 +110,8 @@ const internalFixtures = new Map<
   ],
   [MissingActingUserError, () => new MissingActingUserError('token')],
   [PermissionSyncError, () => new PermissionSyncError([])],
+  [AuthInputError, () => new AuthInputError('method')],
+  [AuthStateError, () => new AuthStateError('user-disabled')],
 ]);
 
 /** Everything a test route can throw, by name: the fixtures, the subclasses, and a few odd ones. */
