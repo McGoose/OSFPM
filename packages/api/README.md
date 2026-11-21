@@ -47,15 +47,16 @@ The server does this, in this order:
 
 Read from the environment when the server starts and validated with Zod. An invalid setting stops the process with a message that names the variable and the rule. It never prints a value, because `DATABASE_URL` holds a password.
 
-| Variable             | Default     | Meaning                                                                                                                                                                            |
-| -------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`       | none        | PostgreSQL connection URL (`postgres://` or `postgresql://`). Set this **or** `OSFPM_DATA_DIR`                                                                                     |
-| `OSFPM_DATA_DIR`     | none        | Data directory for PGlite, for small installs. Set this **or** `DATABASE_URL`; both or neither fail                                                                                |
-| `OSFPM_PUBLIC_URL`   | none        | **Required.** The URL users open: `https://…`, or `http://localhost` or `http://127.0.0.1` with any port. Its origin is the only `Origin` a request with a session cookie may have |
-| `OSFPM_AUTO_MIGRATE` | `true`      | Run pending migrations at start-up. `true` or `false`, in any case; anything else is refused                                                                                       |
-| `HOST`               | `127.0.0.1` | Address to listen on                                                                                                                                                               |
-| `PORT`               | `3000`      | Port to listen on, digits only, 0 to 65535 (`0` lets the system choose)                                                                                                            |
-| `LOG_LEVEL`          | `info`      | `fatal`, `error`, `warn`, `info`, `debug`, `trace` or `silent`, in any case                                                                                                        |
+| Variable                | Default     | Meaning                                                                                                                                                                                                                                  |
+| ----------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`          | none        | PostgreSQL connection URL (`postgres://` or `postgresql://`). Set this **or** `OSFPM_DATA_DIR`                                                                                                                                           |
+| `OSFPM_DATA_DIR`        | none        | Data directory for PGlite, for small installs. Set this **or** `DATABASE_URL`; both or neither fail                                                                                                                                      |
+| `OSFPM_PUBLIC_URL`      | none        | **Required.** The URL users open: `https://…`, or `http://localhost` or `http://127.0.0.1` with any port. Its origin is the only `Origin` a request with a session cookie may have                                                       |
+| `OSFPM_AUTO_MIGRATE`    | `true`      | Run pending migrations at start-up. `true` or `false`, in any case; anything else is refused                                                                                                                                             |
+| `OSFPM_TRUSTED_PROXIES` | none        | Off by default. The reverse proxies whose `X-Forwarded-For` is believed: a comma-separated list of IP addresses, CIDR ranges, or the names `loopback`, `linklocal` and `uniquelocal`. Never a host name, and never a range of everything |
+| `HOST`                  | `127.0.0.1` | Address to listen on                                                                                                                                                                                                                     |
+| `PORT`                  | `3000`      | Port to listen on, digits only, 0 to 65535 (`0` lets the system choose)                                                                                                                                                                  |
+| `LOG_LEVEL`             | `info`      | `fatal`, `error`, `warn`, `info`, `debug`, `trace` or `silent`, in any case                                                                                                                                                              |
 
 An empty variable counts as not set. Plain `http` is refused for any host but `localhost` and `127.0.0.1`, because the session cookie is `Secure`. The host is compared after the URL is parsed, so `http://localhost.example.org` is refused.
 
@@ -77,24 +78,29 @@ A `required` route without a valid session answers **401** `authentication-requi
 
 **The cookie.** When a login route sets it: `__Host-` prefix, `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, no `Domain`, and `Expires` set to the session's absolute expiry (`setSessionCookie` in `src/auth/cookie.ts`). Logout and an invalid cookie clear it with the same attributes, which a `__Host-` cookie needs to be replaced. A browser that does not treat `http://localhost` as a secure context will not keep it there; Chrome and Firefox do. The raw token is never logged, returned after it is set, or stored: the log scrubber masks the cookie name as a key and as text.
 
-**Rate limits.** A route that sets `config: { authRateLimit: true }` is counted against `AUTH_RATE_LIMIT` in `src/auth/rate-limit.ts`: 10 requests per minute per address, counted together across every such route. Every route under `/api/v1/auth/` sets it. The request is counted before anything else, so a caller with no session or a wrong one is limited too. Past the limit the answer is **429** `rate-limited` with `Retry-After` in seconds. Health, meta and the OpenAPI document are never limited.
+**Rate limits.** There are two, for two different jobs. Past either, the answer is **429** `rate-limited` with `Retry-After` in seconds. Health, meta and the OpenAPI document are never limited.
 
-The counts are kept in this process's memory (`@fastify/rate-limit`'s local store). Several API instances each keep their own, so the limit per address becomes the limit times the number of instances until they share a store. The server does not trust proxy headers: behind a reverse proxy it sees the proxy's address, so every caller would share one count. Configuring a trusted proxy is not done yet.
+- **For routes that check a secret** (`config: { authRateLimit: true }`): at most 10 requests per minute **per address** (`AUTH_RATE_LIMIT` in `src/auth/rate-limit.ts`), counted together across every such route. This one is for guessing: sign-in, setup, recovery and invites will set it when they come. **No route sets it yet.** The request is counted before anything else, so a caller with no session, a wrong one or a foreign `Origin` is limited too.
+- **For routes a signed-in client uses as it goes** (`config: { sessionRateLimit: true }`): at most 120 requests per minute **per session** (`SESSION_RATE_LIMIT`), counted together across those routes, whatever the address. `me`, `sessions` and `logout` set it. It is counted once the session is known and the `Origin` has passed, so a forged request does not spend the session's own. A request with no valid session is not counted: it is a 401 and has no session to count against.
+
+The counts are kept in this process's memory (`@fastify/rate-limit`'s local store). Several API instances each keep their own, so a limit becomes the limit times the number of instances until they share a store.
+
+**Behind a reverse proxy,** set `OSFPM_TRUSTED_PROXIES`. By default the server believes no header and takes the address of the connection, so every caller behind a proxy is the proxy, and the limit per address is one limit for all of them. With the proxies listed, the server reads `X-Forwarded-For` from a connection that comes from one of them, takes the first address from the right that is not a proxy, and ignores anything a client wrote to the left of it. A connection from anywhere else is never believed, so a caller cannot change its address by sending the header. List only the proxies in front of the server. A range of everything (`/0`) is refused, because it would believe any caller.
 
 ## Routes
 
 All routes are under `/api/v1`.
 
-| Route                              | Auth                   | Answer                                                                                                                                                                                                                       |
-| ---------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /api/v1/health`               | none                   | `200 {"status":"ok"}`: the process is alive, also while it starts                                                                                                                                                            |
-| `GET /api/v1/health/ready`         | none                   | `200 {"status":"ready"}` when start-up has finished and the database answers a trivial query, else a 503                                                                                                                     |
-| `GET /api/v1/meta`                 | none                   | Product name (`OSFPM`), package name and version, API version `v1`, and the database kind. Nothing secret                                                                                                                    |
-| `GET /api/v1/openapi.json`         | none                   | The OpenAPI 3.1 document, generated from the Zod route schemas. There is no web UI                                                                                                                                           |
-| `GET /api/v1/auth/me`              | required, rate-limited | `{ id, displayName, email, status }` of the signed-in user                                                                                                                                                                   |
-| `GET /api/v1/auth/sessions`        | required, rate-limited | The user's live sessions, most recently seen first: `id`, `method`, `createdAt`, `lastSeenAt`, `idleExpiresAt`, `absoluteExpiresAt`, `userAgentSummary` and `current` (true for the session asking). Never a token or a hash |
-| `DELETE /api/v1/auth/sessions/:id` | required, rate-limited | Ends one of the user's own live sessions (reason `user-revoked`), 204. Another user's session, an unknown id and one already over all give the same 404                                                                      |
-| `POST /api/v1/auth/logout`         | required, rate-limited | Ends the session in the cookie (reason `logout`), clears the cookie, 204. The user's other sessions stay                                                                                                                     |
+| Route                              | Auth                               | Answer                                                                                                                                                                                                                       |
+| ---------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/v1/health`               | none                               | `200 {"status":"ok"}`: the process is alive, also while it starts                                                                                                                                                            |
+| `GET /api/v1/health/ready`         | none                               | `200 {"status":"ready"}` when start-up has finished and the database answers a trivial query, else a 503                                                                                                                     |
+| `GET /api/v1/meta`                 | none                               | Product name (`OSFPM`), package name and version, API version `v1`, and the database kind. Nothing secret                                                                                                                    |
+| `GET /api/v1/openapi.json`         | none                               | The OpenAPI 3.1 document, generated from the Zod route schemas. There is no web UI                                                                                                                                           |
+| `GET /api/v1/auth/me`              | required, 120 a minute per session | `{ id, displayName, email, status }` of the signed-in user                                                                                                                                                                   |
+| `GET /api/v1/auth/sessions`        | required, 120 a minute per session | The user's live sessions, most recently seen first: `id`, `method`, `createdAt`, `lastSeenAt`, `idleExpiresAt`, `absoluteExpiresAt`, `userAgentSummary` and `current` (true for the session asking). Never a token or a hash |
+| `DELETE /api/v1/auth/sessions/:id` | required, 120 a minute per session | Ends one of the user's own live sessions (reason `user-revoked`), 204. Another user's session, an unknown id and one already over all give the same 404                                                                      |
+| `POST /api/v1/auth/logout`         | required, 120 a minute per session | Ends the session in the cookie (reason `logout`), clears the cookie, 204. The user's other sessions stay                                                                                                                     |
 
 The session routes are self-service: each acts on the signed-in user's own account, so there is no permission to lack. Without a session the answer is 401, and the only 403 is the cross-site check. No response holds a sensitive field.
 
@@ -116,7 +122,7 @@ The one table in `src/errors.ts` (`PROBLEM_TABLE`) maps core errors by class:
 | `RecordNotFoundError`, and an unknown route                                                                                              | 404    |
 | `VersionConflictError`, `RecordStateError` and its subclasses                                                                            | 409    |
 | The module input errors, such as `ContractInputError` and `CostLineInputError`                                                           | 422    |
-| `RateLimitedError`: too many requests from one address, with `Retry-After`                                                               | 429    |
+| `RateLimitedError`: too many requests from one address or on one session, with `Retry-After`                                             | 429    |
 | The service cannot answer, such as the database being down; `StartingError` (code `starting`) for a route asked before start-up finished | 503    |
 | Anything else, including `RecordWriteError`: a generic message and the request ID only                                                   | 500    |
 
@@ -136,7 +142,7 @@ The caller of `buildApp` chooses only the level and the destination. What a line
 
 Each area of the API is a Fastify plugin. A module adds its own and registers it in `buildApp`; it never edits another area's plugin.
 
-1. Create `src/routes/<area>.ts` (or a folder). Validate every input with a Zod schema and describe each response with one. The OpenAPI document is generated from them. **Declare `auth`**: a route that says nothing is `required`, which is what most routes want, and a route that must work without a session says `config: { auth: 'none' }`. A route under `/api/v1/auth/` also sets `authRateLimit: true`.
+1. Create `src/routes/<area>.ts` (or a folder). Validate every input with a Zod schema and describe each response with one. The OpenAPI document is generated from them. **Declare `auth`**: a route that says nothing is `required`, which is what most routes want, and a route that must work without a session says `config: { auth: 'none' }`. A route that checks a secret sets `authRateLimit: true` (10 a minute per address), and a route a signed-in client uses as it goes sets `sessionRateLimit: true` (120 a minute per session).
 
    ```ts
    import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
@@ -188,7 +194,7 @@ Import core code by path, for example `@osfpm/core/src/db/write.js`: the core ha
 | `src/logging.ts`         | The privacy rules for log lines                                                 |
 | `src/auth/plugin.ts`     | The auth plugin: cookie to acting user, the `auth` option, the cross-site check |
 | `src/auth/cookie.ts`     | The session cookie's name and how it is set and cleared                         |
-| `src/auth/rate-limit.ts` | `AUTH_RATE_LIMIT`, the limit on the auth routes, in one place                   |
+| `src/auth/rate-limit.ts` | `AUTH_RATE_LIMIT` and `SESSION_RATE_LIMIT`, the two limits, in one place        |
 | `src/routes/`            | One plugin per area: health, meta, openapi, auth                                |
 | `src/test-support.ts`    | `createTestApp`, a test app on a throwaway database. Only tests import it       |
 
@@ -202,6 +208,6 @@ pnpm test packages/api
 
 They use `app.inject()`, so no port is opened, except `src/server.test.ts`, which starts the server on a free port. They run on PGlite always and on PostgreSQL as well when `DATABASE_URL` is set (see the main `README.md`). `src/jsdoc.test.ts` in the core package also fails when an export in this package has no JSDoc.
 
-Sessions in tests are made with the core's `createSession`; no login route is needed. A test that sends many requests gives each its own `remoteAddress`, so the auth rate limit measures only what the test means it to.
+Sessions in tests are made with the core's `createSession`; no login route is needed. A test that sends many requests gives each its own `remoteAddress`, so the rate limits measure only what the test means them to.
 
 Test data is the fictional production _The Last Withdrawal_ or invented values, never real people's data.

@@ -20,13 +20,20 @@ export const TEST_PUBLIC_ORIGIN = 'https://osfpm.example.test';
  */
 export async function createTestApp(
   target: TestTarget,
-  options: { readonly logLevel?: LogLevel } = {},
+  options: {
+    readonly logLevel?: LogLevel;
+    /** Proxies whose `X-Forwarded-For` the app believes. None by default. */
+    readonly trustedProxies?: readonly string[];
+  } = {},
 ) {
   const { database, cleanup } = await target.create();
   const lines: string[] = [];
   const app = buildApp({
     db: database,
     publicOrigin: TEST_PUBLIC_ORIGIN,
+    ...(options.trustedProxies === undefined
+      ? {}
+      : { trustedProxies: options.trustedProxies }),
     logger: {
       level: options.logLevel ?? 'info',
       stream: { write: (line) => void lines.push(line) },

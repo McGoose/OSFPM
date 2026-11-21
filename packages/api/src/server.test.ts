@@ -48,6 +48,7 @@ const config: Config = {
   logLevel: 'silent',
   publicOrigin: 'http://localhost:3000',
   autoMigrate: true,
+  trustedProxies: [],
 };
 
 /** The URL the started server answers on. */

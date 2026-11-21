@@ -116,6 +116,7 @@ export async function startServer(
   const app = buildApp({
     db: database,
     publicOrigin: config.publicOrigin,
+    trustedProxies: config.trustedProxies,
     logger: {
       level: config.logLevel,
       ...(options.logStream ? { stream: options.logStream } : {}),

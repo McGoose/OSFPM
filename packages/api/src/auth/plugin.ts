@@ -1,4 +1,9 @@
-import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
+import type {
+  FastifyInstance,
+  FastifyPluginAsync,
+  FastifyReply,
+  FastifyRequest,
+} from 'fastify';
 import {
   validateSession,
   type SessionUser,
@@ -12,7 +17,7 @@ import {
   RateLimitedError,
 } from '../errors.js';
 import { clearSessionCookie, SESSION_COOKIE } from './cookie.js';
-import { AUTH_RATE_LIMIT } from './rate-limit.js';
+import { AUTH_RATE_LIMIT, SESSION_RATE_LIMIT } from './rate-limit.js';
 
 /**
  * What a route may say about sessions, in its `config.auth`:
@@ -51,10 +56,18 @@ declare module 'fastify' {
     /** How the route treats a session. Defaults to `required` (see `AUTH_MODES`). */
     auth?: AuthMode;
     /**
-     * Counts the request against the auth rate limit (see `AUTH_RATE_LIMIT`).
-     * Every route under `/api/v1/auth/` sets it.
+     * Counts the request against the strict limit per address (see
+     * `AUTH_RATE_LIMIT`). For a route that checks a secret, where a caller may
+     * be guessing: sign-in, setup, recovery, invites. Counted before anything
+     * else, so a caller with no session is limited too.
      */
     authRateLimit?: boolean;
+    /**
+     * Counts the request against the limit per session (see
+     * `SESSION_RATE_LIMIT`). For a route a signed-in client uses as it goes. A
+     * request with no valid session is not counted.
+     */
+    sessionRateLimit?: boolean;
   }
   interface FastifyRequest {
     /**
@@ -83,6 +96,25 @@ const ORIGIN_CHECKED_METHODS: ReadonlySet<string> = new Set([
   'DELETE',
 ]);
 
+/** One of the two limiters `createRateLimit` made. */
+type Limiter = ReturnType<FastifyInstance['createRateLimit']>;
+
+/**
+ * Counts the request in `limiter`, and refuses it with a 429 and `Retry-After`
+ * (whole seconds, at least one) when the count is past the limit.
+ */
+async function enforce(
+  limiter: Limiter,
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const used = await limiter(request);
+  if (!used.isAllowed && used.isExceeded) {
+    reply.header('retry-after', String(Math.max(1, used.ttlInSeconds)));
+    throw new RateLimitedError();
+  }
+}
+
 const implementation: FastifyPluginAsync<AuthPluginOptions> = (
   app,
   options,
@@ -106,6 +138,14 @@ const implementation: FastifyPluginAsync<AuthPluginOptions> = (
     max: AUTH_RATE_LIMIT.max,
     timeWindow: AUTH_RATE_LIMIT.timeWindowMs,
   });
+  // The same for the routes of a signed-in client, but counted per session, so
+  // a session behind a shared address does not use up its neighbour's requests.
+  // It is only called once there is a session, so the key is always one.
+  const sessionLimit = app.createRateLimit({
+    max: SESSION_RATE_LIMIT.max,
+    timeWindow: SESSION_RATE_LIMIT.timeWindowMs,
+    keyGenerator: (request) => request.auth?.session.id ?? '',
+  });
 
   app.decorateRequest('auth', null);
 
@@ -117,11 +157,7 @@ const implementation: FastifyPluginAsync<AuthPluginOptions> = (
     // First of all, whatever the route would have answered, so a caller with no
     // session, a wrong one or a foreign Origin is counted as well.
     if (request.routeOptions.config.authRateLimit === true) {
-      const used = await authLimit(request);
-      if (!used.isAllowed && used.isExceeded) {
-        reply.header('retry-after', String(Math.max(1, used.ttlInSeconds)));
-        throw new RateLimitedError();
-      }
+      await enforce(authLimit, request, reply);
     }
 
     // Anything but the two looser modes is `required`, including a value this
@@ -169,6 +205,12 @@ const implementation: FastifyPluginAsync<AuthPluginOptions> = (
         clock: () => new Date(),
       },
     };
+
+    // Only now is there a session to count. It comes after the Origin check, so
+    // a forged request, which is refused above, does not spend the session's own.
+    if (request.routeOptions.config.sessionRateLimit === true) {
+      await enforce(sessionLimit, request, reply);
+    }
   });
 
   return Promise.resolve();
@@ -185,8 +227,11 @@ const implementation: FastifyPluginAsync<AuthPluginOptions> = (
  * answers 401 `authentication-required`, with the same text whatever the
  * reason.
  *
- * A route with `config.authRateLimit` is counted against `AUTH_RATE_LIMIT` before
- * anything else: past the limit it is a 429 `rate-limited` with `Retry-After`.
+ * A route with `config.authRateLimit` is counted against `AUTH_RATE_LIMIT`, per
+ * address, before anything else. A route with `config.sessionRateLimit` is counted
+ * against `SESSION_RATE_LIMIT`, per session, once the session is known; a
+ * request with no valid session is not counted. Past either limit it is a 429
+ * `rate-limited` with `Retry-After`.
  *
  * A request that changes data (`POST`, `PUT`, `PATCH`, `DELETE`) with a session
  * cookie must carry an `Origin` equal to `publicOrigin`, or it is a 403

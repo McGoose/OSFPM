@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { z } from 'zod';
 
 /** The log levels the server accepts. `silent` turns logging off. */
@@ -33,6 +34,13 @@ export type Config = {
   readonly publicOrigin: string;
   /** Run pending migrations when the server starts (`OSFPM_AUTO_MIGRATE`). */
   readonly autoMigrate: boolean;
+  /**
+   * The reverse proxies whose `X-Forwarded-For` is believed (`OSFPM_TRUSTED_PROXIES`):
+   * IP addresses, CIDR ranges, or the names `loopback`, `linklocal` and
+   * `uniquelocal`. Empty, the default, believes no header and takes the address
+   * of the connection.
+   */
+  readonly trustedProxies: readonly string[];
 };
 
 /**
@@ -86,6 +94,43 @@ function isAllowedPublicUrl(value: string): boolean {
   }
 }
 
+/** The names `proxy-addr`, which Fastify uses, accepts for a group of addresses. */
+const PROXY_RANGE_NAMES: ReadonlySet<string> = new Set([
+  'loopback',
+  'linklocal',
+  'uniquelocal',
+]);
+
+/**
+ * True for one entry of `OSFPM_TRUSTED_PROXIES`: an IP address, a CIDR range with
+ * a prefix from 1 to the length of the address, or one of `PROXY_RANGE_NAMES`.
+ * A range of `/0` is refused, because trusting every address lets any caller
+ * write its own in the header. A host name is refused: it would have to be
+ * looked up, and the answer could change.
+ */
+function isTrustedProxyEntry(entry: string): boolean {
+  if (PROXY_RANGE_NAMES.has(entry)) return true;
+  const parts = entry.split('/');
+  if (parts.length > 2) return false;
+  const [address, prefix] = parts;
+  const version = isIP(address ?? '');
+  if (version === 0) return false;
+  if (prefix === undefined) return true;
+  if (!/^\d{1,3}$/.test(prefix)) return false;
+  const length = Number(prefix);
+  return length >= 1 && length <= (version === 4 ? 32 : 128);
+}
+
+/** The entries of `OSFPM_TRUSTED_PROXIES`, trimmed, and the names in lower case. */
+function proxyEntries(value: string): string[] {
+  return value.split(',').map((entry) => {
+    const trimmed = entry.trim();
+    return PROXY_RANGE_NAMES.has(trimmed.toLowerCase())
+      ? trimmed.toLowerCase()
+      : trimmed;
+  });
+}
+
 const environmentSchema = z.object({
   DATABASE_URL: z
     .string()
@@ -128,6 +173,16 @@ const environmentSchema = z.object({
     .pipe(z.enum(['true', 'false']))
     .transform((value) => value === 'true')
     .default(true),
+  // A list, so a refused entry cannot be named without echoing it: the message
+  // is fixed, and has no example in it that a value could be mistaken for.
+  OSFPM_TRUSTED_PROXIES: z
+    .string()
+    .refine(
+      (value) => proxyEntries(value).every(isTrustedProxyEntry),
+      'must be a comma-separated list of IP addresses, CIDR ranges (never a range of everything), or the names loopback, linklocal and uniquelocal',
+    )
+    .transform(proxyEntries)
+    .default([]),
 });
 
 const VARIABLES = Object.keys(environmentSchema.shape);
@@ -183,5 +238,6 @@ export function loadConfig(
     // `origin` is the form a browser sends: lower case, default port left out.
     publicOrigin: new URL(values.OSFPM_PUBLIC_URL).origin,
     autoMigrate: values.OSFPM_AUTO_MIGRATE,
+    trustedProxies: values.OSFPM_TRUSTED_PROXIES,
   };
 }

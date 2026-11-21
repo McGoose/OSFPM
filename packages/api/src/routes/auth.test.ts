@@ -21,7 +21,7 @@ import {
 } from '@osfpm/core/src/db/test-support.js';
 import { API_PREFIX } from '../api-version.js';
 import { SESSION_COOKIE } from '../auth/cookie.js';
-import { AUTH_RATE_LIMIT } from '../auth/rate-limit.js';
+import { SESSION_RATE_LIMIT } from '../auth/rate-limit.js';
 import { createTestApp, TEST_PUBLIC_ORIGIN, UUID_V7 } from '../test-support.js';
 
 const HOUR = 60 * 60 * 1000;
@@ -507,17 +507,18 @@ describe.each(testTargets)('the auth routes on $name', (target: TestTarget) => {
     });
   });
 
-  describe('the rate limit on these routes', () => {
-    it('refuses the 11th request in a minute from one address with a 429 problem and Retry-After', async () => {
+  describe('the rate limit on these routes: 120 a minute per session', () => {
+    const SESSION_ID = '01900000-0000-7000-8000-000000000001';
+
+    it('refuses the 121st request in a minute on one session with a 429 problem and Retry-After', async () => {
       const { token } = await login();
-      const remoteAddress = freshAddress();
-      for (let n = 1; n <= AUTH_RATE_LIMIT.max; n += 1) {
+      for (let n = 1; n <= SESSION_RATE_LIMIT.max; n += 1) {
         expect(
-          (await send('GET', '/me', { token, remoteAddress })).statusCode,
+          (await send('GET', '/me', { token })).statusCode,
           `request ${n}`,
         ).toBe(200);
       }
-      const refused = await send('GET', '/me', { token, remoteAddress });
+      const refused = await send('GET', '/me', { token });
       expect(refused.statusCode).toBe(429);
       expect(refused.headers['content-type']).toMatch(
         /^application\/problem\+json/,
@@ -529,26 +530,64 @@ describe.each(testTargets)('the auth routes on $name', (target: TestTarget) => {
       });
     });
 
-    it('is shared by the four routes', async () => {
+    it('is shared by the four routes, counted per session', async () => {
       const mine = await login();
-      const remoteAddress = freshAddress();
-      for (let n = 0; n < 4; n += 1) {
-        await send('GET', '/me', { token: mine.token, remoteAddress });
-        await send('GET', '/sessions', { token: mine.token, remoteAddress });
+      const own = await login({ userId: mine.userId });
+      // 118 + 1 + 1 requests of the three read routes and a revoke: 120.
+      for (let n = 0; n < 100; n += 1)
+        await send('GET', '/me', { token: mine.token });
+      for (let n = 0; n < 19; n += 1) {
+        await send('GET', '/sessions', { token: mine.token });
       }
-      await send('GET', '/me', { token: mine.token, remoteAddress });
-      await send('GET', '/me', { token: mine.token, remoteAddress });
+      const revoke = await send('DELETE', `/sessions/${own.sessionId}`, {
+        token: mine.token,
+      });
+      expect(revoke.statusCode).toBe(204);
+
       for (const [method, path] of [
         ['GET', '/me'],
         ['GET', '/sessions'],
         ['POST', '/logout'],
-        ['DELETE', '/sessions/01900000-0000-7000-8000-000000000001'],
+        ['DELETE', `/sessions/${SESSION_ID}`],
       ] as const) {
         expect(
-          (await send(method, path, { token: mine.token, remoteAddress }))
-            .statusCode,
+          (await send(method, path, { token: mine.token })).statusCode,
           `${method} ${path}`,
         ).toBe(429);
+      }
+      // The refused logout did not sign the session out: it is only held back.
+      expect((await sessionRow(mine.sessionId)).revokedAt).toBeNull();
+    });
+
+    it('is the session that counts: another session, the same user or the same address, has all of its own', async () => {
+      const first = await login();
+      const second = await login({ userId: first.userId });
+      const sameAddress = freshAddress();
+      for (let n = 0; n <= SESSION_RATE_LIMIT.max; n += 1) {
+        await send('GET', '/me', {
+          token: first.token,
+          remoteAddress: sameAddress,
+        });
+      }
+      expect(
+        (await send('GET', '/me', { token: first.token })).statusCode,
+      ).toBe(429);
+      expect(
+        (
+          await send('GET', '/me', {
+            token: second.token,
+            remoteAddress: sameAddress,
+          })
+        ).statusCode,
+      ).toBe(200);
+    });
+
+    it('does not count a caller with no session: any number of 401s, from one address', async () => {
+      const remoteAddress = freshAddress();
+      for (let n = 0; n < SESSION_RATE_LIMIT.max + 20; n += 1) {
+        expect((await send('GET', '/me', { remoteAddress })).statusCode).toBe(
+          401,
+        );
       }
     });
   });

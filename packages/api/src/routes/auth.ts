@@ -53,7 +53,8 @@ const sessionSchema = z.object({
 /**
  * The routes under `/api/v1/auth` that a signed-in user uses: who am I, where am
  * I signed in, end a session, sign out. Every route needs a session and counts
- * against the auth rate limit; `POST` and `DELETE` also need the right `Origin`
+ * against the limit per session (`SESSION_RATE_LIMIT`); `POST` and `DELETE` also
+ * need the right `Origin`
  * (see `authPlugin`). Login itself (passkeys, passwords, TOTP) comes later.
  *
  * These are self-service routes: every one acts on the signed-in user's own
@@ -69,7 +70,7 @@ export const authRoutes: FastifyPluginAsyncZod = (app) => {
   app.get(
     '/me',
     {
-      config: { authRateLimit: true },
+      config: { sessionRateLimit: true },
       schema: {
         summary: 'The signed-in user',
         description: 'The acting user of the session in the cookie.',
@@ -90,7 +91,7 @@ export const authRoutes: FastifyPluginAsyncZod = (app) => {
   app.get(
     '/sessions',
     {
-      config: { authRateLimit: true },
+      config: { sessionRateLimit: true },
       schema: {
         summary: 'Where the user is signed in',
         description:
@@ -121,7 +122,7 @@ export const authRoutes: FastifyPluginAsyncZod = (app) => {
   app.delete(
     '/sessions/:id',
     {
-      config: { authRateLimit: true },
+      config: { sessionRateLimit: true },
       schema: {
         summary: 'End one of the user’s sessions',
         description:
@@ -162,7 +163,7 @@ export const authRoutes: FastifyPluginAsyncZod = (app) => {
   app.post(
     '/logout',
     {
-      config: { authRateLimit: true },
+      config: { sessionRateLimit: true },
       schema: {
         summary: 'Sign out',
         description:

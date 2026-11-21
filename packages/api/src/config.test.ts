@@ -29,6 +29,7 @@ describe('loadConfig', () => {
       logLevel: 'info',
       publicOrigin: PUBLIC_URL,
       autoMigrate: true,
+      trustedProxies: [],
     });
   });
 
@@ -49,6 +50,7 @@ describe('loadConfig', () => {
       logLevel: 'debug',
       publicOrigin: 'https://films.example.test',
       autoMigrate: false,
+      trustedProxies: [],
     });
   });
 
@@ -229,4 +231,67 @@ describe('loadConfig: OSFPM_AUTO_MIGRATE', () => {
       expect(message).not.toContain(value);
     },
   );
+});
+
+describe('loadConfig: OSFPM_TRUSTED_PROXIES', () => {
+  const proxies = (value: string | undefined) =>
+    loadConfig({
+      ...BASE,
+      ...(value === undefined ? {} : { OSFPM_TRUSTED_PROXIES: value }),
+    }).trustedProxies;
+
+  it('is off by default, and an empty value counts as not set', () => {
+    expect(proxies(undefined)).toEqual([]);
+    expect(proxies('')).toEqual([]);
+  });
+
+  it.each([
+    ['an IPv4 address', '10.0.0.1', ['10.0.0.1']],
+    ['an IPv6 address', 'fd00::1', ['fd00::1']],
+    ['an IPv4 range', '10.0.0.0/8', ['10.0.0.0/8']],
+    ['an IPv6 range', 'fd00::/8', ['fd00::/8']],
+    [
+      'the longest ranges',
+      '10.0.0.1/32,fd00::1/128',
+      ['10.0.0.1/32', 'fd00::1/128'],
+    ],
+    ['loopback', 'loopback', ['loopback']],
+    ['linklocal', 'linklocal', ['linklocal']],
+    ['uniquelocal', 'uniquelocal', ['uniquelocal']],
+    [
+      'a list',
+      '10.0.0.1,192.168.0.0/16,loopback',
+      ['10.0.0.1', '192.168.0.0/16', 'loopback'],
+    ],
+    ['a list with spaces', ' 10.0.0.1 , 10.0.0.2 ', ['10.0.0.1', '10.0.0.2']],
+    ['a name in any case', 'LoopBack', ['loopback']],
+  ])('reads %s', (_label, value, expected) => {
+    expect(proxies(value)).toEqual(expected);
+  });
+
+  it.each([
+    // Trusting every address lets any caller write its own address in the header.
+    ['everything', '0.0.0.0/0'],
+    ['every IPv6 address', '::/0'],
+    ['a star', '*'],
+    ['true', 'true'],
+    ['a number of hops', '1'],
+    ['a host name', 'proxy.internal.example.test'],
+    ['a range with no prefix', '10.0.0.0/'],
+    ['a prefix that is too long', '10.0.0.0/33'],
+    ['an IPv6 prefix that is too long', 'fd00::/129'],
+    ['a prefix that is not a number', '10.0.0.0/eight'],
+    ['a negative prefix', '10.0.0.0/-8'],
+    ['an address that is not one', '10.0.0.256'],
+    ['one bad entry among good ones', '10.0.0.1,not-an-address'],
+    ['an empty entry', '10.0.0.1,,10.0.0.2'],
+    ['a trailing comma', '10.0.0.1,'],
+    ['two slashes', '10.0.0.0/8/8'],
+  ])('refuses %s, without echoing it', (_label, value) => {
+    const message = refusal({ ...BASE, OSFPM_TRUSTED_PROXIES: value });
+    expect(message).toContain('OSFPM_TRUSTED_PROXIES');
+    expect(message).not.toContain(value);
+    expect(message).not.toContain('not-an-address');
+    expect(message).not.toContain('internal.example');
+  });
 });

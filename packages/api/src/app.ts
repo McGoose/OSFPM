@@ -68,6 +68,13 @@ export type BuildAppOptions = {
    * a request that changes data and carries a session cookie may have.
    */
   readonly publicOrigin: string;
+  /**
+   * The reverse proxies whose `X-Forwarded-For` is believed (`Config.trustedProxies`).
+   * Leave out, or empty, to believe no header: `request.ip`, which the rate
+   * limits count by, is then the address of the connection, so behind a proxy
+   * every caller is the proxy.
+   */
+  readonly trustedProxies?: readonly string[];
   /** Leave out for no logging. See `loggerOptions` for what a line holds. */
   readonly logger?: LoggerSettings;
 };
@@ -100,6 +107,10 @@ export function buildApp(options: BuildAppOptions) {
     logController: createLogController(),
     genReqId: () => newId(),
     requestIdHeader: false,
+    trustProxy:
+      options.trustedProxies !== undefined && options.trustedProxies.length > 0
+        ? [...options.trustedProxies]
+        : false,
     frameworkErrors: handleFrameworkError,
   }).withTypeProvider<ZodTypeProvider>();
 
