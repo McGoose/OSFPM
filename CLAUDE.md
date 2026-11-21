@@ -68,6 +68,7 @@ Only the fictional demo production _The Last Withdrawal_ or invented data. Never
 - Branches are named `type/pNN-slug`, for example `docs/p01b-claude-md`.
 - British spelling (organisation, licence) in code identifiers and docs.
 - Run the full test suite before every commit.
+- Before deliberately breaking code to check that a test catches it, commit or stash your work first, and undo the break with git, not by copying a backup file back.
 - If `node -v` does not match `.nvmrc`, or `pnpm` will not run, stop and tell the maintainer. Do not run the tools another way.
 - Ask before any change not listed in the prompt, and before adding any dependency the prompt does not name.
 - Read only the files a task needs; do not explore the repo for context.
