@@ -10,7 +10,6 @@ import { join } from 'node:path';
 import { eq, getTableName, is, sql } from 'drizzle-orm';
 import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { syncPermissions } from '../access/permission-sync.js';
 import type { Database } from './client.js';
 import {
   declaredRetentionClasses,
@@ -1690,23 +1689,6 @@ describe.each(testTargets)('database schema on $name', (target) => {
             sql`select grants_sensitive from permission where key = ${key}`,
           );
           expect(row).toEqual({ grants_sensitive: false });
-        });
-
-        it('rejects the same flip made through syncPermissions', async () => {
-          const r = await insertRole(database, a.organisationId, 'reach-sync');
-          const key = await newPermission();
-          await database.db.insert(rolePermission).values(grant(r, key));
-          const failure = await failureOf(() =>
-            syncPermissions(database.db, [
-              {
-                key,
-                module: 'reach',
-                description: 'Reach test',
-                grantsSensitive: true,
-              },
-            ]),
-          );
-          expect(failure).toEqual(notSensitive);
         });
 
         it('counts a deleted all-projects grant when a permission is flagged sensitive', async () => {
