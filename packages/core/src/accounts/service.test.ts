@@ -435,8 +435,9 @@ describe.each(testTargets)('charts of accounts on $name', (target) => {
     it('needs accounts:edit, and says which scope was missing without naming the organisation or the project', async () => {
       const w = await setup();
       const before = await snapshot(w);
-      // Roles of the other scope grant nothing: the organisation's manager
-      // cannot create a project chart, and the project's manager no template.
+      // Own-scope grants of the other scope grant nothing: the organisation's
+      // manager cannot create a project chart, and the project's manager no
+      // template.
       for (const userId of [w.outsider, w.projectReader, w.orgManager]) {
         const error = await errorOf(
           createChart(db(), at(userId), {
@@ -1471,7 +1472,7 @@ describe.each(testTargets)('charts of accounts on $name', (target) => {
       ).toHaveLength(1);
     });
 
-    it('needs accounts:edit on the chart’s scope, and roles of the other scope grant nothing', async () => {
+    it('needs accounts:edit on the chart’s scope, and own-scope grants of the other scope grant nothing', async () => {
       const w = await setup();
       const chart = await projectChartIn(w);
       const template = await templateIn(w);
@@ -1851,7 +1852,7 @@ describe.each(testTargets)('charts of accounts on $name', (target) => {
       ]);
     });
 
-    it('needs accounts:read on the chart’s scope, and roles of the other scope grant nothing', async () => {
+    it('needs accounts:read on the chart’s scope, and own-scope grants of the other scope grant nothing', async () => {
       const w = await setup();
       const t = await buildTemplate(w);
       const chart = await projectChartIn(w, { key: 'mine' });
