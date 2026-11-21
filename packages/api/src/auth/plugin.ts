@@ -6,8 +6,13 @@ import {
 } from '@osfpm/core/src/auth/sessions.js';
 import { serverId } from '@osfpm/core/src/auth/shared.js';
 import type { WriteContext } from '@osfpm/core/src/db/write.js';
-import { AuthenticationRequiredError, OriginMismatchError } from '../errors.js';
+import {
+  AuthenticationRequiredError,
+  OriginMismatchError,
+  RateLimitedError,
+} from '../errors.js';
 import { clearSessionCookie, SESSION_COOKIE } from './cookie.js';
+import { AUTH_RATE_LIMIT } from './rate-limit.js';
 
 /**
  * What a route may say about sessions, in its `config.auth`:
@@ -45,6 +50,11 @@ declare module 'fastify' {
   interface FastifyContextConfig {
     /** How the route treats a session. Defaults to `required` (see `AUTH_MODES`). */
     auth?: AuthMode;
+    /**
+     * Counts the request against the auth rate limit (see `AUTH_RATE_LIMIT`).
+     * Every route under `/api/v1/auth/` sets it.
+     */
+    authRateLimit?: boolean;
   }
   interface FastifyRequest {
     /**
@@ -88,12 +98,32 @@ const implementation: FastifyPluginAsync<AuthPluginOptions> = (
       throw error;
     }));
 
+  // One limiter for every route that asks, so they share one count per address.
+  // It is called from the hook below rather than left to the rate-limit plugin's
+  // own route hook, because a route hook runs after the app's hooks: the session
+  // check would answer first and an unauthenticated caller would never be counted.
+  const authLimit = app.createRateLimit({
+    max: AUTH_RATE_LIMIT.max,
+    timeWindow: AUTH_RATE_LIMIT.timeWindowMs,
+  });
+
   app.decorateRequest('auth', null);
 
   app.addHook('onRequest', async (request, reply) => {
     // No route matched, so there is nothing here to protect, and the answer is
     // the 404 problem whoever asks.
     if (request.is404) return;
+
+    // First of all, whatever the route would have answered, so a caller with no
+    // session, a wrong one or a foreign Origin is counted as well.
+    if (request.routeOptions.config.authRateLimit === true) {
+      const used = await authLimit(request);
+      if (!used.isAllowed && used.isExceeded) {
+        reply.header('retry-after', String(Math.max(1, used.ttlInSeconds)));
+        throw new RateLimitedError();
+      }
+    }
+
     // Anything but the two looser modes is `required`, including a value this
     // plugin does not know: a typo in a cast must not open a route.
     const configured: unknown = request.routeOptions.config.auth;
@@ -154,6 +184,9 @@ const implementation: FastifyPluginAsync<AuthPluginOptions> = (
  * as no session, and the response clears the cookie. A `required` route then
  * answers 401 `authentication-required`, with the same text whatever the
  * reason.
+ *
+ * A route with `config.authRateLimit` is counted against `AUTH_RATE_LIMIT` before
+ * anything else: past the limit it is a 429 `rate-limited` with `Retry-After`.
  *
  * A request that changes data (`POST`, `PUT`, `PATCH`, `DELETE`) with a session
  * cookie must carry an `Origin` equal to `publicOrigin`, or it is a 403

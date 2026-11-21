@@ -1,4 +1,5 @@
 import cookie from '@fastify/cookie';
+import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
 import Fastify from 'fastify';
 import {
@@ -116,9 +117,13 @@ export function buildApp(options: BuildAppOptions) {
     done();
   });
 
-  // The cookie parser first, then the auth plugin that reads what it parsed.
-  // Both register on the whole app, before any route, so every route has them.
+  // The cookie parser and the rate limiter first, then the auth plugin that
+  // uses both. They register on the whole app, before any route. The limiter
+  // limits nothing by itself (`global: false`): the auth plugin calls it for
+  // the routes that set `config.authRateLimit`. Its counts are in this
+  // process's memory.
   void app.register(cookie);
+  void app.register(rateLimit, { global: false });
   void app.register(authPlugin, { publicOrigin: options.publicOrigin });
 
   app.addHook('onResponse', (request, reply, done) => {

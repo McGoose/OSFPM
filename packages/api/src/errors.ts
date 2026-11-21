@@ -62,6 +62,18 @@ export class OriginMismatchError extends Error {
   }
 }
 
+/**
+ * The caller has used up the requests the auth routes allow from one address
+ * (see `AUTH_RATE_LIMIT`). Maps to a 429. The message and the response name
+ * neither the address nor the limit; the route sets `Retry-After` itself.
+ */
+export class RateLimitedError extends Error {
+  constructor() {
+    super('The auth rate limit was exceeded');
+    this.name = 'RateLimitedError';
+  }
+}
+
 /** One row of `PROBLEM_TABLE`. */
 export type ProblemRule = {
   /** Matched with `instanceof`, so a subclass takes its parent's row. */
@@ -103,6 +115,13 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
     title: 'Origin mismatch',
     detail:
       'This request did not come from the address this server is used at.',
+  },
+  {
+    errorClass: RateLimitedError,
+    status: 429,
+    code: 'rate-limited',
+    title: 'Too many requests',
+    detail: 'Too many requests. Wait a little, then try again.',
   },
   {
     errorClass: AccessDeniedError,
