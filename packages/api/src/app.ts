@@ -6,6 +6,7 @@ import {
 } from 'fastify-type-provider-zod';
 import type { Database } from '@osfpm/core/src/db/client.js';
 import { newId } from '@osfpm/core/src/db/ids.js';
+import { handleFrameworkError, registerErrorHandling } from './errors.js';
 import {
   createLogController,
   loggerOptions,
@@ -36,7 +37,8 @@ export type BuildAppOptions = {
  * server entry can call `app.listen()`. Routes live under `/api/v1`, one
  * Fastify plugin per area, so a module adds its own plugin and its routes
  * share nothing with the others by accident. CORS is off: the API is same-origin
- * by default. Authentication is not added yet.
+ * by default. Authentication is not added yet. Every error, and every unknown
+ * route, is answered as a problem response (see `registerErrorHandling`).
  *
  * Every request gets a UUIDv7 from the core's generator. A request ID sent by
  * the caller is ignored, so a caller cannot choose what appears in the logs.
@@ -53,11 +55,13 @@ export function buildApp(options: BuildAppOptions) {
     logController: createLogController(),
     genReqId: () => newId(),
     requestIdHeader: false,
+    frameworkErrors: handleFrameworkError,
   }).withTypeProvider<ZodTypeProvider>();
 
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   app.decorate('db', options.db);
+  registerErrorHandling(app);
 
   app.addHook('onRequest', (request, reply, done) => {
     reply.header('x-request-id', request.id);
