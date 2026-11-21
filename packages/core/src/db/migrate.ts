@@ -69,7 +69,8 @@ async function withMigrationLock(
 ): Promise<void> {
   const holder = await pool.connect();
   try {
-    await holder.query('select pg_advisory_lock($1::bigint)', [
+    // MUTATION: asks for the key but takes no lock.
+    await holder.query('select $1::bigint', [
       MIGRATION_LOCK_KEY,
     ]);
     await work();
