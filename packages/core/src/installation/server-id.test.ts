@@ -1,7 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { seedInstallation } from '../auth/test-support.js';
 import type { Database } from '../db/client.js';
-import { createMigratedDatabase, testTargets } from '../db/test-support.js';
+import {
+  createMigratedDatabase,
+  interleave,
+  testTargets,
+} from '../db/test-support.js';
 import { getServerId, InstallationMissingError } from './server-id.js';
 
 describe.each(testTargets)('getServerId on $name', (target) => {
@@ -43,3 +47,62 @@ describe.each(testTargets)('getServerId on $name', (target) => {
     ).toBe(installationId);
   });
 });
+
+/** The PostgreSQL target, when `DATABASE_URL` names a server. PGlite has one connection, so it cannot run this. */
+const postgres = testTargets.find((target) => target.name === 'postgres');
+
+/**
+ * `lock` holds the installation row until the transaction ends, which is what
+ * lets the setup code serialise on it. Only a server with real concurrent
+ * sessions can show that, so these run on PostgreSQL and are skipped on PGlite.
+ */
+describe.skipIf(postgres === undefined)(
+  'getServerId with lock, on PostgreSQL',
+  () => {
+    let database: Database;
+    let cleanup: () => Promise<void>;
+    beforeAll(async () => {
+      ({ database, cleanup } = await createMigratedDatabase(postgres!));
+      await seedInstallation(database);
+    });
+    afterAll(async () => {
+      await cleanup();
+    });
+
+    it('makes a second caller that also locks wait until the first transaction ends', async () => {
+      // `interleave` fails the test if the second caller does not block.
+      const outcomes = await interleave(
+        database.db,
+        (tx) => getServerId(tx, { lock: true }),
+        (tx) => getServerId(tx, { lock: true }),
+      );
+      expect(outcomes.map((outcome) => outcome.status)).toEqual([
+        'fulfilled',
+        'fulfilled',
+      ]);
+    });
+
+    it('does not make a plain read wait for the holder', async () => {
+      let holding!: () => void;
+      const hasLock = new Promise<void>((resolve) => {
+        holding = resolve;
+      });
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const holder = database.db.transaction(async (tx) => {
+        await getServerId(tx, { lock: true });
+        holding();
+        await released;
+      });
+      await hasLock;
+      try {
+        expect(typeof (await getServerId(database.db))).toBe('string');
+      } finally {
+        release();
+        await holder;
+      }
+    });
+  },
+);
