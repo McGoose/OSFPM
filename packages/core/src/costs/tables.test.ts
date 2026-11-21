@@ -367,6 +367,37 @@ describe.each(testTargets)('the cost tables on $name', (target) => {
       });
     });
 
+    describe('the indexes', () => {
+      it('are two partial indexes on live lines and no others, besides the keys', async () => {
+        const result = (await db().execute(
+          sql`select i.relname as name, pg_get_indexdef(i.oid) as definition
+              from pg_index x
+              join pg_class i on i.oid = x.indexrelid
+              where x.indrelid = 'cost_line'::regclass
+                and not x.indisunique and not x.indisprimary`,
+        )) as { rows: { name: string; definition: string }[] };
+        const found = result.rows
+          .map((r) => ({
+            name: r.name,
+            // Only what follows the table name, so the schema prefix does not matter.
+            definition: r.definition.replace(/^.*USING btree /, ''),
+          }))
+          .sort((x, y) => (x.name < y.name ? -1 : 1));
+        expect(found).toEqual([
+          {
+            name: 'cost_line_organisation_account_idx',
+            definition:
+              '(organisation_id, account_id) WHERE (deleted_at IS NULL)',
+          },
+          {
+            name: 'cost_line_organisation_project_stage_idx',
+            definition:
+              '(organisation_id, project_id, stage) WHERE (deleted_at IS NULL)',
+          },
+        ]);
+      });
+    });
+
     describe('references', () => {
       it('rejects a project of another organisation', async () => {
         expect(

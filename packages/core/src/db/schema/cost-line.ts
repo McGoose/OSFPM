@@ -3,6 +3,7 @@ import {
   check,
   date,
   foreignKey,
+  index,
   numeric,
   text,
   unique,
@@ -160,6 +161,17 @@ export const costLine = tenantTable(
     }),
     // Target for the composite tenant foreign key of scheme tags.
     unique('cost_line_organisation_id_id_unique').on(t.organisationId, t.id),
+    // The only indexes on this table, both partial because every lookup is for
+    // live lines. The first serves the guards in the accounts service, which ask
+    // whether a live line is booked to an account, and the account filter of
+    // `listCostLines`. The second serves that list: a project's lines, narrowed
+    // by stage.
+    index('cost_line_organisation_account_idx')
+      .on(t.organisationId, t.accountId)
+      .where(sql`${t.deletedAt} is null`),
+    index('cost_line_organisation_project_stage_idx')
+      .on(t.organisationId, t.projectId, t.stage)
+      .where(sql`${t.deletedAt} is null`),
     check(
       'cost_line_stage_check',
       sql`${t.stage} in (${sqlList(COST_STAGES)})`,
