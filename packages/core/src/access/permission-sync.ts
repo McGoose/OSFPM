@@ -23,7 +23,10 @@ export type PermissionDefinition = {
  * start-up; nothing does yet, so tests that need keys use `ensurePermissions`.
  * Checks no permission: only trusted start-up code calls it.
  *
- * @throws The database's own error when a key breaks the key-format CHECK.
+ * @throws The database's own error when a key breaks the key-format CHECK, or
+ * when a key already has `all-projects` role grants and the list flags it
+ * `grantsSensitive` (`role_permission_all_projects_not_sensitive`): a sensitive
+ * permission never reaches all projects.
  */
 export async function syncPermissions(
   tx: Tx,
