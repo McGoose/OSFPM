@@ -4,9 +4,9 @@ import { hasProjectPermission } from './project-permission.js';
 
 /**
  * Where a permission is checked: on a project, or in the organisation when
- * `projectId` is null. The two never overlap: a role on a project grants
- * nothing in the organisation, and an organisation role grants nothing on a
- * project.
+ * `projectId` is null. A role on a project grants nothing in the organisation.
+ * An organisation role grants on a project only through a grant with reach
+ * `all-projects`, never for a sensitive permission.
  */
 export type PermissionScope = {
   readonly organisationId: string;
