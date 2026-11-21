@@ -55,6 +55,10 @@ export type Database = {
  * Opens a database for the configured driver. It runs no migrations (see
  * `migrate`). The overloads only narrow the return type.
  *
+ * A PostgreSQL pool logs an idle connection that fails, by error class only,
+ * to standard error, and recovers by opening a new connection on the next
+ * query. It does not crash the process.
+ *
  * @throws Error for a driver other than `postgres` or `pglite`. The message
  * names the driver only, never the rest of the config.
  */
@@ -72,6 +76,19 @@ export function createDatabase(config: DbConfig): PostgresDb | PgliteDb {
   switch (config.driver) {
     case 'postgres': {
       const pool = new pg.Pool({ connectionString: config.url });
+      // An idle connection can fail while nothing is using it: the server
+      // restarts, or the network drops. The pool then emits 'error', and with no
+      // listener Node throws it and the whole process dies. The pool has already
+      // dropped the broken client and opens a new one for the next query, so
+      // the listener only has to say so. It names the error's class and nothing
+      // else: driver messages carry host names, user names or query values.
+      pool.on('error', (error: unknown) => {
+        const name =
+          error instanceof Error ? error.constructor.name || error.name : '';
+        console.error(
+          `Database pool error on an idle connection: ${name || 'unknown error'}`,
+        );
+      });
       return {
         driver: 'postgres',
         db: drizzlePg({ client: pool, schema }),
