@@ -31,11 +31,14 @@ export type UserStatus = (typeof USER_STATUSES)[number];
  * service now), never through the write helper, and audited, not change-logged
  * (CLAUDE.md, Data rules).
  *
- * `email` is stored normalised: lower case, with no spaces at either end. The
+ * `email` is stored normalised: lower case, with no whitespace anywhere in it
+ * (spaces, tabs and line breaks, at the ends or inside). The
  * `user_email_normalised_check` CHECK enforces it, so the unique index on `email`
- * means one account per address however a caller typed it, and a login can look
- * an address up with `lower(btrim(input))`. `btrim` removes spaces only, so a
- * caller still strips tabs and line breaks before it looks up or stores one.
+ * means one account per address however a caller typed it. A caller trims and
+ * lower-cases an address before it stores or looks one up; the database refuses
+ * one that was not, and never changes it. `[[:space:]]` is the database's own
+ * idea of whitespace, which on some locales leaves out Unicode spaces such as a
+ * no-break space.
  */
 export const user = pgTable(
   'user',
@@ -51,10 +54,12 @@ export const user = pgTable(
   (t) => [
     retentionClassForeignKey('user', t.retentionClass),
     uniqueIndex('user_email_unique').on(t.email),
-    // Replaces `user_email_lowercase_check`, which this implies.
+    // Lower case and no whitespace anywhere. Replaces the first form of this
+    // check, `email = lower(btrim(email))`, which let tabs, line breaks and
+    // inner spaces through (`btrim` strips spaces at the ends only).
     check(
       'user_email_normalised_check',
-      sql`${t.email} = lower(btrim(${t.email}))`,
+      sql`${t.email} = lower(${t.email}) and ${t.email} !~ '[[:space:]]'`,
     ),
     check('user_status_check', sql`${t.status} in (${sqlList(USER_STATUSES)})`),
   ],

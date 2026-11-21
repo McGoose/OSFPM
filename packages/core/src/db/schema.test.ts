@@ -1095,6 +1095,8 @@ describe.each(testTargets)('database schema on $name', (target) => {
         constraint: 'user_email_normalised_check',
       };
 
+      // No whitespace anywhere, and lower case. `[[:space:]]` covers space, tab,
+      // line feed, carriage return, vertical tab and form feed.
       it.each([
         ['an upper-case', 'Mixed.Case@example.test'],
         ['a leading-space', ' leading@example.test'],
@@ -1102,6 +1104,20 @@ describe.each(testTargets)('database schema on $name', (target) => {
         ['a space-padded', '  padded@example.test  '],
         ['a space-padded upper-case', ' Padded.Upper@Example.test '],
         ['a space-only', '   '],
+        ['an inner-space', 'first last@example.test'],
+        ['an inner-space in the domain', 'first.last@exam ple.test'],
+        ['a leading-tab', '\tleading.tab@example.test'],
+        ['a trailing-tab', 'trailing.tab@example.test\t'],
+        ['an inner-tab', 'inner\ttab@example.test'],
+        ['a trailing-newline', 'trailing.newline@example.test\n'],
+        ['a leading-newline', '\nleading.newline@example.test'],
+        ['an inner-newline', 'inner\nnewline@example.test'],
+        ['a trailing-carriage-return', 'trailing.cr@example.test\r'],
+        ['a Windows line-break', 'trailing.crlf@example.test\r\n'],
+        ['a vertical-tab', 'inner\vtab@example.test'],
+        ['a form-feed', 'inner\fform@example.test'],
+        ['a tab-only', '\t'],
+        ['a newline-only', '\n'],
       ])('rejects %s email', async (_label, email) => {
         const failure = await failureOf(() =>
           database.db.insert(user).values(userValues({ email })),
@@ -1112,7 +1128,13 @@ describe.each(testTargets)('database schema on $name', (target) => {
       it('rejects changing a stored email to one that is not normalised', async () => {
         const email = 'normalised.before@example.test';
         await database.db.insert(user).values(userValues({ email }));
-        for (const bad of ['Normalised.Before@example.test', `${email} `]) {
+        for (const bad of [
+          'Normalised.Before@example.test',
+          `${email} `,
+          `${email}\t`,
+          `${email}\n`,
+          'normalised before@example.test',
+        ]) {
           const failure = await failureOf(() =>
             database.db
               .update(user)
@@ -1123,11 +1145,12 @@ describe.each(testTargets)('database schema on $name', (target) => {
         }
       });
 
-      it('accepts a lower-case email with no spaces at the ends, spaces inside the name included', async () => {
+      it('accepts a lower-case email with no whitespace in it', async () => {
         for (const email of [
           'plain@example.test',
           'first.last+tag@example.test',
-          'with space inside@example.test',
+          'under_score-and-dash@sub.example.test',
+          'digits.123@example.test',
         ]) {
           await database.db.insert(user).values(userValues({ email }));
         }

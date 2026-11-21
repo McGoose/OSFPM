@@ -183,6 +183,13 @@
       "when": 1795280011520,
       "tag": "0025_user_email_normalised",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1795281765971,
+      "tag": "0026_user_email_no_whitespace",
+      "breakpoints": true
     }
   ]
 }
