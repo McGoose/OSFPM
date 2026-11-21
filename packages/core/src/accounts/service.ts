@@ -304,11 +304,7 @@ async function hasLiveCostLines(
   if (scope.projectId !== null) {
     await lockProjectChanges(tx, scope.organisationId, scope.projectId);
   }
-  await tx
-    .select({ id: account.id })
-    .from(account)
-    .where(accounts)
-    .for('update');
+  await tx.select({ id: account.id }).from(account).where(accounts);
   const [found] = await tx
     .select({ id: costLine.id })
     .from(costLine)

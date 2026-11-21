@@ -281,9 +281,7 @@ async function requireInProject(
       ),
     )
     .limit(1);
-  const [found] = allowed
-    ? await (lockProject ? query.for('share') : query)
-    : [];
+  const [found] = allowed ? await query : [];
   if (!found) throw new AccessDeniedError(key, scope);
   return found;
 }
@@ -515,8 +513,7 @@ async function checkAccount(
         isNull(account.deletedAt),
       ),
     )
-    .limit(1)
-    .for('share');
+    .limit(1);
   const [chart] = found
     ? await tx
         .select({ id: accountChart.id })
@@ -771,8 +768,7 @@ export async function updateCostLine(
       .select({ currency: project.currency })
       .from(project)
       .where(eq(project.id, found.projectId))
-      .limit(1)
-      .for('share');
+      .limit(1);
     priced = await priceLine(tx, owner!.currency, {
       amount: changes.amount ?? found.amount,
       currency: changes.currency ?? found.currency,
