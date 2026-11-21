@@ -1,0 +1,448 @@
+import { eq, sql } from 'drizzle-orm';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { Database } from '../db/client.js';
+import { newId } from '../db/ids.js';
+import {
+  installation,
+  passkeyCredential,
+  passwordCredential,
+  recoveryCode,
+  session,
+  setupCode,
+  totpCredential,
+} from '../db/schema/index.js';
+import { sensitiveColumns } from '../db/sensitive.js';
+import {
+  createMigratedDatabase,
+  failureOf,
+  SQLSTATE,
+  testTargets,
+} from '../db/test-support.js';
+import { hashPassword } from './password.js';
+import { everyRowAsText, rowsOf, seedActiveUser } from './test-support.js';
+
+const T0 = new Date('2026-03-02T09:00:00.000Z');
+const HOUR = 60 * 60 * 1000;
+const at = (ms: number) => new Date(T0.getTime() + ms);
+
+const unique = (constraint: string) => ({
+  code: SQLSTATE.uniqueViolation,
+  constraint,
+});
+const check = (constraint: string) => ({
+  code: SQLSTATE.checkViolation,
+  constraint,
+});
+const foreignKey = (constraint: string) => ({
+  code: SQLSTATE.foreignKeyViolation,
+  constraint,
+});
+
+let counter = 0;
+const next = () => (counter += 1);
+
+describe.each(testTargets)('login tables on $name', (target) => {
+  let database: Database;
+  let cleanup: () => Promise<void>;
+  let userId: string;
+
+  beforeAll(async () => {
+    ({ database, cleanup } = await createMigratedDatabase(target));
+    userId = await seedActiveUser(database);
+  });
+  afterAll(async () => {
+    await cleanup();
+  });
+
+  const db = () => database.db;
+  const origin = newId();
+
+  const sessionValues = (
+    overrides: Partial<typeof session.$inferInsert> = {},
+  ) => ({
+    originServer: origin,
+    userId,
+    tokenHash: `session-hash-${next()}`,
+    method: 'password' as const,
+    lastSeenAt: T0,
+    idleExpiresAt: at(12 * HOUR),
+    absoluteExpiresAt: at(30 * 24 * HOUR),
+    ...overrides,
+  });
+
+  const defaultOf = async (table: string) => {
+    const [row] = await rowsOf(
+      database,
+      sql`select column_default from information_schema.columns
+          where table_schema = 'public' and table_name = ${table}
+            and column_name = 'retention_class'`,
+    );
+    return row!.column_default;
+  };
+
+  describe('session', () => {
+    it('accepts each method on the list and a row whose idle end equals its absolute end', async () => {
+      for (const method of [
+        'passkey',
+        'password',
+        'password+totp',
+        'recovery',
+        'setup',
+        'invite',
+      ] as const) {
+        await db()
+          .insert(session)
+          .values(sessionValues({ method, idleExpiresAt: at(30 * 24 * HOUR) }));
+      }
+    });
+
+    it('rejects an unknown method', async () => {
+      const failure = await failureOf(() =>
+        db()
+          .insert(session)
+          .values(sessionValues({ method: 'magic-link' as never })),
+      );
+      expect(failure).toEqual(check('session_method_check'));
+    });
+
+    it('rejects an idle end after the absolute end', async () => {
+      const failure = await failureOf(() =>
+        db()
+          .insert(session)
+          .values(
+            sessionValues({
+              idleExpiresAt: at(30 * 24 * HOUR + 1),
+              absoluteExpiresAt: at(30 * 24 * HOUR),
+            }),
+          ),
+      );
+      expect(failure).toEqual(check('session_expiry_order_check'));
+    });
+
+    it('rejects moving an existing session’s idle end past its absolute end', async () => {
+      const [row] = await db()
+        .insert(session)
+        .values(sessionValues())
+        .returning({ id: session.id });
+      const failure = await failureOf(() =>
+        db()
+          .update(session)
+          .set({ idleExpiresAt: at(31 * 24 * HOUR) })
+          .where(eq(session.id, row!.id)),
+      );
+      expect(failure).toEqual(check('session_expiry_order_check'));
+    });
+
+    it('rejects a second session with the same token hash', async () => {
+      const tokenHash = `duplicate-${next()}`;
+      await db().insert(session).values(sessionValues({ tokenHash }));
+      const failure = await failureOf(() =>
+        db().insert(session).values(sessionValues({ tokenHash })),
+      );
+      expect(failure).toEqual(unique('session_token_hash_unique'));
+    });
+
+    it('rejects an unknown user', async () => {
+      const failure = await failureOf(() =>
+        db()
+          .insert(session)
+          .values(sessionValues({ userId: newId() })),
+      );
+      expect(failure).toEqual(foreignKey('session_user_fk'));
+    });
+
+    it('allows several sessions for one user, and defaults to the security-log class', async () => {
+      await db().insert(session).values(sessionValues());
+      await db().insert(session).values(sessionValues());
+      expect(await defaultOf('session')).toBe("'security-log'::text");
+    });
+  });
+
+  describe('setup_code', () => {
+    const codeValues = (
+      overrides: Partial<typeof setupCode.$inferInsert> = {},
+    ) => ({
+      originServer: origin,
+      codeHash: `setup-hash-${next()}`,
+      expiresAt: at(24 * HOUR),
+      ...overrides,
+    });
+
+    it('rejects two live codes, whatever their hashes', async () => {
+      await db().delete(setupCode);
+      await db().insert(setupCode).values(codeValues());
+      const failure = await failureOf(() =>
+        db().insert(setupCode).values(codeValues()),
+      );
+      expect(failure).toEqual(unique('setup_code_single_live'));
+    });
+
+    it('rejects two live codes even when one has expired, as it is still unused and unrevoked', async () => {
+      await db().delete(setupCode);
+      await db()
+        .insert(setupCode)
+        .values(codeValues({ expiresAt: at(-HOUR) }));
+      const failure = await failureOf(() =>
+        db().insert(setupCode).values(codeValues()),
+      );
+      expect(failure).toEqual(unique('setup_code_single_live'));
+    });
+
+    it('allows any number of used or revoked codes next to one live code', async () => {
+      await db().delete(setupCode);
+      await db()
+        .insert(setupCode)
+        .values([
+          codeValues({ usedAt: at(HOUR) }),
+          codeValues({ usedAt: at(2 * HOUR) }),
+          codeValues({ revokedAt: at(HOUR) }),
+          codeValues({ revokedAt: at(2 * HOUR) }),
+          codeValues({ usedAt: at(HOUR), revokedAt: at(2 * HOUR) }),
+          codeValues(),
+        ]);
+      expect(await db().select().from(setupCode)).toHaveLength(6);
+    });
+
+    it('rejects reviving a used code while another is live', async () => {
+      await db().delete(setupCode);
+      const [used] = await db()
+        .insert(setupCode)
+        .values(codeValues({ usedAt: at(HOUR) }))
+        .returning({ id: setupCode.id });
+      await db().insert(setupCode).values(codeValues());
+      const failure = await failureOf(() =>
+        db()
+          .update(setupCode)
+          .set({ usedAt: null })
+          .where(eq(setupCode.id, used!.id)),
+      );
+      expect(failure).toEqual(unique('setup_code_single_live'));
+    });
+
+    it('defaults to the security-log class', async () => {
+      expect(await defaultOf('setup_code')).toBe("'security-log'::text");
+    });
+  });
+
+  describe('recovery_code', () => {
+    const codeValues = (
+      overrides: Partial<typeof recoveryCode.$inferInsert> = {},
+    ) => ({
+      originServer: origin,
+      userId,
+      codeHash: `recovery-hash-${next()}`,
+      ...overrides,
+    });
+
+    it('rejects a duplicate code hash, also across users', async () => {
+      const other = await seedActiveUser(database);
+      const codeHash = `recovery-duplicate-${next()}`;
+      await db().insert(recoveryCode).values(codeValues({ codeHash }));
+      for (const owner of [userId, other]) {
+        const failure = await failureOf(() =>
+          db()
+            .insert(recoveryCode)
+            .values(codeValues({ codeHash, userId: owner })),
+        );
+        expect(failure).toEqual(unique('recovery_code_code_hash_unique'));
+      }
+    });
+
+    it('rejects an unknown user, and allows many codes for one user', async () => {
+      const failure = await failureOf(() =>
+        db()
+          .insert(recoveryCode)
+          .values(codeValues({ userId: newId() })),
+      );
+      expect(failure).toEqual(foreignKey('recovery_code_user_fk'));
+      await db()
+        .insert(recoveryCode)
+        .values([codeValues(), codeValues(), codeValues()]);
+    });
+
+    it('has no used time until it is used, and the default class', async () => {
+      const [row] = await db()
+        .insert(recoveryCode)
+        .values(codeValues())
+        .returning();
+      expect(row!.usedAt).toBeNull();
+      expect(await defaultOf('recovery_code')).toBe("'standard'::text");
+    });
+  });
+
+  describe('password_credential', () => {
+    const credentialValues = (
+      forUser: string,
+      overrides: Partial<typeof passwordCredential.$inferInsert> = {},
+    ) => ({
+      originServer: origin,
+      userId: forUser,
+      hash: '$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaA',
+      changedAt: T0,
+      ...overrides,
+    });
+
+    it('allows one password per user, and defaults must_change to false', async () => {
+      const owner = await seedActiveUser(database);
+      const [row] = await db()
+        .insert(passwordCredential)
+        .values(credentialValues(owner))
+        .returning();
+      expect(row!.mustChange).toBe(false);
+      const failure = await failureOf(() =>
+        db().insert(passwordCredential).values(credentialValues(owner)),
+      );
+      expect(failure).toEqual(unique('password_credential_user_unique'));
+    });
+
+    it('rejects an unknown user', async () => {
+      const failure = await failureOf(() =>
+        db().insert(passwordCredential).values(credentialValues(newId())),
+      );
+      expect(failure).toEqual(foreignKey('password_credential_user_fk'));
+    });
+
+    it('keeps no raw password in any table when the hash is stored', async () => {
+      const password = 'correct-horse-battery-harbour';
+      const owner = await seedActiveUser(database);
+      await db()
+        .insert(passwordCredential)
+        .values(
+          credentialValues(owner, { hash: await hashPassword(password) }),
+        );
+      expect(await everyRowAsText(database)).not.toContain(password);
+    });
+  });
+
+  describe('totp_credential', () => {
+    const credentialValues = (
+      forUser: string,
+      overrides: Partial<typeof totpCredential.$inferInsert> = {},
+    ) => ({
+      originServer: origin,
+      userId: forUser,
+      secret: 'JBSWY3DPEHPK3PXP',
+      ...overrides,
+    });
+
+    it('allows one secret per user, unconfirmed and unused to start with', async () => {
+      const owner = await seedActiveUser(database);
+      const [row] = await db()
+        .insert(totpCredential)
+        .values(credentialValues(owner))
+        .returning();
+      expect(row!.confirmedAt).toBeNull();
+      expect(row!.lastUsedStep).toBeNull();
+      const failure = await failureOf(() =>
+        db().insert(totpCredential).values(credentialValues(owner)),
+      );
+      expect(failure).toEqual(unique('totp_credential_user_unique'));
+    });
+
+    it('rejects an unknown user', async () => {
+      const failure = await failureOf(() =>
+        db().insert(totpCredential).values(credentialValues(newId())),
+      );
+      expect(failure).toEqual(foreignKey('totp_credential_user_fk'));
+    });
+
+    it('stores a time step beyond 32 bits', async () => {
+      const owner = await seedActiveUser(database);
+      const lastUsedStep = 2 ** 40;
+      const [row] = await db()
+        .insert(totpCredential)
+        .values(credentialValues(owner, { lastUsedStep }))
+        .returning();
+      expect(row!.lastUsedStep).toBe(lastUsedStep);
+    });
+
+    it('marks the secret sensitive, and nothing else', () => {
+      expect([...sensitiveColumns(totpCredential)]).toEqual(['secret']);
+    });
+  });
+
+  describe('passkey_credential', () => {
+    const credentialValues = (
+      overrides: Partial<typeof passkeyCredential.$inferInsert> = {},
+    ) => ({
+      originServer: origin,
+      userId,
+      credentialId: `credential-${next()}`,
+      publicKey: Buffer.from([0x04, 0x01, 0xff, 0x00]),
+      ...overrides,
+    });
+
+    it('rejects a duplicate credential id, also for another user', async () => {
+      const other = await seedActiveUser(database);
+      const credentialId = `credential-duplicate-${next()}`;
+      await db()
+        .insert(passkeyCredential)
+        .values(credentialValues({ credentialId }));
+      for (const owner of [userId, other]) {
+        const failure = await failureOf(() =>
+          db()
+            .insert(passkeyCredential)
+            .values(credentialValues({ credentialId, userId: owner })),
+        );
+        expect(failure).toEqual(
+          unique('passkey_credential_credential_id_unique'),
+        );
+      }
+    });
+
+    it('rejects an unknown user, and allows several passkeys for one user', async () => {
+      const failure = await failureOf(() =>
+        db()
+          .insert(passkeyCredential)
+          .values(credentialValues({ userId: newId() })),
+      );
+      expect(failure).toEqual(foreignKey('passkey_credential_user_fk'));
+      await db()
+        .insert(passkeyCredential)
+        .values([credentialValues(), credentialValues()]);
+    });
+
+    it('defaults the sign count to 0 and the transports to none, and returns the key as bytes', async () => {
+      const [row] = await db()
+        .insert(passkeyCredential)
+        .values(credentialValues())
+        .returning();
+      expect(row!.signCount).toBe(0);
+      expect(row!.transports).toEqual([]);
+      expect(row!.deviceName).toBeNull();
+      expect(row!.lastUsedAt).toBeNull();
+      expect(row!.revokedAt).toBeNull();
+      expect(Buffer.isBuffer(row!.publicKey)).toBe(true);
+      expect([...row!.publicKey]).toEqual([0x04, 0x01, 0xff, 0x00]);
+    });
+
+    it('stores transports and a sign count beyond 32 bits', async () => {
+      const [row] = await db()
+        .insert(passkeyCredential)
+        .values(
+          credentialValues({
+            transports: ['internal', 'hybrid'],
+            signCount: 2 ** 33,
+          }),
+        )
+        .returning();
+      expect(row!.transports).toEqual(['internal', 'hybrid']);
+      expect(row!.signCount).toBe(2 ** 33);
+    });
+  });
+
+  describe('installation.setup_completed_at', () => {
+    it('is NULL until set', async () => {
+      const fresh = await createMigratedDatabase(target);
+      try {
+        await fresh.database.db
+          .insert(installation)
+          .values({ id: newId(), baseUrl: 'https://osfpm.example.test' });
+        const [row] = await fresh.database.db.select().from(installation);
+        expect(row!.setupCompletedAt).toBeNull();
+      } finally {
+        await fresh.cleanup();
+      }
+    });
+  });
+});
