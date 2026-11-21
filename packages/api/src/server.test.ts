@@ -2,9 +2,15 @@ import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { PermissionSyncError } from '@osfpm/core/src/access/permission-sync.js';
+import { createSession } from '@osfpm/core/src/auth/sessions.js';
+import {
+  seedActiveUser,
+  seedInstallation,
+} from '@osfpm/core/src/auth/test-support.js';
 import type { Database } from '@osfpm/core/src/db/client.js';
 import { permission } from '@osfpm/core/src/db/schema/index.js';
 import type { Config } from './config.js';
+import { SESSION_COOKIE } from './auth/cookie.js';
 import { describeStartupFailure, startServer } from './server.js';
 import { PERMISSION_LISTS, type StartupSteps } from './startup.js';
 
@@ -142,6 +148,42 @@ describe('startServer', () => {
     // An unhandled rejection from PGlite's start-up shows up a moment later and
     // fails the whole test run.
     await new Promise((resolve) => setTimeout(resolve, 300));
+  });
+
+  it('serves the session routes over HTTP once it has started: me, then logout, then the old cookie is refused', async () => {
+    const server = await startServer(config, { signals: new EventEmitter() });
+    try {
+      await seedInstallation(server.database);
+      const userId = await seedActiveUser(server.database);
+      const { token } = await createSession(server.database.db, {
+        userId,
+        method: 'password',
+        now: new Date(),
+      });
+      const url = baseUrl(server);
+      const cookie = `${SESSION_COOKIE}=${token}`;
+
+      const me = await fetch(`${url}/api/v1/auth/me`, {
+        headers: { cookie },
+      });
+      expect(me.status).toBe(200);
+      expect(((await me.json()) as { id: string }).id).toBe(userId);
+      expect((await fetch(`${url}/api/v1/auth/me`)).status).toBe(401);
+
+      // The Origin a browser would send from the configured public URL.
+      const out = await fetch(`${url}/api/v1/auth/logout`, {
+        method: 'POST',
+        headers: { cookie, origin: config.publicOrigin },
+      });
+      expect(out.status).toBe(204);
+      expect(out.headers.get('set-cookie')).toContain('Max-Age=0');
+      const after = await fetch(`${url}/api/v1/auth/me`, {
+        headers: { cookie },
+      });
+      expect(after.status).toBe(401);
+    } finally {
+      await server.stop();
+    }
   });
 
   describe('start-up', () => {
