@@ -72,8 +72,7 @@ DECLARE
 BEGIN
   SELECT p.grants_sensitive INTO is_sensitive
   FROM "permission" p
-  WHERE p.key = NEW.permission_key
-  FOR SHARE;
+  WHERE p.key = NEW.permission_key;
   IF FOUND AND is_sensitive THEN
     RAISE EXCEPTION 'role_permission_all_projects_not_sensitive: a sensitive permission cannot be granted to all projects'
       USING ERRCODE = '23514', CONSTRAINT = 'role_permission_all_projects_not_sensitive';
