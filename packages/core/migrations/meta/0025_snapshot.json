@@ -9557,7 +9557,7 @@
       "checkConstraints": {
         "user_email_normalised_check": {
           "name": "user_email_normalised_check",
-          "value": "\"user\".\"email\" = lower(btrim(\"user\".\"email\"))"
+          "value": "\"user\".\"email\" = lower(\"user\".\"email\") and \"user\".\"email\" !~ '[[:space:]]' and \"user\".\"email\" like '%_@_%'"
         },
         "user_status_check": {
           "name": "user_status_check",
