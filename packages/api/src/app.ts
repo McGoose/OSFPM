@@ -20,6 +20,7 @@ import {
 } from './logging.js';
 import { PACKAGE_VERSION } from './package-info.js';
 import { safeValidatorCompiler } from './validation.js';
+import { authRoutes } from './routes/auth.js';
 import { healthRoutes } from './routes/health.js';
 import { metaRoutes } from './routes/meta.js';
 import { openapiRoutes } from './routes/openapi.js';
@@ -143,6 +144,7 @@ export function buildApp(options: BuildAppOptions) {
   void app.register(healthRoutes, { prefix: API_PREFIX });
   void app.register(metaRoutes, { prefix: API_PREFIX });
   void app.register(openapiRoutes, { prefix: API_PREFIX });
+  void app.register(authRoutes, { prefix: `${API_PREFIX}/auth` });
 
   return app;
 }

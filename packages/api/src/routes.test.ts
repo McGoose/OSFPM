@@ -257,7 +257,7 @@ describe.each(testTargets)('the routes on $name', (target) => {
   });
 
   describe('GET /api/v1/openapi.json', () => {
-    it('is an OpenAPI 3.1 document that lists the four routes', async () => {
+    it('is an OpenAPI 3.1 document that lists every route, with its methods', async () => {
       const response = await get('/openapi.json');
       expect(response.statusCode).toBe(200);
       expect(response.headers['content-type']).toMatch(/^application\/json/);
@@ -273,14 +273,21 @@ describe.each(testTargets)('the routes on $name', (target) => {
       expect(openapi.startsWith('3.1.')).toBe(true);
       expect(info.version).toBe(packageJson.version);
 
-      expect(Object.keys(paths).sort()).toEqual([
-        `${API_PREFIX}/health`,
-        `${API_PREFIX}/health/ready`,
-        `${API_PREFIX}/meta`,
-        `${API_PREFIX}/openapi.json`,
-      ]);
-      for (const item of Object.values(paths)) {
-        expect(Object.keys(item)).toEqual(['get']);
+      const methodsByPath: Record<string, string[]> = {
+        [`${API_PREFIX}/health`]: ['get'],
+        [`${API_PREFIX}/health/ready`]: ['get'],
+        [`${API_PREFIX}/meta`]: ['get'],
+        [`${API_PREFIX}/openapi.json`]: ['get'],
+        [`${API_PREFIX}/auth/me`]: ['get'],
+        [`${API_PREFIX}/auth/logout`]: ['post'],
+        [`${API_PREFIX}/auth/sessions`]: ['get'],
+        [`${API_PREFIX}/auth/sessions/{id}`]: ['delete'],
+      };
+      expect(Object.keys(paths).sort()).toEqual(
+        Object.keys(methodsByPath).sort(),
+      );
+      for (const [path, item] of Object.entries(paths)) {
+        expect(Object.keys(item), path).toEqual(methodsByPath[path]);
       }
     });
 
