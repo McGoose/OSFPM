@@ -6,7 +6,7 @@ Permission checks and the error a denied call throws. They run on the server onl
 
 - `hasProjectPermission`, `hasOrganisationPermission` and `hasScopedPermission` return true or false for a user, a scope and a permission key.
 - `AccessDeniedError` is thrown by a service for a denied call. The layer above maps it to a 403.
-- `syncPermissions` and `PermissionDefinition` fill the `permission` catalogue from the keys a module declares. Nothing calls it at start-up yet. It throws `PermissionSyncError` when a key is flagged sensitive while organisation roles hold `all-projects` grants of it (see below).
+- `syncPermissions` and `PermissionDefinition` fill the `permission` catalogue from the keys a module declares. The API server calls it for every module's list when it starts (`packages/api/src/startup.ts`). It throws `PermissionSyncError` when a key is flagged sensitive while organisation roles hold `all-projects` grants of it (see below).
 - `test-fixtures.ts` seeds organisations, users and grants for tests, using invented people from _The Last Withdrawal_.
 
 **Organisation roles in projects**

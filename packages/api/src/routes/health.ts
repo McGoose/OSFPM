@@ -29,10 +29,11 @@ async function within<T>(work: PromiseLike<T>, ms: number): Promise<T> {
  * either answer but a status word.
  *
  * `/health` says the process is alive and does not touch the database.
- * `/health/ready` runs a trivial query. It is a 200 when the database answers,
- * and a 503 problem response when it does not or takes longer than two
- * seconds. The cause is logged by class name only: the response never says
- * why. Only one check query is ever in flight.
+ * `/health/ready` is a 200 once start-up has finished (the migrations and the
+ * permission sync, see `runStartup`) and a trivial query is answered. It is a
+ * 503 problem response before that, and when the database does not answer or
+ * takes longer than two seconds. The cause is logged by class name only: the
+ * response never says why. Only one check query is ever in flight.
  */
 export const healthRoutes: FastifyPluginAsyncZod = (app) => {
   // The query in flight, if any. The timeout below only stops a probe waiting:
@@ -66,17 +67,22 @@ export const healthRoutes: FastifyPluginAsyncZod = (app) => {
       schema: {
         summary: 'Readiness',
         description:
-          'The database answers a trivial query. A 503 problem response if it does not.',
+          'Start-up has finished and the database answers a trivial query. A 503 problem response if either is not so.',
         response: {
           200: z.object({ status: z.literal('ready') }),
           503: {
-            description: 'The database does not answer.',
+            description:
+              'The server is still starting, or the database does not answer.',
             content: { 'application/problem+json': { schema: problemSchema } },
           },
         },
       },
     },
     async (request) => {
+      // Checked first, so a probe during a migration does not queue a query.
+      if (!app.readiness.isReady()) {
+        throw new ServiceUnavailableError('Start-up has not finished');
+      }
       try {
         await within(checkDatabase(), READINESS_TIMEOUT_MS);
       } catch (error) {

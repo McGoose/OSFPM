@@ -1,9 +1,12 @@
 import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
+import { PermissionSyncError } from '@osfpm/core/src/access/permission-sync.js';
 import type { Database } from '@osfpm/core/src/db/client.js';
+import { permission } from '@osfpm/core/src/db/schema/index.js';
 import type { Config } from './config.js';
-import { startServer } from './server.js';
+import { describeStartupFailure, startServer } from './server.js';
+import { PERMISSION_LISTS, type StartupSteps } from './startup.js';
 
 const opened = vi.hoisted(() => [] as Database[]);
 
@@ -141,6 +144,88 @@ describe('startServer', () => {
     await new Promise((resolve) => setTimeout(resolve, 300));
   });
 
+  describe('start-up', () => {
+    it('migrates and syncs the permissions before it listens, so the first request finds them', async () => {
+      const server = await startServer(config, {
+        signals: new EventEmitter(),
+      });
+      try {
+        const response = await fetch(`${baseUrl(server)}/api/v1/health/ready`);
+        expect(response.status).toBe(200);
+        const rows = await server.database.db
+          .select({ key: permission.key })
+          .from(permission);
+        expect(rows).toHaveLength(
+          PERMISSION_LISTS.reduce((total, list) => total + list.length, 0),
+        );
+      } finally {
+        await server.stop();
+      }
+    });
+
+    it('runs no migration when autoMigrate is off', async () => {
+      const steps: StartupSteps = {
+        migrate: vi.fn(() => Promise.resolve()),
+        syncPermissions: vi.fn(() => Promise.resolve()),
+      };
+      const server = await startServer(
+        { ...config, autoMigrate: false },
+        { signals: new EventEmitter(), startupSteps: steps },
+      );
+      try {
+        expect(steps.migrate).not.toHaveBeenCalled();
+        expect(steps.syncPermissions).toHaveBeenCalledTimes(
+          PERMISSION_LISTS.length,
+        );
+      } finally {
+        await server.stop();
+      }
+    });
+
+    it('fails with the PermissionSyncError, closes the database, listens on nothing and logs the class name only', async () => {
+      const conflict = new PermissionSyncError([
+        {
+          permissionKey: 'sensitive:read:medical',
+          roles: [
+            { organisationId: 'org-id', roleKey: 'admin', removed: false },
+          ],
+        },
+      ]);
+      const lines: string[] = [];
+      await expect(
+        startServer(
+          { ...config, logLevel: 'info' },
+          {
+            signals: new EventEmitter(),
+            logStream: { write: (line) => void lines.push(line) },
+            startupSteps: {
+              migrate: () => Promise.resolve(),
+              syncPermissions: () => Promise.reject(conflict),
+            },
+          },
+        ),
+      ).rejects.toBe(conflict);
+
+      const failed = opened.at(-1)!;
+      await expect(failed.db.execute('select 1')).rejects.toThrow();
+
+      // One line, with no request in it, that names the class and nothing else.
+      const records = lines.map(
+        (line) => JSON.parse(line) as Record<string, unknown>,
+      );
+      const fatal = records.filter((record) => record.level === 60);
+      expect(fatal).toHaveLength(1);
+      expect(fatal[0]).toMatchObject({
+        msg: 'the server could not start',
+        err: { type: 'PermissionSyncError' },
+      });
+      expect(fatal[0]).not.toHaveProperty('requestId');
+      const text = lines.join('');
+      expect(text).not.toContain('sensitive:read:medical');
+      expect(text).not.toContain('org-id');
+    });
+  });
+
   it('closes the database and rethrows when the port cannot be bound', async () => {
     const first = await startServer(config, { signals: new EventEmitter() });
     const address = first.app.server.address() as { port: number };
@@ -157,5 +242,40 @@ describe('startServer', () => {
     } finally {
       await first.stop();
     }
+  });
+});
+
+describe('describeStartupFailure', () => {
+  it('gives the message of a PermissionSyncError, and no stack', () => {
+    const error = new PermissionSyncError([
+      {
+        permissionKey: 'sensitive:read:medical',
+        roles: [{ organisationId: 'org-id', roleKey: 'admin', removed: false }],
+      },
+    ]);
+    const text = describeStartupFailure(error);
+    expect(text).toBe(error.message);
+    expect(text).toContain('sensitive:read:medical');
+    expect(text).toContain('Remove those grants, then restart');
+    expect(text).not.toMatch(/\n\s+at /);
+    expect(text).not.toContain('PermissionSyncError');
+  });
+
+  it('is generic for any other failure: the class and the system code, never the message', () => {
+    const driver = Object.assign(
+      new Error('connect ECONNREFUSED postgres://osfpm:hunter2@db.internal'),
+      { code: 'ECONNREFUSED' },
+    );
+    const text = describeStartupFailure(driver);
+    expect(text).toContain('could not start');
+    expect(text).toContain('Error');
+    expect(text).toContain('ECONNREFUSED');
+    expect(text).not.toContain('hunter2');
+    expect(text).not.toContain('db.internal');
+  });
+
+  it('copes with something that is not an error', () => {
+    expect(describeStartupFailure('boom hunter2')).not.toContain('hunter2');
+    expect(describeStartupFailure(null)).toContain('could not start');
   });
 });

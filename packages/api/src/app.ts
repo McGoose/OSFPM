@@ -21,10 +21,22 @@ import { healthRoutes } from './routes/health.js';
 import { metaRoutes } from './routes/meta.js';
 import { openapiRoutes } from './routes/openapi.js';
 
+/**
+ * Whether start-up has finished. A new app is not ready; `runStartup` marks it
+ * once the migrations and the permission sync are done, and `/health/ready`
+ * answers 503 until then.
+ */
+export type Readiness = {
+  readonly isReady: () => boolean;
+  readonly markReady: () => void;
+};
+
 declare module 'fastify' {
   interface FastifyInstance {
     /** The database every route plugin works on. The caller of `buildApp` owns it. */
     db: Database;
+    /** Whether start-up has finished (see `Readiness`). */
+    readiness: Readiness;
   }
 }
 
@@ -47,6 +59,9 @@ export type BuildAppOptions = {
  * by default. Authentication is not added yet. Every error, and every unknown
  * route, is answered as a problem response (see `registerErrorHandling`).
  *
+ * The app starts not ready: it does not migrate or sync anything itself (see
+ * `runStartup`), and `/health/ready` answers 503 until that has run.
+ *
  * Every request gets a UUIDv7 from the core's generator. A request ID sent by
  * the caller is ignored, so a caller cannot choose what appears in the logs.
  * The ID is returned in `X-Request-Id` on every response and is on every log
@@ -68,6 +83,15 @@ export function buildApp(options: BuildAppOptions) {
   app.setValidatorCompiler(safeValidatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   app.decorate('db', options.db);
+  // Not ready until `runStartup` says so. A caller that forgets gets 503s from
+  // `/health/ready`, which is the safe way to be wrong.
+  let ready = false;
+  app.decorate('readiness', {
+    isReady: () => ready,
+    markReady: () => {
+      ready = true;
+    },
+  });
   registerErrorHandling(app);
 
   // Registered before the routes, so it sees every one of them.

@@ -144,8 +144,9 @@ async function allProjectsHolders(
 /**
  * Upserts catalogue rows: new keys are inserted, known keys get the current
  * module, description and `grants_sensitive`. Running it again changes
- * nothing, and existing role grants stay. Modules are meant to call it at
- * start-up; nothing does yet, so tests that need keys use `ensurePermissions`.
+ * nothing, and existing role grants stay. The API server calls it for every
+ * module's list when it starts (`runStartup` in `packages/api/src/startup.ts`);
+ * tests that need keys without a server use `ensurePermissions`.
  * Checks no permission: only trusted start-up code calls it.
  *
  * The list is applied together or not at all, in a savepoint, so a refusal

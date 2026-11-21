@@ -8,8 +8,9 @@ export const UUID_V7 =
 
 /**
  * An app over a throwaway, empty database on `target`, with the log lines it
- * writes collected in `lines`. The API serves no table yet, so the database is
- * not migrated. Only tests import this file.
+ * writes collected in `lines`. The database is not migrated, and no start-up
+ * runs, so the app is marked ready by hand where `runStartup` would do it.
+ * Only tests import this file.
  */
 export async function createTestApp(
   target: TestTarget,
@@ -24,6 +25,7 @@ export async function createTestApp(
       stream: { write: (line) => void lines.push(line) },
     },
   });
+  app.readiness.markReady();
   return {
     app,
     database,
