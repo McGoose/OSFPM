@@ -1,11 +1,14 @@
+import swagger from '@fastify/swagger';
 import Fastify from 'fastify';
 import {
+  jsonSchemaTransform,
   serializerCompiler,
   validatorCompiler,
   type ZodTypeProvider,
 } from 'fastify-type-provider-zod';
 import type { Database } from '@osfpm/core/src/db/client.js';
 import { newId } from '@osfpm/core/src/db/ids.js';
+import { API_PREFIX } from './api-version.js';
 import { handleFrameworkError, registerErrorHandling } from './errors.js';
 import {
   createLogController,
@@ -13,6 +16,10 @@ import {
   UNMATCHED_ROUTE,
   type LoggerSettings,
 } from './logging.js';
+import { PACKAGE_VERSION } from './package-info.js';
+import { healthRoutes } from './routes/health.js';
+import { metaRoutes } from './routes/meta.js';
+import { openapiRoutes } from './routes/openapi.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -63,6 +70,15 @@ export function buildApp(options: BuildAppOptions) {
   app.decorate('db', options.db);
   registerErrorHandling(app);
 
+  // Registered before the routes, so it sees every one of them.
+  void app.register(swagger, {
+    openapi: {
+      openapi: '3.1.0',
+      info: { title: 'OSFPM API', version: PACKAGE_VERSION },
+    },
+    transform: jsonSchemaTransform,
+  });
+
   app.addHook('onRequest', (request, reply, done) => {
     reply.header('x-request-id', request.id);
     done();
@@ -80,6 +96,11 @@ export function buildApp(options: BuildAppOptions) {
     );
     done();
   });
+
+  // One plugin per area. A module adds its own line here.
+  void app.register(healthRoutes, { prefix: API_PREFIX });
+  void app.register(metaRoutes, { prefix: API_PREFIX });
+  void app.register(openapiRoutes, { prefix: API_PREFIX });
 
   return app;
 }
