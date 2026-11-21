@@ -12,7 +12,7 @@ Every client, including the future web app, uses the same public API.
 - TypeScript (strict) on Node.js LTS.
 - PostgreSQL 16 or later for standard installs and PGlite for small installs, one Drizzle schema and one migration set.
 - Zod is the single source for validation, types and OpenAPI.
-- HTTP framework and web UI are not chosen yet: do not add either until a prompt says so.
+- HTTP framework: Fastify 5, in `packages/api`, with `fastify-type-provider-zod` and `@fastify/swagger`. The web UI is not chosen yet: do not add one until a prompt says so.
 
 ## Planned layout
 
@@ -45,6 +45,11 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - A string from a caller never indexes a plain object and never goes through `in`. Use Object.hasOwn, a Map, or check it against the constant list first.
 - A guard that checks for live rows pointing at a record locks them (FOR UPDATE on the record, FOR SHARE on the reference) so a concurrent write can't slip past it.
 - Lock order: take the project's change counter (lockProjectChanges) before any row lock. Every writer follows this order, or concurrent writes can deadlock.
+
+## Code rules
+
+- Routes validate input with Zod schemas and never return core errors directly; the error table in `packages/api/src/errors.ts` maps them.
+- Log lines use the logger's known keys (req, res, err) or plain scalar fields; never log whole objects or request data.
 
 ## Comments and docs
 
@@ -92,6 +97,8 @@ Read-only reference at tag `prototype-final`. Port only what a prompt names.
 - Test: `pnpm test` (PGlite only)
 - Test on PostgreSQL too: `DATABASE_URL=postgres://user:pass@host:5432/postgres pnpm test`; tests create and drop their own throwaway databases.
 - No local PostgreSQL? See "Run the tests with Docker" in `README.md`.
+- Start the API (development): `OSFPM_DATA_DIR=./data pnpm --filter @osfpm/api start` for PGlite, or `DATABASE_URL=postgres://user:pass@host:5432/dbname pnpm --filter @osfpm/api start` for PostgreSQL; settings are in `packages/api/README.md`
+- Test the API only: `pnpm test packages/api` (it runs on PGlite, and on PostgreSQL too when `DATABASE_URL` is set)
 - Lint: `pnpm lint`
 - Format: `pnpm format` (check only: `pnpm format:check`)
 - Typecheck: `pnpm typecheck`

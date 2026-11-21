@@ -2,13 +2,60 @@
 
 ![Licence: AGPL-3.0-only](https://img.shields.io/badge/licence-AGPL--3.0--only-blue)
 
-OSFPM is a self-hosted, API-first film production management system that one organisation runs for many film projects.
+OSFPM is a self-hosted, API-first film production management system that one organisation runs for many film projects. Every client, including the future web app, uses the same public API.
 
 ## Status
 
-Rewrite in progress. The prototype is preserved at tag `prototype-final` and branch `prototype-archive`.
+Phase 1. The core data model is done: the database schema and its services in `packages/core`. The API skeleton has started in `packages/api`: configuration, logging, error responses and health, meta and OpenAPI routes. It has no authentication and no data routes yet.
 
-## Run the tests with Docker
+Nothing is usable by productions yet.
+
+The earlier prototype is preserved at tag `prototype-final` and branch `prototype-archive`.
+
+## Repository layout
+
+| Path            | What it holds                                                                                                                                                                                 |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/core` | The database layer and shared services: schema and migrations, the write helper, access checks, sensitive data, production structure, retention, legal holds, contracts, accounts, cost lines |
+| `packages/api`  | The HTTP API, built on Fastify: configuration, error responses, health, meta and OpenAPI routes                                                                                               |
+| `compose.yaml`  | A local PostgreSQL 16 with a persistent volume, and a one-off test runner                                                                                                                     |
+| `Dockerfile`    | The image that runs the test suite                                                                                                                                                            |
+| `.github/`      | The CI and CLA workflows                                                                                                                                                                      |
+| `CLAUDE.md`     | The standing rules for AI-assisted work in this repository                                                                                                                                    |
+
+Each package has its own `README.md` with its entry points and how to test it.
+
+## Requirements
+
+- Node.js: the version in `.nvmrc`.
+- pnpm: the version in the `packageManager` field of the root `package.json`.
+- PostgreSQL 16 or later for a standard install. Small installs use PGlite and need nothing extra.
+
+Then install the dependencies:
+
+```sh
+pnpm install
+```
+
+## Run the tests
+
+By default the tests run on PGlite, in memory:
+
+```sh
+pnpm test
+```
+
+To run them on PostgreSQL as well, point `DATABASE_URL` at a server. Each test creates its own throwaway database and drops it afterwards, so existing data is never touched:
+
+```sh
+DATABASE_URL=postgres://user:pass@host:5432/postgres pnpm test
+```
+
+Add part of a file path to run a subset, for example `pnpm test packages/api`. Before a commit also run `pnpm typecheck`, `pnpm lint` and `pnpm format:check`.
+
+Test data is the fictional production _The Last Withdrawal_ or invented values, never real people's data.
+
+### Run the tests with Docker
 
 The test suite runs against PGlite and, when `DATABASE_URL` is set, against PostgreSQL 16 as well. Docker gives you the PostgreSQL 16 half without installing PostgreSQL.
 
@@ -34,10 +81,34 @@ Troubleshooting:
 - Every `docker compose` command, including `down`, needs a `.env` with `POSTGRES_PASSWORD` set.
 - If you change `POSTGRES_PASSWORD` after the first start, run `docker compose down -v` first. This deletes the database volume, and the test database with it.
 
-## Licence
+## Start the API
 
-SPDX-License-Identifier: `AGPL-3.0-only`. The full text is in [LICENSE](LICENSE).
+Set exactly one database setting. The API has no authentication yet, so keep it on your own machine.
+
+```sh
+# Small install: PGlite, stored in a directory
+OSFPM_DATA_DIR=./data pnpm --filter @osfpm/api start
+
+# Standard install: PostgreSQL
+DATABASE_URL=postgres://user:pass@host:5432/dbname pnpm --filter @osfpm/api start
+```
+
+Then:
+
+```sh
+curl http://127.0.0.1:3000/api/v1/health
+```
+
+The server does not run migrations. The settings, the routes and how to add one are in [packages/api/README.md](packages/api/README.md).
+
+## Contributing
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) first. Every contributor signs the Contributor Licence Agreement ([CLA.md](CLA.md)) once, on their first pull request. Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Security
 
-Security: see `SECURITY.md`.
+Never report a security issue in a public issue or pull request. See [SECURITY.md](SECURITY.md).
+
+## Licence
+
+SPDX-License-Identifier: `AGPL-3.0-only`. The full text is in [LICENSE](LICENSE).

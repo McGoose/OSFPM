@@ -38,6 +38,6 @@ DATABASE_URL=postgres://user:pass@host:5432/postgres pnpm test
 
 Add part of a file path to run a subset, for example `pnpm test retention`. Before a commit also run `pnpm typecheck`, `pnpm lint` and `pnpm format:check`.
 
-`src/jsdoc.test.ts` fails when an export under `src/` has no JSDoc, so a new export needs its comment in the same commit.
+`src/jsdoc.test.ts` fails when an export under this package's `src/` or under `packages/api/src/` has no JSDoc, so a new export needs its comment in the same commit.
 
 Test data is the fictional production _The Last Withdrawal_ or invented values, never real people's data.

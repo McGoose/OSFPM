@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // package-info.ts reads the name and version from package.json.
+    "resolveJsonModule": true
+  },
+  "include": ["src"]
+}

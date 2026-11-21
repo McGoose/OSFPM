@@ -1,11 +1,13 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { Database, SchemaDb } from '../db/client.js';
+import type { Database } from '../db/client.js';
 import { permission, role, rolePermission } from '../db/schema/index.js';
 import {
   createMigratedDatabase,
   failureOf,
+  interleave,
   SQLSTATE,
+  succeeded,
   testTargets,
 } from '../db/test-support.js';
 import type { Tx } from '../db/write.js';
@@ -13,85 +15,6 @@ import { base, seedOrganisation } from './test-fixtures.js';
 
 /** The PostgreSQL target, when `DATABASE_URL` names a server. PGlite has one connection, so it cannot run this. */
 const postgres = testTargets.find((target) => target.name === 'postgres');
-
-const sleep = (ms: number) =>
-  new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-/** A promise that is resolved from outside. */
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
-/** How many sessions of the test database are waiting for a lock right now. */
-async function lockWaiters(db: SchemaDb): Promise<number> {
-  const result = await db.execute<{ waiting: number }>(
-    sql`select count(*)::int as waiting
-        from pg_stat_activity
-        where datname = current_database() and wait_event_type = 'Lock'`,
-  );
-  // Both drivers return `{ rows }`, but the shared base type leaves it `unknown`.
-  const { rows } = result as { rows: { waiting: number }[] };
-  return Number(rows[0]!.waiting);
-}
-
-/**
- * Runs two pieces of work in two transactions on two connections, in a fixed
- * order. `holder` runs to the end of its work and keeps its transaction open.
- * Then `waiter` starts on the second connection. The call waits until the
- * waiter is blocked on a lock, which proves the two overlap, and only then lets
- * the holder commit. Returns both outcomes. If the waiter finishes while the
- * holder is still open, the lock did not do its job and the call throws.
- */
-async function interleave(
-  db: SchemaDb,
-  holder: (tx: Tx) => Promise<unknown>,
-  waiter: (tx: Tx) => Promise<unknown>,
-) {
-  const holderDone = deferred();
-  const commit = deferred();
-  const first = db.transaction(async (tx) => {
-    const result = await holder(tx);
-    holderDone.resolve();
-    await commit.promise;
-    return result;
-  });
-  // A holder that fails before it is done rejects `first`, and the test with it.
-  await Promise.race([holderDone.promise, first]);
-  const second = db.transaction((tx) => waiter(tx));
-  let secondSettled = false;
-  second.then(
-    () => {
-      secondSettled = true;
-    },
-    () => {
-      secondSettled = true;
-    },
-  );
-  try {
-    for (let waited = 0; ; waited += 25) {
-      if (secondSettled) {
-        throw new Error(
-          'The second transaction finished while the first was still open: it did not wait for the lock',
-        );
-      }
-      if ((await lockWaiters(db)) > 0) break;
-      if (waited >= 10_000) {
-        throw new Error('The second transaction never waited for a lock');
-      }
-      await sleep(25);
-    }
-  } finally {
-    commit.resolve();
-  }
-  return Promise.allSettled([first, second]);
-}
-
-const succeeded = (outcomes: PromiseSettledResult<unknown>[]) =>
-  outcomes.filter((outcome) => outcome.status === 'fulfilled').length;
 
 /**
  * An `all-projects` grant of a permission and the flagging of that permission as
