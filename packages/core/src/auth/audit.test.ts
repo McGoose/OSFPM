@@ -1,0 +1,330 @@
+import { like, sql } from 'drizzle-orm';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { Database } from '../db/client.js';
+import { newId } from '../db/ids.js';
+import { auditEvent, SECURITY_TABLES } from '../db/schema/index.js';
+import { getTableName } from 'drizzle-orm';
+import { createMigratedDatabase, testTargets } from '../db/test-support.js';
+import { hashPassword } from './password.js';
+import { consumeRecoveryCode, generateRecoveryCodes } from './recovery.js';
+import {
+  createSession,
+  disableUser,
+  enableUser,
+  revokeSession,
+  revokeUserSessions,
+  validateSession,
+} from './sessions.js';
+import { consumeSetupCode, issueSetupCode } from './setup-code.js';
+import { AUTH_AUDIT } from './shared.js';
+import {
+  everyRowAsText,
+  rowsOf,
+  seedActiveUser,
+  seedInstallation,
+} from './test-support.js';
+import { hashHumanCode, hashToken, normaliseHumanCode } from './tokens.js';
+
+const T0 = new Date('2026-03-02T09:00:00.000Z');
+const MINUTE = 60 * 1000;
+const at = (ms: number) => new Date(T0.getTime() + ms);
+
+describe.each(testTargets)('auth audit events on $name', (target) => {
+  let database: Database;
+  let cleanup: () => Promise<void>;
+
+  beforeAll(async () => {
+    ({ database, cleanup } = await createMigratedDatabase(target));
+    await seedInstallation(database);
+  });
+  afterAll(async () => {
+    await cleanup();
+  });
+
+  const db = () => database.db;
+  const authEvents = () =>
+    db().select().from(auditEvent).where(like(auditEvent.category, 'auth.%'));
+  const byCategory = async (category: string) =>
+    (await authEvents()).filter((event) => event.category === category);
+
+  /** Everything every flow below made secret: the raw values, and the hashes of them. */
+  const secrets: string[] = [];
+
+  let userId: string;
+  let adminId: string;
+  let firstSessionId: string;
+  let keptSessionId: string;
+  let setupCodeId: string;
+
+  beforeAll(async () => {
+    userId = await seedActiveUser(database);
+    adminId = await seedActiveUser(database);
+
+    // Sessions: create, revoke one, revoke the rest but one.
+    const first = await createSession(db(), {
+      userId,
+      method: 'password+totp',
+      userAgentSummary: 'Firefox on Windows',
+      now: T0,
+    });
+    const second = await createSession(db(), {
+      userId,
+      method: 'passkey',
+      now: at(MINUTE),
+    });
+    const third = await createSession(db(), {
+      userId,
+      method: 'recovery',
+      now: at(MINUTE),
+    });
+    const fourth = await createSession(db(), {
+      userId,
+      method: 'password',
+      now: at(MINUTE),
+    });
+    firstSessionId = first.session.id;
+    keptSessionId = fourth.session.id;
+    for (const { token } of [first, second, third, fourth]) {
+      secrets.push(token, hashToken(token));
+      await validateSession(db(), token, at(5 * MINUTE));
+    }
+    await revokeSession(db(), first.session.id, {
+      reason: 'logout',
+      now: at(10 * MINUTE),
+    });
+    await revokeUserSessions(db(), userId, {
+      reason: 'password-changed',
+      exceptSessionId: keptSessionId,
+      now: at(11 * MINUTE),
+    });
+
+    // Disable and enable, by an administrator.
+    await disableUser(db(), userId, {
+      now: at(12 * MINUTE),
+      actor: { type: 'user', id: adminId },
+    });
+    await enableUser(db(), userId, {
+      now: at(13 * MINUTE),
+      actor: { type: 'user', id: adminId },
+    });
+
+    // Recovery codes: generate, use one.
+    const codes = await generateRecoveryCodes(db(), userId, {
+      now: at(14 * MINUTE),
+    });
+    await consumeRecoveryCode(db(), userId, codes[0]!, {
+      now: at(15 * MINUTE),
+    });
+    for (const code of codes) {
+      secrets.push(code, normaliseHumanCode(code)!, hashHumanCode(code)!);
+    }
+
+    // Setup code: issue, replace, use.
+    const stale = await issueSetupCode(db(), at(16 * MINUTE));
+    const live = await issueSetupCode(db(), at(17 * MINUTE));
+    await consumeSetupCode(db(), live, at(18 * MINUTE));
+    for (const code of [stale, live]) {
+      secrets.push(code, normaliseHumanCode(code)!, hashHumanCode(code)!);
+    }
+    const [issued] = (await byCategory(AUTH_AUDIT.setupCodeIssued)).sort(
+      (a, b) => b.occurredAt.getTime() - a.occurredAt.getTime(),
+    );
+    setupCodeId = issued!.targetId!;
+
+    // A password hash for the same sweep for secrets.
+    const password = 'correct-horse-battery-harbour';
+    secrets.push(password, await hashPassword(password));
+  });
+
+  it('records every kind of action the services take', async () => {
+    const seen = new Set((await authEvents()).map((event) => event.category));
+    // From the list in code, so a new category without an event here fails.
+    expect([...seen].sort()).toEqual(Object.values(AUTH_AUDIT).sort());
+  });
+
+  it('records a session as created, with its method, for its user', async () => {
+    const events = await byCategory(AUTH_AUDIT.sessionCreated);
+    expect(events).toHaveLength(4);
+    const first = events.find((event) => event.targetId === firstSessionId);
+    expect(first).toMatchObject({
+      action: 'create',
+      actorType: 'user',
+      actorId: userId,
+      targetType: 'session',
+      details: { method: 'password+totp' },
+      organisationId: null,
+      projectId: null,
+    });
+    expect(first!.occurredAt).toEqual(T0);
+  });
+
+  it('records one revoked session with its reason', async () => {
+    const events = await byCategory(AUTH_AUDIT.sessionRevoked);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      action: 'revoke',
+      actorType: 'user',
+      actorId: userId,
+      targetType: 'session',
+      targetId: firstSessionId,
+      details: { reason: 'logout' },
+    });
+  });
+
+  it('records the revocation of all sessions with the reason, the count and the session kept', async () => {
+    const events = await byCategory(AUTH_AUDIT.sessionsRevoked);
+    // One from the call, one from disabling the user.
+    expect(events).toHaveLength(2);
+    const byReason = new Map(
+      events.map((event) => [
+        (event.details as { reason: string }).reason,
+        event,
+      ]),
+    );
+    expect(byReason.get('password-changed')).toMatchObject({
+      action: 'revoke-all',
+      actorType: 'user',
+      actorId: userId,
+      targetType: 'user',
+      targetId: userId,
+      details: {
+        reason: 'password-changed',
+        count: 2,
+        exceptSessionId: keptSessionId,
+      },
+    });
+    // The administrator who disabled the user did it, not the user.
+    expect(byReason.get('user-disabled')).toMatchObject({
+      actorType: 'user',
+      actorId: adminId,
+      details: { reason: 'user-disabled', count: 1, exceptSessionId: null },
+    });
+  });
+
+  it('records a user disabled and enabled, by the administrator who did it', async () => {
+    const [disabled] = await byCategory(AUTH_AUDIT.userDisabled);
+    expect(disabled).toMatchObject({
+      action: 'disable',
+      actorType: 'user',
+      actorId: adminId,
+      targetType: 'user',
+      targetId: userId,
+      details: { previousStatus: 'active' },
+    });
+    expect(disabled!.occurredAt).toEqual(at(12 * MINUTE));
+    const [enabled] = await byCategory(AUTH_AUDIT.userEnabled);
+    expect(enabled).toMatchObject({
+      action: 'enable',
+      actorId: adminId,
+      targetId: userId,
+    });
+    expect(enabled!.occurredAt).toEqual(at(13 * MINUTE));
+  });
+
+  it('records recovery codes generated and one used, with no code', async () => {
+    const [generated] = await byCategory(AUTH_AUDIT.recoveryCodesGenerated);
+    expect(generated).toMatchObject({
+      action: 'generate',
+      actorType: 'user',
+      actorId: userId,
+      targetId: userId,
+      details: { count: 10 },
+    });
+    const used = await byCategory(AUTH_AUDIT.recoveryCodeUsed);
+    expect(used).toHaveLength(1);
+    expect(used[0]).toMatchObject({
+      action: 'use',
+      actorId: userId,
+      targetType: 'recovery_code',
+      details: null,
+    });
+    expect(used[0]!.occurredAt).toEqual(at(15 * MINUTE));
+  });
+
+  it('records setup codes issued (the second one replacing the first) and used', async () => {
+    const issued = (await byCategory(AUTH_AUDIT.setupCodeIssued)).sort(
+      (a, b) => a.occurredAt.getTime() - b.occurredAt.getTime(),
+    );
+    expect(issued).toHaveLength(2);
+    expect(issued[0]).toMatchObject({
+      action: 'issue',
+      actorType: 'system',
+      actorId: null,
+      targetType: 'setup_code',
+      details: { replaced: 0 },
+    });
+    expect(issued[1]!.details).toMatchObject({ replaced: 1 });
+    expect((issued[1]!.details as { expiresAt: string }).expiresAt).toBe(
+      at(17 * MINUTE + 24 * 60 * MINUTE).toISOString(),
+    );
+    const [used] = await byCategory(AUTH_AUDIT.setupCodeUsed);
+    expect(used).toMatchObject({
+      action: 'use',
+      actorType: 'system',
+      targetType: 'setup_code',
+      targetId: setupCodeId,
+    });
+  });
+
+  it('writes no event for an attempt that changed nothing', async () => {
+    const before = (await authEvents()).length;
+    // Unknown and already-revoked sessions, a user already disabled or enabled,
+    // wrong and spent codes: none of these changed anything.
+    await revokeSession(db(), newId(), {
+      reason: 'logout',
+      now: at(20 * MINUTE),
+    });
+    await revokeSession(db(), firstSessionId, {
+      reason: 'logout',
+      now: at(20 * MINUTE),
+    });
+    await enableUser(db(), userId, { now: at(20 * MINUTE) });
+    await consumeRecoveryCode(db(), userId, 'AAAA-AAAA-AAAA-AAAA', {
+      now: at(20 * MINUTE),
+    });
+    await consumeSetupCode(db(), 'AAAA-AAAA-AAAA-AAAA', at(20 * MINUTE));
+    expect((await authEvents()).length).toBe(before);
+  });
+
+  it('holds no token, code, hash or password in any event', async () => {
+    expect(secrets.length).toBeGreaterThan(30);
+    const text = JSON.stringify(await db().select().from(auditEvent));
+    for (const secret of secrets) {
+      expect(text, secret.slice(0, 4)).not.toContain(secret);
+    }
+  });
+
+  it('holds no raw token, code or password in any table, only hashes', async () => {
+    const text = await everyRowAsText(database);
+    // The raw values only: the hashes are meant to be stored.
+    const raw = secrets.filter(
+      (secret) =>
+        !/^[0-9a-f]{64}$/.test(secret) && !secret.startsWith('$argon2'),
+    );
+    expect(raw.length).toBeGreaterThan(15);
+    for (const secret of raw) {
+      expect(text, secret.slice(0, 4)).not.toContain(secret);
+    }
+  });
+
+  it('keeps all of this out of the change log', async () => {
+    const [changes] = await rowsOf(
+      database,
+      sql`select count(*)::int as n from change_event`,
+    );
+    const [counters] = await rowsOf(
+      database,
+      sql`select count(*)::int as n from change_seq`,
+    );
+    expect(changes!.n).toBe(0);
+    expect(counters!.n).toBe(0);
+    for (const table of SECURITY_TABLES) {
+      const [found] = await rowsOf(
+        database,
+        sql`select count(*)::int as n from change_event
+            where entity_type = ${getTableName(table)}`,
+      );
+      expect(found!.n, getTableName(table)).toBe(0);
+    }
+  });
+});

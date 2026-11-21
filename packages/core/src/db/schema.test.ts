@@ -15,6 +15,7 @@ import {
   declaredRetentionClasses,
   organisationForeignKeyName,
   retentionClassForeignKeyName,
+  securityTableNames,
   tenantTableNames,
 } from './columns.js';
 import { newId } from './ids.js';
@@ -34,6 +35,7 @@ import {
   projectMembershipRole,
   role,
   rolePermission,
+  SECURITY_TABLES,
   settingValue,
   user,
 } from './schema/index.js';
@@ -280,6 +282,62 @@ describe('constraint names in the schema', () => {
   });
 });
 
+// CLAUDE.md, Data rules: tables in SECURITY_TABLES are written only by the auth
+// service, never through the write helper. Both lists come from code, so a new
+// security table cannot be forgotten in one of them.
+describe('security tables in the schema', () => {
+  const securityNames = SECURITY_TABLES.map((table) => getTableName(table));
+
+  it('are the tables defined through securityTable, no more and no fewer', () => {
+    // Guards against both lists being empty and passing for nothing.
+    expect(securityNames.length).toBeGreaterThanOrEqual(6);
+    expect([...securityNames].sort()).toEqual([...securityTableNames()].sort());
+  });
+
+  it('are in the schema, and are not tenant tables', () => {
+    const inSchema = new Set(schemaTables.map((table) => getTableName(table)));
+    for (const name of securityNames) {
+      expect(inSchema.has(name), `${name} is not exported by the schema`).toBe(
+        true,
+      );
+      expect(tenantTableNames().has(name), name).toBe(false);
+    }
+  });
+
+  // The write helper needs organisation_id to number and log a change; without
+  // the column a security table could never go through it.
+  it('have no organisation_id, owner_org_id or visibility', () => {
+    for (const table of SECURITY_TABLES) {
+      const names = getTableConfig(table).columns.map((c) => c.name);
+      for (const omitted of USER_OMITTED) {
+        expect(names, getTableName(table)).not.toContain(omitted);
+      }
+    }
+  });
+
+  it('keep their foreign key to the user named <table>_user_fk', () => {
+    for (const table of SECURITY_TABLES) {
+      const name = getTableName(table);
+      const toUser = getTableConfig(table)
+        .foreignKeys.filter((fk) => {
+          const ref = fk.reference();
+          return (
+            getTableName(ref.foreignTable) === 'user' &&
+            ref.columns.length === 1 &&
+            ref.columns[0]!.name === 'user_id'
+          );
+        })
+        .map((fk) => fk.getName());
+      // `setup_code` belongs to no user.
+      expect(toUser, name).toEqual(
+        getTableConfig(table).columns.some((c) => c.name === 'user_id')
+          ? [`${name}_user_fk`]
+          : [],
+      );
+    }
+  });
+});
+
 describe('project resolution in the schema', () => {
   const tenant = schemaTables.filter((table) =>
     tenantTableNames().has(getTableName(table)),
@@ -411,6 +469,8 @@ describe.each(testTargets)('database schema on $name', (target) => {
           'org_membership',
           'org_membership_role',
           'organisation',
+          'passkey_credential',
+          'password_credential',
           'permission',
           'person',
           'person_company',
@@ -421,10 +481,14 @@ describe.each(testTargets)('database schema on $name', (target) => {
           'project_membership',
           'project_membership_role',
           'project_person',
+          'recovery_code',
           'retention_class',
           'role',
           'role_permission',
+          'session',
           'setting_value',
+          'setup_code',
+          'totp_credential',
           'unit',
           'user',
         ]);
@@ -490,9 +554,10 @@ describe.each(testTargets)('database schema on $name', (target) => {
                 and c.column_name = 'retention_class'
                 and t.table_type = 'BASE TABLE'`,
         );
-        // Every tenant table and `user` carry the column; nothing else does.
+        // Every tenant table, security table and `user` carry the column;
+        // nothing else does.
         expect(withColumn.map((r) => r.table_name as string).sort()).toEqual(
-          [...tenantTableNames(), 'user'].sort(),
+          [...tenantTableNames(), ...securityTableNames(), 'user'].sort(),
         );
         const seeded = new Set(
           (await rows(database, sql`select key from retention_class`)).map(
@@ -783,19 +848,41 @@ describe.each(testTargets)('database schema on $name', (target) => {
         }
       });
 
-      it('installation has only its own four columns', async () => {
+      it('installation has only its own five columns', async () => {
         const columns = await columnsOf(database, 'installation');
         expect([...columns.keys()].sort()).toEqual([
           'base_url',
           'created_at',
           'id',
           'server_public_key',
+          'setup_completed_at',
         ]);
         expect(columns.get('server_public_key')?.nullable).toBe(true);
+        expect(columns.get('setup_completed_at')).toMatchObject({
+          type: TIMESTAMPTZ,
+          nullable: true,
+        });
+      });
+
+      it('gives every security table the standard columns except the tenant trio', async () => {
+        for (const table of SECURITY_TABLES) {
+          const name = getTableName(table);
+          const columns = await columnsOf(database, name);
+          for (const [column, spec] of Object.entries(STANDARD_COLUMNS)) {
+            if (USER_OMITTED.includes(column)) {
+              expect(columns.has(column), `${name}.${column}`).toBe(false);
+            } else {
+              expect(columns.get(column), `${name}.${column}`).toMatchObject(
+                spec,
+              );
+            }
+          }
+        }
       });
 
       it('never generates ids in the database', async () => {
         for (const table of [
+          ...securityTableNames(),
           'installation',
           'account',
           'account_chart',
@@ -1003,16 +1090,84 @@ describe.each(testTargets)('database schema on $name', (target) => {
     });
 
     describe('user', () => {
-      it('rejects an upper-case email', async () => {
+      const NORMALISED = {
+        code: SQLSTATE.checkViolation,
+        constraint: 'user_email_normalised_check',
+      };
+
+      // Lower case, no whitespace anywhere (`[[:space:]]` covers space, tab, line
+      // feed, carriage return, vertical tab and form feed), and an `@` with at
+      // least one character before it and one after it.
+      it.each([
+        ['an empty', ''],
+        ['an at-sign-only', '@'],
+        ['a nothing-after-the-@', 'a@'],
+        ['a nothing-before-the-@', '@b'],
+        ['a nothing-after-the-@ domain-less', 'someone@'],
+        ['a nothing-before-the-@ domain-only', '@example.test'],
+        ['a no-@', 'someone.example.test'],
+        ['an upper-case', 'Mixed.Case@example.test'],
+        ['a leading-space', ' leading@example.test'],
+        ['a trailing-space', 'trailing@example.test '],
+        ['a space-padded', '  padded@example.test  '],
+        ['a space-padded upper-case', ' Padded.Upper@Example.test '],
+        ['a space-only', '   '],
+        ['an inner-space', 'first last@example.test'],
+        ['an inner-space in the domain', 'first.last@exam ple.test'],
+        ['a leading-tab', '\tleading.tab@example.test'],
+        ['a trailing-tab', 'trailing.tab@example.test\t'],
+        ['an inner-tab', 'inner\ttab@example.test'],
+        ['a trailing-newline', 'trailing.newline@example.test\n'],
+        ['a leading-newline', '\nleading.newline@example.test'],
+        ['an inner-newline', 'inner\nnewline@example.test'],
+        ['a trailing-carriage-return', 'trailing.cr@example.test\r'],
+        ['a Windows line-break', 'trailing.crlf@example.test\r\n'],
+        ['a vertical-tab', 'inner\vtab@example.test'],
+        ['a form-feed', 'inner\fform@example.test'],
+        ['a tab-only', '\t'],
+        ['a newline-only', '\n'],
+      ])('rejects %s email', async (_label, email) => {
         const failure = await failureOf(() =>
-          database.db
-            .insert(user)
-            .values(userValues({ email: 'Mixed.Case@example.test' })),
+          database.db.insert(user).values(userValues({ email })),
         );
-        expect(failure).toEqual({
-          code: SQLSTATE.checkViolation,
-          constraint: 'user_email_lowercase_check',
-        });
+        expect(failure).toEqual(NORMALISED);
+      });
+
+      it('rejects changing a stored email to one that is not normalised', async () => {
+        const email = 'normalised.before@example.test';
+        await database.db.insert(user).values(userValues({ email }));
+        for (const bad of [
+          'Normalised.Before@example.test',
+          `${email} `,
+          `${email}\t`,
+          `${email}\n`,
+          'normalised before@example.test',
+          '',
+          '@',
+          'normalised.before@',
+          '@example.test',
+          'normalised.before.example.test',
+        ]) {
+          const failure = await failureOf(() =>
+            database.db
+              .update(user)
+              .set({ email: bad })
+              .where(eq(user.email, email)),
+          );
+          expect(failure).toEqual(NORMALISED);
+        }
+      });
+
+      it('accepts a lower-case email with no whitespace and an @ with something on each side', async () => {
+        for (const email of [
+          'a@b',
+          'plain@example.test',
+          'first.last+tag@example.test',
+          'under_score-and-dash@sub.example.test',
+          'digits.123@example.test',
+        ]) {
+          await database.db.insert(user).values(userValues({ email }));
+        }
       });
 
       it('rejects a duplicate email', async () => {

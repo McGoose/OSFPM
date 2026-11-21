@@ -32,6 +32,8 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Money columns are numeric; in TypeScript they are decimal strings, never number. Arithmetic on money happens in the database.
 - Modules never read other modules' tables; they use core services and events.
 - Tenant records are written only through the write helper in `src/db/write.ts`.
+- Tables in `SECURITY_TABLES` are written only by the auth service, never through the write helper; their changes are audited, not change-logged.
+- `user` and `installation` are install-level tables, written only by the core services named for them in `SERVICE_WRITTEN_TABLES` (the auth service now, the setup service later), never through the write helper; their changes are audited, not change-logged.
 - Test fixtures may insert rows directly to set up state. Code under test always writes through the write helper.
 - A helper that writes records needs at least one test for each kind of table it serves (organisation-level, project-level, and the project table itself).
 - Side effects (email, webhooks, notifications, jobs) are only queued inside the write's own transaction; sending happens later in the worker, never in the request path.

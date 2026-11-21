@@ -50,11 +50,11 @@ const DEFAULT_RETENTION_CLASS = 'standard';
 /** `retention_class` column builders made with `defaultRetentionClass`, and the class each declared. */
 const declaredByColumn = new WeakMap<object, string>();
 
-/** Classes declared through `defaultRetentionClass`, by name of the tenant table. */
+/** Classes declared through `defaultRetentionClass`, by name of the tenant or security table. */
 const declaredByTable = new Map<string, string>();
 
 /**
- * The retention class each tenant table declared through the
+ * The retention class each tenant or security table declared through the
  * `defaultRetentionClass` option, by table name. A table not listed here did
  * not use the option, so its `retention_class` defaults to `standard`. Redefining
  * the column by hand is not a declaration.
@@ -67,8 +67,9 @@ export function declaredRetentionClasses(): ReadonlyMap<string, string> {
  * Columns every table carries, except the `organisation_id`, `owner_org_id`
  * and `visibility` trio, which install-level tables such as `user` omit.
  * `retention_class` defaults to `standard`; `defaultRetentionClass` picks
- * another class. `tenantTable` records that choice (see
- * `declaredRetentionClasses`), so use the option through `standardColumns`.
+ * another class. `tenantTable` and `securityTable` record that choice (see
+ * `declaredRetentionClasses`), so use the option through `standardColumns` or
+ * give `baseColumns` to `securityTable`.
  */
 export function baseColumns(
   userId: UserIdRef,
@@ -198,6 +199,54 @@ export function tenantTable<
     visibilityCheck(
       name,
       (self as unknown as { visibility: AnyPgColumn }).visibility,
+    ),
+    ...(extraConfig?.(self) ?? []),
+  ]);
+}
+
+/** Columns a security table must have: the ones `baseColumns` returns. */
+type SecurityColumns = Record<string, PgColumnBuilderBase> &
+  ReturnType<typeof baseColumns>;
+
+const securityTableRegistry = new Set<string>();
+
+/** Names of all tables defined through `securityTable`. */
+export function securityTableNames(): ReadonlySet<string> {
+  return securityTableRegistry;
+}
+
+/**
+ * Defines a security table: an install-level table of login state (sessions,
+ * credentials, one-time codes) built from `baseColumns`. It adds the
+ * `<table>_retention_class_fk` foreign key, as `tenantTable` does, and records
+ * a retention class chosen through `defaultRetentionClass` (see
+ * `declaredRetentionClasses`). It also records the table's name (see
+ * `securityTableNames`), so the structural tests can tell it from a tenant
+ * table.
+ *
+ * A security table has no `organisation_id`, so the write helper cannot write
+ * it. Only the auth service writes it, directly, and records each
+ * security-relevant change as an `audit_event` instead of a `change_event`
+ * (CLAUDE.md, Data rules). Add every new one to `SECURITY_TABLES`.
+ */
+export function securityTable<
+  TName extends string,
+  TColumns extends SecurityColumns,
+>(
+  name: TName,
+  columns: TColumns,
+  extraConfig?: (
+    self: BuildExtraConfigColumns<TName, TColumns, 'pg'>,
+  ) => PgTableExtraConfigValue[],
+) {
+  securityTableRegistry.add(name);
+  const declaredClass = declaredByColumn.get(columns.retentionClass);
+  if (declaredClass !== undefined) declaredByTable.set(name, declaredClass);
+  // The cast is safe because `SecurityColumns` requires `retentionClass`.
+  return pgTable(name, columns, (self) => [
+    retentionClassForeignKey(
+      name,
+      (self as unknown as { retentionClass: AnyPgColumn }).retentionClass,
     ),
     ...(extraConfig?.(self) ?? []),
   ]);

@@ -26,6 +26,21 @@ export type UserStatus = (typeof USER_STATUSES)[number];
  * `owner_org_id` or `visibility`. It must never hold personal details such as
  * phone, address or medical data (CLAUDE.md, Privacy rule): those belong to
  * `person` and `person_sensitive`.
+ *
+ * Written only by the core services named in `SERVICE_WRITTEN_TABLES` (the auth
+ * service now), never through the write helper, and audited, not change-logged
+ * (CLAUDE.md, Data rules).
+ *
+ * `email` is stored normalised: lower case, with no whitespace anywhere in it
+ * (spaces, tabs and line breaks, at the ends or inside), and with an `@` that
+ * has at least one character before it and one after it. The
+ * `user_email_normalised_check` CHECK enforces it, so the unique index on `email`
+ * means one account per address however a caller typed it. A caller trims and
+ * lower-cases an address before it stores or looks one up; the database refuses
+ * one that was not, and never changes it. `[[:space:]]` is the database's own
+ * idea of whitespace, which on some locales leaves out Unicode spaces such as a
+ * no-break space. The `@` rule is only a shape check, not address validation:
+ * `a@@` passes it.
  */
 export const user = pgTable(
   'user',
@@ -41,7 +56,14 @@ export const user = pgTable(
   (t) => [
     retentionClassForeignKey('user', t.retentionClass),
     uniqueIndex('user_email_unique').on(t.email),
-    check('user_email_lowercase_check', sql`${t.email} = lower(${t.email})`),
+    // Lower case, no whitespace anywhere, and an `@` with something before and
+    // after it (`_` is one character in LIKE), which also refuses ''. The first
+    // form, `email = lower(btrim(email))`, let tabs, line breaks and inner
+    // spaces through (`btrim` strips spaces at the ends only).
+    check(
+      'user_email_normalised_check',
+      sql`${t.email} = lower(${t.email}) and ${t.email} !~ '[[:space:]]' and ${t.email} like '%_@_%'`,
+    ),
     check('user_status_check', sql`${t.status} in (${sqlList(USER_STATUSES)})`),
   ],
 );

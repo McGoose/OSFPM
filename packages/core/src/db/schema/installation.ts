@@ -6,6 +6,12 @@ import { newId } from '../ids.js';
 /**
  * This server. Exception to the standard columns: no tenant or audit columns.
  * At most one row may exist, enforced by a unique index on a constant.
+ * `setup_completed_at` is NULL until the first administrator has been created
+ * (SC-10); `auth/setup-code.ts` reads it through `isSetupComplete`.
+ *
+ * Written only by the core services named in `SERVICE_WRITTEN_TABLES` (the auth
+ * service now, the setup service later), never through the write helper, and
+ * audited, not change-logged (CLAUDE.md, Data rules).
  */
 export const installation = pgTable(
   'installation',
@@ -14,6 +20,7 @@ export const installation = pgTable(
     baseUrl: text('base_url').notNull(),
     serverPublicKey: text('server_public_key'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
+    setupCompletedAt: timestamptz('setup_completed_at'),
   },
   () => [uniqueIndex('installation_single_row').on(sql`(true)`)],
 );

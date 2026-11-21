@@ -169,6 +169,20 @@
       "when": 1795265044452,
       "tag": "0023_role_permission_reach",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1795273890494,
+      "tag": "0024_login_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1795280011520,
+      "tag": "0025_user_email_normalised",
+      "breakpoints": true
     }
   ]
 }

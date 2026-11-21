@@ -1,6 +1,6 @@
 # @osfpm/core
 
-The database layer and shared services of OSFPM: schema, write helper, access checks, sensitive data, production structure, retention, legal holds, contracts, charts of accounts and cost lines. Other modules and the future API build on it. They use its services and events and never read each other's tables.
+The database layer and shared services of OSFPM: schema, write helper, access checks, login building blocks, sensitive data, production structure, retention, legal holds, contracts, charts of accounts and cost lines. Other modules and the future API build on it. They use its services and events and never read each other's tables.
 
 `src/index.ts` exports only a placeholder version constant today. Import from the module folders by path.
 
@@ -10,6 +10,7 @@ The database layer and shared services of OSFPM: schema, write helper, access ch
 | ------------------- | ----------------------------------------------------------------------------------------- |
 | `src/db/`           | Clients, the Drizzle schema, the write helper and the column conventions                  |
 | `src/access/`       | Permission checks and `AccessDeniedError`                                                 |
+| `src/auth/`         | Login building blocks: tokens, Argon2id passwords, sessions, recovery and setup codes     |
 | `src/sensitive/`    | The one service that reads and writes crew personal data                                  |
 | `src/projects/`     | `createProject`, which also creates the main unit                                         |
 | `src/retention/`    | Retention classes' shipped periods and the end-date calculation                           |

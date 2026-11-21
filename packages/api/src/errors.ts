@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { AccessDeniedError } from '@osfpm/core/src/access/access-denied-error.js';
 import { PermissionSyncError } from '@osfpm/core/src/access/permission-sync.js';
 import { AccountInputError } from '@osfpm/core/src/accounts/service.js';
+import { AuthInputError, AuthStateError } from '@osfpm/core/src/auth/errors.js';
 import { ContractInputError } from '@osfpm/core/src/contracts/service.js';
 import { CostLineInputError } from '@osfpm/core/src/costs/service.js';
 import {
@@ -180,6 +181,16 @@ export const INTERNAL_ERRORS: readonly {
   {
     errorClass: PermissionSyncError,
     reason: 'Raised when the server starts, never while it serves a request.',
+  },
+  {
+    errorClass: AuthInputError,
+    reason:
+      'Thrown by the auth services for a value the server chose (a session method or a revoke reason), not one a client sent. No route calls them yet; the login routes map it, or validate first, when they land.',
+  },
+  {
+    errorClass: AuthStateError,
+    reason:
+      'Thrown by the auth services for a state the caller has to handle, such as a disabled user. No route calls them yet; the login routes decide what each reason means to a client, and must not tell them apart where that would say whether an account exists.',
   },
 ];
 
