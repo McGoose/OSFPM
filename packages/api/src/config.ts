@@ -25,6 +25,14 @@ export type Config = {
   readonly host: string;
   readonly port: number;
   readonly logLevel: LogLevel;
+  /**
+   * The origin of `OSFPM_PUBLIC_URL`, written as a browser writes it in an
+   * `Origin` header. It is the only origin allowed to send a state-changing
+   * request that carries a session cookie.
+   */
+  readonly publicOrigin: string;
+  /** Run pending migrations when the server starts (`OSFPM_AUTO_MIGRATE`). */
+  readonly autoMigrate: boolean;
 };
 
 /**
@@ -46,6 +54,32 @@ function isPostgresUrl(value: string): boolean {
   try {
     const { protocol } = new URL(value);
     return protocol === 'postgres:' || protocol === 'postgresql:';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The hosts that may use plain `http`. A browser treats these as secure
+ * contexts, so a `Secure` cookie works there during development. Compared
+ * against the parsed host name, never as a prefix of the text:
+ * `http://localhost.example.org` and `http://localhost@example.org` are not
+ * local.
+ */
+const LOCAL_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1']);
+
+/**
+ * True for `https://…` and for `http://` on `localhost` or `127.0.0.1` with any
+ * port. Anything else, including plain `http` on a public host, would send the
+ * session cookie in the clear.
+ */
+function isAllowedPublicUrl(value: string): boolean {
+  try {
+    const { protocol, hostname } = new URL(value);
+    return (
+      protocol === 'https:' ||
+      (protocol === 'http:' && LOCAL_HOSTS.has(hostname))
+    );
   } catch {
     return false;
   }
@@ -76,6 +110,23 @@ const environmentSchema = z.object({
     .transform((value) => value.toLowerCase())
     .pipe(z.enum(LOG_LEVELS))
     .default('info'),
+  // The text of a wrong value is never repeated: a refine message is fixed.
+  OSFPM_PUBLIC_URL: z
+    .string(
+      'is required: the URL users open, such as https://osfpm.example.org',
+    )
+    .refine(
+      isAllowedPublicUrl,
+      'must be an https:// URL, or http://localhost or http://127.0.0.1 with any port',
+    ),
+  // `true` or `false` in any case, like LOG_LEVEL. Other spellings (`1`, `yes`)
+  // are refused rather than guessed: a typo must not skip the migrations.
+  OSFPM_AUTO_MIGRATE: z
+    .string()
+    .transform((value) => value.toLowerCase())
+    .pipe(z.enum(['true', 'false']))
+    .transform((value) => value === 'true')
+    .default(true),
 });
 
 const VARIABLES = Object.keys(environmentSchema.shape);
@@ -83,8 +134,9 @@ const VARIABLES = Object.keys(environmentSchema.shape);
 /**
  * Reads and validates the configuration from `env` (the process environment
  * by default). Exactly one of `DATABASE_URL` (PostgreSQL) or `OSFPM_DATA_DIR`
- * (PGlite, for small installs) must be set. An empty variable counts as not
- * set, so an `.env` file may list a variable it leaves blank.
+ * (PGlite, for small installs) must be set, and so must `OSFPM_PUBLIC_URL`.
+ * An empty variable counts as not set, so an `.env` file may list a variable
+ * it leaves blank.
  *
  * @throws ConfigError listing every problem found. The server entry prints it
  * and stops. Values are never part of the message.
@@ -127,5 +179,8 @@ export function loadConfig(
     host: values.HOST,
     port: values.PORT,
     logLevel: values.LOG_LEVEL,
+    // `origin` is the form a browser sends: lower case, default port left out.
+    publicOrigin: new URL(values.OSFPM_PUBLIC_URL).origin,
+    autoMigrate: values.OSFPM_AUTO_MIGRATE,
   };
 }

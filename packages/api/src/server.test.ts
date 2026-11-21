@@ -29,6 +29,8 @@ const config: Config = {
   host: '127.0.0.1',
   port: 0,
   logLevel: 'silent',
+  publicOrigin: 'http://localhost:3000',
+  autoMigrate: true,
 };
 
 /** The URL the started server answers on. */
