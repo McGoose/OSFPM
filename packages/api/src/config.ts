@@ -60,8 +60,9 @@ function isPostgresUrl(value: string): boolean {
 }
 
 /**
- * The hosts that may use plain `http`. A browser treats these as secure
- * contexts, so a `Secure` cookie works there during development. Compared
+ * The hosts that may use plain `http`, for development on one machine. Browsers
+ * that treat `http://localhost` as a secure context, as Chrome and Firefox do,
+ * accept a `Secure` cookie there. Compared
  * against the parsed host name, never as a prefix of the text:
  * `http://localhost.example.org` and `http://localhost@example.org` are not
  * local.

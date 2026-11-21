@@ -1,6 +1,6 @@
 # auth
 
-The building blocks of login (spec card SC-10): secret tokens and codes, Argon2id passwords, sessions, recovery codes and the one-time setup code, each with its audit events. There are no routes, cookies, WebAuthn, TOTP, password policy, invites or first-run flow here yet; those come in P-03b2 to P-03b4.
+The building blocks of login (spec card SC-10): secret tokens and codes, Argon2id passwords, sessions, recovery codes and the one-time setup code, each with its audit events. There are no routes or cookies here: the API package has the session cookie, the auth plugin and the session routes (P-03b2). WebAuthn, TOTP, the password policy, invites and the first-run flow are not built yet; they come in P-03b3 and P-03b4.
 
 **Entry points**
 
@@ -30,10 +30,10 @@ Pass the transaction handle to every function, and the time as `now`. The servic
 - Lock order: a service that checks a user's state and then writes takes the user row first (`lockUser`); the setup-code functions take the `installation` row. Nothing here touches a project, so the project change counter does not come into it.
 - No setup code is issued, or accepted, once `installation.setup_completed_at` is set.
 
-**Decided for the routes (P-03b2, P-03b3); nothing of this is built yet**
+**Decided for the login routes (P-03b3); nothing of this is built yet**
 
 - Failed sign-in attempts and failed code attempts will be audited: a wrong password, passkey, authenticator code, recovery code, setup code or invite token. An event holds the method and a failure reason from a fixed list, never a submitted value: no password, code, token or typed email address, and no hash of one. The target is the user only when the server found them by its own means, and there is none for an address it does not know.
-- The client still gets one uniform answer for every failure, as `consumeRecoveryCode` and `consumeSetupCode` do today. The reason is for the audit trail alone. These services return `false` for every failure, so P-03b2 decides whether the services record the event, since they know the reason, or report the reason to the route. Either way, the "attempt that changed nothing writes no event" check in `audit.test.ts` changes with it.
+- The client still gets one uniform answer for every failure, as `consumeRecoveryCode` and `consumeSetupCode` do today. The reason is for the audit trail alone. These services return `false` for every failure, so P-03b3 decides whether the services record the event, since they know the reason, or report the reason to the route. Either way, the "attempt that changed nothing writes no event" check in `audit.test.ts` changes with it.
 - Counting failures for rate limiting is a separate job from auditing them.
 - Unicode normalisation of passwords (NFKC) belongs to the password policy in P-03b3, with the length rule and the blocklist, not to `hashPassword` or `verifyPassword`. They hash exactly the string they are given. P-03b3 normalises in one place, before both the set and the check, so the two sides cannot disagree. No password is stored yet, so adding it later breaks no existing hash.
 

@@ -121,8 +121,9 @@ function scrub(value: unknown, depth: number): unknown {
  * - No request or response body, and no header, is ever logged. If a line is
  *   written by hand, two independent layers mask credentials. A scrubbing
  *   formatter masks every key named like a token, and `authorization`,
- *   `cookie` and `set-cookie`, at any depth, whatever key the object sits
- *   under; it also masks a token-named query parameter inside a string, and
+ *   `cookie` and `set-cookie`, and the session cookie by its name, at any
+ *   depth, whatever key the object sits under; it also masks a token-named
+ *   query parameter and the session cookie inside a string, and
  *   logs a request, reply or other class instance as its class name. Under it,
  *   fixed redact paths mask the three credential headers.
  * - A message is never taken from an error. Pino does that when a line has an

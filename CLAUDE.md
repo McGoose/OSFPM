@@ -51,6 +51,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 ## Code rules
 
 - Routes validate input with Zod schemas and never return core errors directly; the error table in `packages/api/src/errors.ts` maps them.
+- Every new route declares `auth`; the default is `required`. Cookie requests that change data must pass the Origin check.
 - Log lines use the logger's known keys (req, res, err) or plain scalar fields; never log whole objects or request data.
 
 ## Comments and docs

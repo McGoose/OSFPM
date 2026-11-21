@@ -11,8 +11,9 @@ export const SESSION_COOKIE = '__Host-osfpm_session';
 
 /**
  * The attributes every write of the session cookie carries. `Secure` is always
- * on: a browser treats `http://localhost` as secure, and the configuration
- * refuses plain `http` anywhere else. `SameSite=Lax` keeps the cookie off
+ * on: the configuration refuses plain `http` anywhere but `localhost` and
+ * `127.0.0.1`, where browsers that treat them as secure contexts (Chrome and
+ * Firefox do) still accept it. `SameSite=Lax` keeps the cookie off
  * cross-site sub-requests; the `Origin` check covers the rest.
  */
 const COOKIE_ATTRIBUTES = {
