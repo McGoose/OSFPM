@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import type { Database } from '@osfpm/core/src/db/client.js';
 import type { Config } from './config.js';
@@ -84,6 +85,58 @@ describe('startServer', () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
 
     expect(exit).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps listening for stop signals during shutdown, so a second one cannot kill the process half way', async () => {
+    const signals = new EventEmitter();
+    const exit = vi.fn();
+    await startServer(config, { signals, exit });
+
+    signals.emit('SIGTERM');
+    await called(exit);
+
+    // With no listener left, Node would restore the default action and the
+    // next signal would end the process before the database is closed.
+    expect(signals.listenerCount('SIGTERM')).toBeGreaterThan(0);
+    expect(signals.listenerCount('SIGINT')).toBeGreaterThan(0);
+  });
+
+  it('exits 1 when shutdown takes longer than the limit', async () => {
+    const signals = new EventEmitter();
+    const exit = vi.fn();
+    const server = await startServer(config, {
+      signals,
+      exit,
+      shutdownTimeoutMs: 100,
+    });
+    // A database that never finishes closing, as a stuck query would cause.
+    const realClose = server.database.close;
+    Object.assign(server.database, {
+      close: () => new Promise<void>(() => {}),
+    });
+    try {
+      signals.emit('SIGTERM');
+      await called(exit);
+      expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+    } finally {
+      await realClose();
+    }
+  });
+
+  it('fails to start, without crashing the process, when the PGlite data directory cannot be opened', async () => {
+    // A file where a directory should be.
+    const notADirectory = fileURLToPath(
+      new URL('../package.json', import.meta.url),
+    );
+    await expect(
+      startServer(
+        { ...config, database: { driver: 'pglite', dataDir: notADirectory } },
+        { signals: new EventEmitter() },
+      ),
+    ).rejects.toThrow();
+    // An unhandled rejection from PGlite's start-up shows up a moment later and
+    // fails the whole test run.
+    await new Promise((resolve) => setTimeout(resolve, 300));
   });
 
   it('closes the database and rethrows when the port cannot be bound', async () => {

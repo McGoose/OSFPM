@@ -88,6 +88,27 @@ describe('loadConfig', () => {
     expect(message).not.toContain('hunter2');
   });
 
+  it.each([
+    ['whitespace only', '  '],
+    ['exponent notation', '1e3'],
+    ['padded', ' 80 '],
+    ['hexadecimal', '0x50'],
+    ['binary', '0b1010'],
+    ['signed', '+80'],
+    ['inside spaces', '8 0'],
+    ['too many digits', '000080'],
+  ])('refuses a PORT that is not plain digits: %s', (_label, value) => {
+    expect(refusal({ DATABASE_URL: POSTGRES, PORT: value })).toContain('PORT');
+  });
+
+  it('accepts the lowest and highest port, and a port with a leading zero', () => {
+    expect(loadConfig({ DATABASE_URL: POSTGRES, PORT: '0' }).port).toBe(0);
+    expect(loadConfig({ DATABASE_URL: POSTGRES, PORT: '65535' }).port).toBe(
+      65535,
+    );
+    expect(loadConfig({ DATABASE_URL: POSTGRES, PORT: '080' }).port).toBe(80);
+  });
+
   it('lists every problem at once', () => {
     const message = refusal({ PORT: 'abc', LOG_LEVEL: 'chatty' });
     expect(message).toContain('PORT');

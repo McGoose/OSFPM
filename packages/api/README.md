@@ -23,7 +23,7 @@ curl http://127.0.0.1:3000/api/v1/health
 curl http://127.0.0.1:3000/api/v1/meta
 ```
 
-The server does not run migrations: it opens whatever database it is given. `Ctrl+C` or `SIGTERM` stops it in order: it stops accepting requests, lets requests in flight finish, closes the app, closes the database, then exits with code 0.
+The server does not run migrations: it opens whatever database it is given. `Ctrl+C` or `SIGTERM` stops it in order: it stops accepting requests, lets requests in flight finish, closes the app, closes the database, then exits with code 0. A second signal during shutdown is ignored, and if shutdown takes longer than ten seconds the process exits with code 1. A PGlite data directory that cannot be opened stops the start with an error. An unreachable PostgreSQL server does not: the server starts and `/health/ready` answers 503 until the database does.
 
 `start` runs the TypeScript source through `tsx`, a development-only dependency. Production runs compiled JavaScript; the build step and an exports map for the core come with the production image.
 
@@ -36,7 +36,7 @@ Read from the environment when the server starts and validated with Zod. An inva
 | `DATABASE_URL`   | none        | PostgreSQL connection URL (`postgres://` or `postgresql://`). Set this **or** `OSFPM_DATA_DIR`      |
 | `OSFPM_DATA_DIR` | none        | Data directory for PGlite, for small installs. Set this **or** `DATABASE_URL`; both or neither fail |
 | `HOST`           | `127.0.0.1` | Address to listen on                                                                                |
-| `PORT`           | `3000`      | Port to listen on (`0` lets the system choose)                                                      |
+| `PORT`           | `3000`      | Port to listen on, digits only, 0 to 65535 (`0` lets the system choose)                             |
 | `LOG_LEVEL`      | `info`      | `fatal`, `error`, `warn`, `info`, `debug`, `trace` or `silent`                                      |
 
 An empty variable counts as not set.

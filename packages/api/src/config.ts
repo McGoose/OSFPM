@@ -58,8 +58,17 @@ const environmentSchema = z.object({
     .optional(),
   OSFPM_DATA_DIR: z.string().optional(),
   HOST: z.string().default('127.0.0.1'),
-  // 0 lets the operating system pick a free port, which tests rely on.
-  PORT: z.coerce.number().int().min(0).max(65535).default(3000),
+  // Plain digits only: `Number()` would also take '  ' (as 0, a random port),
+  // '1e3', ' 80 ' and '0x50'. 0 lets the operating system pick a free port,
+  // which tests rely on.
+  PORT: z
+    .string()
+    .refine(
+      (value) => /^\d{1,5}$/.test(value) && Number(value) <= 65535,
+      'must be a whole number from 0 to 65535',
+    )
+    .transform(Number)
+    .default(3000),
   LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
 });
 
