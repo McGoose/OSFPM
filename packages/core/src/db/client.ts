@@ -26,8 +26,8 @@ export type DbConfig =
 
 /**
  * A PostgreSQL handle over a node-postgres pool. `close` ends the pool. `db`
- * also gives the pool as `$client`, which the migrator needs to hold its lock on
- * a connection of its own.
+ * also gives the pool as `$client`, which the migrator needs to take a
+ * connection and hold its lock on it.
  */
 export type PostgresDb = {
   readonly driver: 'postgres';

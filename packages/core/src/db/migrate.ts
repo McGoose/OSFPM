@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import { drizzle as drizzlePg } from 'drizzle-orm/node-postgres';
 import { migrate as migratePg } from 'drizzle-orm/node-postgres/migrator';
 import { migrate as migratePglite } from 'drizzle-orm/pglite/migrator';
 import pg from 'pg';
@@ -27,11 +28,13 @@ export const MIGRATION_LOCK_KEY = BigInt('0x4f5346504d4d4947').toString();
  * (`MIGRATION_LOCK_KEY`), so servers that start at the same moment take turns:
  * the second waits, then finds everything applied and does nothing. Without it
  * both would read "nothing applied" and the second would fail on the first
- * table that exists. The lock is held on a connection of its own for as long as
- * the migration runs, and is let go of when it ends, however it ends; if the
- * process dies, the connection closes and PostgreSQL drops the lock. Waiting has
- * no time limit, because another server's migration may be long. PGlite takes no
- * lock: it has one connection and one process.
+ * table that exists. The migration runs on the very connection that holds the
+ * lock, so it needs one connection from the pool and a pool of one is enough; a
+ * second connection, asked for while the first is held, would wait for itself
+ * for ever. The lock is let go of when the migration ends, however it ends; if
+ * the process dies, the connection closes and PostgreSQL drops the lock. Waiting
+ * has no time limit, because another server's migration may be long. PGlite
+ * takes no lock: it has one connection and one process.
  *
  * @throws Error when a migration fails, or the database cannot be reached.
  * Nothing is left locked.
@@ -45,8 +48,10 @@ export async function migrate(
   switch (database.driver) {
     case 'postgres': {
       const db = database.db as PostgresDb['db'];
-      await withMigrationLock(db.$client, () =>
-        migratePg(db, { migrationsFolder }),
+      await withMigrationLock(db.$client, (connection) =>
+        // The same drizzle, over the locked connection instead of the pool: it
+        // runs its queries and its transaction on that one connection.
+        migratePg(drizzlePg({ client: connection }), { migrationsFolder }),
       );
       return;
     }
@@ -58,21 +63,21 @@ export async function migrate(
 
 /**
  * Runs `work` while holding the migration lock on a connection taken from
- * `pool` for the purpose. The connection is not used for the migration itself,
- * which uses the pool as it always did, so the pool needs a second connection.
- * If letting go of the lock fails, the connection is destroyed instead of
- * returned to the pool, which also drops the lock.
+ * `pool`, and hands `work` that connection to do everything on, so the pool is
+ * asked for one connection and no more. If letting go of the lock fails, the
+ * connection is destroyed instead of returned to the pool, which also drops the
+ * lock.
  */
 async function withMigrationLock(
   pool: pg.Pool,
-  work: () => Promise<void>,
+  work: (connection: pg.PoolClient) => Promise<void>,
 ): Promise<void> {
   const holder = await pool.connect();
   try {
     await holder.query('select pg_advisory_lock($1::bigint)', [
       MIGRATION_LOCK_KEY,
     ]);
-    await work();
+    await work(holder);
   } finally {
     try {
       await holder.query('select pg_advisory_unlock($1::bigint)', [

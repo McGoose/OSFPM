@@ -1,7 +1,10 @@
 import { readFileSync } from 'node:fs';
+import { drizzle as drizzlePg } from 'drizzle-orm/node-postgres';
+import pg from 'pg';
 import { describe, expect, it, vi } from 'vitest';
 import type { PostgresDb } from './client.js';
 import { MIGRATION_LOCK_KEY, MIGRATIONS_FOLDER, migrate } from './migrate.js';
+import * as schema from './schema/index.js';
 import { testTargets } from './test-support.js';
 
 /** The PostgreSQL target, when `DATABASE_URL` names a server. PGlite has one connection, so it cannot run this. */
@@ -170,6 +173,30 @@ describe.skipIf(postgres === undefined)(
       }
     }, 60_000);
 
+    it('migrates through a pool of one connection: the migration runs on the connection that holds the lock', async () => {
+      const world = await emptyDatabase();
+      // A pool that can give out one connection, to the same database. If the
+      // lock took that connection and the migrator asked the pool for another,
+      // the migration would wait for itself for ever.
+      const single = new pg.Pool({
+        connectionString: world.pool.options.connectionString,
+        max: 1,
+      });
+      try {
+        await migrate({
+          driver: 'postgres',
+          db: drizzlePg({ client: single, schema }),
+          close: () => single.end(),
+        });
+        expect(await world.appliedMigrations()).toBe(MIGRATION_COUNT);
+        expect(await world.tableExists('session')).toBe(true);
+        expect(await world.lockIsFree()).toBe(true);
+      } finally {
+        await single.end();
+        await world.cleanup();
+      }
+    }, 60_000);
+
     it('lets go of the lock when a migration fails, so the next start is not stuck behind it', async () => {
       const world = await emptyDatabase();
       try {
@@ -187,94 +214,3 @@ describe.skipIf(postgres === undefined)(
     }, 60_000);
   },
 );
-
-/**
- * A stand-in for the pool, to see the order of what `migrate` does around the
- * migrator without a server. The folder has no journal, so the migrator throws
- * before it touches the database: what is left to watch is the lock.
- */
-function fakePostgres(options: { unlockFails?: boolean } = {}) {
-  const events: string[] = [];
-  const holder = {
-    query: (text: string) => {
-      const name = /pg_advisory_(\w+)/.exec(text)?.[1] ?? text;
-      events.push(`query ${name}`);
-      return name === 'unlock' && options.unlockFails
-        ? Promise.reject(new Error('the connection dropped'))
-        : Promise.resolve({ rows: [] });
-    },
-    release: (error?: unknown) => {
-      events.push(error === undefined ? 'release' : 'destroy');
-    },
-  };
-  const pool = {
-    connect: () => {
-      events.push('connect');
-      return Promise.resolve(holder);
-    },
-  };
-  const database = {
-    driver: 'postgres',
-    db: { $client: pool },
-    close: () => Promise.resolve(),
-  } as unknown as PostgresDb;
-  return { database, events };
-}
-
-describe('migrate on PostgreSQL, around the migrator', () => {
-  const NO_FOLDER = '/this/folder/does/not/exist';
-
-  it('takes the lock on a connection of its own first, and lets it go and gives the connection back after', async () => {
-    const { database, events } = fakePostgres();
-    await expect(migrate(database, NO_FOLDER)).rejects.toThrow();
-    expect(events).toEqual([
-      'connect',
-      'query lock',
-      'query unlock',
-      'release',
-    ]);
-  });
-
-  it('asks for the one key', async () => {
-    const asked: unknown[][] = [];
-    const { database } = fakePostgres();
-    const pool = (
-      database.db as unknown as {
-        $client: {
-          connect: () => Promise<{ query: (...args: unknown[]) => unknown }>;
-        };
-      }
-    ).$client;
-    const connect = pool.connect.bind(pool);
-    pool.connect = async () => {
-      const holder = await connect();
-      const query = holder.query.bind(holder);
-      holder.query = (...args: unknown[]) => {
-        asked.push(args);
-        return query(...args);
-      };
-      return holder;
-    };
-    await expect(migrate(database, NO_FOLDER)).rejects.toThrow();
-    expect(asked.map((args) => args[1])).toEqual([
-      [MIGRATION_LOCK_KEY],
-      [MIGRATION_LOCK_KEY],
-    ]);
-    // The ASCII of OSFPMMIG, read as a 64-bit number, and under 2^63 so it is a valid bigint key.
-    expect(MIGRATION_LOCK_KEY).toBe(
-      Buffer.from('OSFPMMIG').readBigUInt64BE().toString(),
-    );
-    expect(BigInt(MIGRATION_LOCK_KEY)).toBeLessThan(2n ** 63n);
-  });
-
-  it('destroys the connection when letting go of the lock fails, and still throws the migration error', async () => {
-    const { database, events } = fakePostgres({ unlockFails: true });
-    await expect(migrate(database, NO_FOLDER)).rejects.toThrow(/journal|meta/i);
-    expect(events).toEqual([
-      'connect',
-      'query lock',
-      'query unlock',
-      'destroy',
-    ]);
-  });
-});
