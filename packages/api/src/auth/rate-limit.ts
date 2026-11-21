@@ -21,3 +21,18 @@ export const AUTH_RATE_LIMIT = { max: 10, timeWindowMs: 60_000 } as const;
  * count against. In memory, like `AUTH_RATE_LIMIT`.
  */
 export const SESSION_RATE_LIMIT = { max: 120, timeWindowMs: 60_000 } as const;
+
+/**
+ * How often one address may call the API at all: at most `max` requests in
+ * `timeWindowMs`, counted together across every route except `/health` and
+ * `/health/ready`, which say `exemptFromAddressRateLimit`. A request for a path
+ * that is no route counts too. It is a coarse guard against floods, counted
+ * before the session is looked up, so a caller with no session, or a wrong one,
+ * costs the server a count and nothing more. It is far above what a client
+ * needs: the limits for guessing (`AUTH_RATE_LIMIT`) and per session
+ * (`SESSION_RATE_LIMIT`) are the ones that shape use. In memory, like those.
+ *
+ * Behind a reverse proxy the address is the proxy's, unless
+ * `OSFPM_TRUSTED_PROXIES` lists it (see `Config.trustedProxies`).
+ */
+export const ADDRESS_RATE_LIMIT = { max: 300, timeWindowMs: 60_000 } as const;

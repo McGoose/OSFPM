@@ -75,6 +75,15 @@ export type BuildAppOptions = {
    * every caller is the proxy.
    */
   readonly trustedProxies?: readonly string[];
+  /**
+   * The coarse limit per address on every route but the health routes. Leave
+   * out for `ADDRESS_RATE_LIMIT`. Only tests pass it, to raise it for an app that
+   * is asked far more than a client would.
+   */
+  readonly addressRateLimit?: {
+    readonly max: number;
+    readonly timeWindowMs: number;
+  };
   /** Leave out for no logging. See `loggerOptions` for what a line holds. */
   readonly logger?: LoggerSettings;
 };
@@ -166,7 +175,12 @@ export function buildApp(options: BuildAppOptions) {
   // process's memory.
   void app.register(cookie);
   void app.register(rateLimit, { global: false });
-  void app.register(authPlugin, { publicOrigin: options.publicOrigin });
+  void app.register(authPlugin, {
+    publicOrigin: options.publicOrigin,
+    ...(options.addressRateLimit === undefined
+      ? {}
+      : { addressRateLimit: options.addressRateLimit }),
+  });
 
   app.addHook('onResponse', (request, reply, done) => {
     request.log.info(

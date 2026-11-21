@@ -24,6 +24,15 @@ export async function createTestApp(
     readonly logLevel?: LogLevel;
     /** Proxies whose `X-Forwarded-For` the app believes. None by default. */
     readonly trustedProxies?: readonly string[];
+    /**
+     * The coarse limit per address. A test app gets a limit it will not reach by
+     * default, because a test sends far more requests than a client from one
+     * address; a test of the limit passes `ADDRESS_RATE_LIMIT`.
+     */
+    readonly addressRateLimit?: {
+      readonly max: number;
+      readonly timeWindowMs: number;
+    };
   } = {},
 ) {
   const { database, cleanup } = await target.create();
@@ -31,6 +40,10 @@ export async function createTestApp(
   const app = buildApp({
     db: database,
     publicOrigin: TEST_PUBLIC_ORIGIN,
+    addressRateLimit: options.addressRateLimit ?? {
+      max: 1_000_000,
+      timeWindowMs: 60_000,
+    },
     ...(options.trustedProxies === undefined
       ? {}
       : { trustedProxies: options.trustedProxies }),

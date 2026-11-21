@@ -17,7 +17,11 @@ import {
   RateLimitedError,
 } from '../errors.js';
 import { clearSessionCookie, SESSION_COOKIE } from './cookie.js';
-import { AUTH_RATE_LIMIT, SESSION_RATE_LIMIT } from './rate-limit.js';
+import {
+  ADDRESS_RATE_LIMIT,
+  AUTH_RATE_LIMIT,
+  SESSION_RATE_LIMIT,
+} from './rate-limit.js';
 
 /**
  * What a route may say about sessions, in its `config.auth`:
@@ -56,6 +60,12 @@ declare module 'fastify' {
     /** How the route treats a session. Defaults to `required` (see `AUTH_MODES`). */
     auth?: AuthMode;
     /**
+     * The route is not counted against the coarse limit per address (see
+     * `ADDRESS_RATE_LIMIT`), which every other route is. Only `/health` and
+     * `/health/ready` say so: a supervisor must always be able to probe.
+     */
+    exemptFromAddressRateLimit?: boolean;
+    /**
      * Counts the request against the strict limit per address (see
      * `AUTH_RATE_LIMIT`). For a route that checks a secret, where a caller may
      * be guessing: sign-in, setup, recovery, invites. Counted before anything
@@ -86,6 +96,11 @@ export type AuthPluginOptions = {
    * carries a session cookie may have.
    */
   readonly publicOrigin: string;
+  /** The coarse limit per address. Defaults to `ADDRESS_RATE_LIMIT`; tests raise it. */
+  readonly addressRateLimit?: {
+    readonly max: number;
+    readonly timeWindowMs: number;
+  };
 };
 
 /** The methods that change data. Safe methods carry no origin check. */
@@ -130,6 +145,14 @@ const implementation: FastifyPluginAsync<AuthPluginOptions> = (
       throw error;
     }));
 
+  // Every route but the health routes is counted here, per address, before
+  // anything else. Its own limiter, so its count is its own.
+  const addressRateLimit = options.addressRateLimit ?? ADDRESS_RATE_LIMIT;
+  const addressLimit = app.createRateLimit({
+    max: addressRateLimit.max,
+    timeWindow: addressRateLimit.timeWindowMs,
+  });
+
   // One limiter for every route that asks, so they share one count per address.
   // It is called from the hook below rather than left to the rate-limit plugin's
   // own route hook, because a route hook runs after the app's hooks: the session
@@ -150,11 +173,21 @@ const implementation: FastifyPluginAsync<AuthPluginOptions> = (
   app.decorateRequest('auth', null);
 
   app.addHook('onRequest', async (request, reply) => {
+    // First of all, before the session, the Origin or the strict limit: a flood
+    // costs a count and nothing more. A path that is no route counts too, since
+    // it still costs a request and a log line; it has no route config to read.
+    if (
+      request.is404 ||
+      request.routeOptions.config.exemptFromAddressRateLimit !== true
+    ) {
+      await enforce(addressLimit, request, reply);
+    }
+
     // No route matched, so there is nothing here to protect, and the answer is
     // the 404 problem whoever asks.
     if (request.is404) return;
 
-    // First of all, whatever the route would have answered, so a caller with no
+    // Next, whatever the route would have answered, so a caller with no
     // session, a wrong one or a foreign Origin is counted as well.
     if (request.routeOptions.config.authRateLimit === true) {
       await enforce(authLimit, request, reply);
@@ -227,8 +260,11 @@ const implementation: FastifyPluginAsync<AuthPluginOptions> = (
  * answers 401 `authentication-required`, with the same text whatever the
  * reason.
  *
- * A route with `config.authRateLimit` is counted against `AUTH_RATE_LIMIT`, per
- * address, before anything else. A route with `config.sessionRateLimit` is counted
+ * Every request, a path that is no route included, is counted against
+ * `ADDRESS_RATE_LIMIT`, per address, before anything else, unless its route says
+ * `config.exemptFromAddressRateLimit` (only the two health routes do). A route
+ * with `config.authRateLimit` is counted against `AUTH_RATE_LIMIT`, per address,
+ * next. A route with `config.sessionRateLimit` is counted
  * against `SESSION_RATE_LIMIT`, per session, once the session is known; a
  * request with no valid session is not counted. Past either limit it is a 429
  * `rate-limited` with `Retry-After`.
