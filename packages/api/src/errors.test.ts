@@ -23,6 +23,7 @@ import {
   VersionConflictError,
 } from '@osfpm/core/src/db/write.js';
 import { testTargets } from '@osfpm/core/src/db/test-support.js';
+import { InstallationMissingError } from '@osfpm/core/src/installation/server-id.js';
 import { LegalHoldInputError } from '@osfpm/core/src/legal-hold/service.js';
 import {
   ComplianceReportDeniedError,
@@ -120,6 +121,7 @@ const internalFixtures = new Map<
   ],
   [MissingActingUserError, () => new MissingActingUserError('token')],
   [PermissionSyncError, () => new PermissionSyncError([])],
+  [InstallationMissingError, () => new InstallationMissingError()],
 ]);
 
 /** Everything a test route can throw, by name: the fixtures, the subclasses, and a few odd ones. */

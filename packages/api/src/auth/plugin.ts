@@ -9,8 +9,8 @@ import {
   type SessionUser,
   type SessionView,
 } from '@osfpm/core/src/auth/sessions.js';
-import { serverId } from '@osfpm/core/src/auth/shared.js';
 import type { WriteContext } from '@osfpm/core/src/db/write.js';
+import { getServerId } from '@osfpm/core/src/installation/server-id.js';
 import {
   AuthenticationRequiredError,
   OriginMismatchError,
@@ -125,7 +125,7 @@ const implementation: FastifyPluginAsync<AuthPluginOptions> = (
   // not kept, so the next request tries again.
   let originServer: Promise<string> | undefined;
   const thisServer = () =>
-    (originServer ??= serverId(app.db.db).catch((error: unknown) => {
+    (originServer ??= getServerId(app.db.db).catch((error: unknown) => {
       originServer = undefined;
       throw error;
     }));

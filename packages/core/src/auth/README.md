@@ -18,7 +18,7 @@ Pass the transaction handle to every function, and the time as `now`. The servic
 - A token or code is random and shown to the caller once. Only its SHA-256 hash is stored, and the row is found by that hash. SHA-256 is enough because the values hold at least 80 bits of randomness; passwords are low-entropy, so they use Argon2id instead.
 - A session lasts 12 hours without a request and 30 days in all. A request slides the idle end, never past the absolute end, and writes at most once a minute. A disabled or deleted user's session is not valid, and disabling a user revokes their sessions.
 - Each security-relevant change writes one `audit_event` (`auth.session-created`, `auth.session-revoked`, `auth.sessions-revoked`, `auth.user-disabled`, `auth.user-enabled`, `auth.recovery-codes-generated`, `auth.recovery-code-used`, `auth.setup-code-issued`, `auth.setup-code-used`). Details hold scalar values such as a method, a reason or a count, never a secret. An attempt that changes nothing writes no event yet; failed attempts will be audited (see "Decided for the routes").
-- Rows carry the server's own id as `origin_server`, read from the `installation` row, so the services refuse until that row exists.
+- Rows carry the server's own id as `origin_server`, read with `getServerId` (`src/installation/`) from the `installation` row, so the services refuse until that row exists. `serverId` in `shared.ts` wraps it for them, with `AuthStateError`.
 
 **Rules you must not break**
 

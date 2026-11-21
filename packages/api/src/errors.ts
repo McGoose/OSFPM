@@ -14,6 +14,7 @@ import {
   RecordWriteError,
   VersionConflictError,
 } from '@osfpm/core/src/db/write.js';
+import { InstallationMissingError } from '@osfpm/core/src/installation/server-id.js';
 import { LegalHoldInputError } from '@osfpm/core/src/legal-hold/service.js';
 import {
   ComplianceReportDeniedError,
@@ -288,6 +289,11 @@ export const INTERNAL_ERRORS: readonly {
   {
     errorClass: PermissionSyncError,
     reason: 'Raised when the server starts, never while it serves a request.',
+  },
+  {
+    errorClass: InstallationMissingError,
+    reason:
+      'A request with a valid session has an installation behind it, because sessions are only made after setup has created the row. If it is missing, the database is damaged: a bug or a fault, not something the caller did.',
   },
 ];
 
