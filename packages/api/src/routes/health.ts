@@ -32,9 +32,22 @@ async function within<T>(work: PromiseLike<T>, ms: number): Promise<T> {
  * `/health/ready` runs a trivial query. It is a 200 when the database answers,
  * and a 503 problem response when it does not or takes longer than two
  * seconds. The cause is logged by class name only: the response never says
- * why.
+ * why. Only one check query is ever in flight.
  */
 export const healthRoutes: FastifyPluginAsyncZod = (app) => {
+  // The query in flight, if any. The timeout below only stops a probe waiting:
+  // it cannot cancel the query, which keeps its connection until the database
+  // answers. So a new probe joins the query already running instead of
+  // starting another. Probes arriving every few seconds at a hung database
+  // would otherwise take one connection each, until real requests find none.
+  let probe: Promise<unknown> | undefined;
+  const checkDatabase = () => {
+    probe ??= Promise.resolve(app.db.db.execute('select 1')).finally(() => {
+      probe = undefined;
+    });
+    return probe;
+  };
+
   app.get(
     '/health',
     {
@@ -65,7 +78,7 @@ export const healthRoutes: FastifyPluginAsyncZod = (app) => {
     },
     async (request) => {
       try {
-        await within(app.db.db.execute('select 1'), READINESS_TIMEOUT_MS);
+        await within(checkDatabase(), READINESS_TIMEOUT_MS);
       } catch (error) {
         request.log.warn(
           { cause: errorClassName(error) },
