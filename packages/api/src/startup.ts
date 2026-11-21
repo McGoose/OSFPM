@@ -1,33 +1,13 @@
+import { PERMISSION_LISTS } from '@osfpm/core/src/access/permission-lists.js';
 import {
   syncPermissions,
   type PermissionDefinition,
 } from '@osfpm/core/src/access/permission-sync.js';
-import { ACCOUNT_PERMISSIONS } from '@osfpm/core/src/accounts/permissions.js';
-import { CONTRACT_PERMISSIONS } from '@osfpm/core/src/contracts/permissions.js';
-import { COST_PERMISSIONS } from '@osfpm/core/src/costs/permissions.js';
 import type { Database } from '@osfpm/core/src/db/client.js';
 import { migrate } from '@osfpm/core/src/db/migrate.js';
 import type { Tx } from '@osfpm/core/src/db/write.js';
-import { LEGAL_HOLD_PERMISSIONS } from '@osfpm/core/src/legal-hold/permissions.js';
-import { SENSITIVE_PERMISSIONS } from '@osfpm/core/src/sensitive/permissions.js';
 import type { App } from './app.js';
 import { errorClassName } from './logging.js';
-
-/**
- * Every permission list a module of the core declares, in the order they are
- * synced. The catalogue (`permission` table) is filled from these when the
- * server starts, so a module's keys exist before any role is granted them.
- *
- * A module that adds a `*_PERMISSIONS` list adds it here too. `startup.test.ts`
- * scans the core for declared lists and fails when one is missing.
- */
-export const PERMISSION_LISTS: readonly (readonly PermissionDefinition[])[] = [
-  ACCOUNT_PERMISSIONS,
-  CONTRACT_PERMISSIONS,
-  COST_PERMISSIONS,
-  LEGAL_HOLD_PERMISSIONS,
-  SENSITIVE_PERMISSIONS,
-];
 
 /** The two things start-up does to the database. Tests swap them to watch the order. */
 export type StartupSteps = {
@@ -184,7 +164,7 @@ export type StartupControl = {
 /**
  * What the server does to its database once it is listening, in this order:
  * apply pending migrations (unless `autoMigrate` is false), then sync every
- * list in `PERMISSION_LISTS`, then mark the app ready so `/health/ready` stops
+ * list in the core's `PERMISSION_LISTS`, then mark the app ready so `/health/ready` stops
  * answering 503 and the other routes stop answering a 503 problem `starting`.
  *
  * The lists are synced in one transaction: all of them or none, so a refused

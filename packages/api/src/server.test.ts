@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
+import { PERMISSION_LISTS } from '@osfpm/core/src/access/permission-lists.js';
 import {
   PermissionSyncError,
   syncPermissions,
@@ -16,11 +17,7 @@ import { permission } from '@osfpm/core/src/db/schema/index.js';
 import type { Config } from './config.js';
 import { SESSION_COOKIE } from './auth/cookie.js';
 import { describeStartupFailure, startServer } from './server.js';
-import {
-  PERMISSION_LISTS,
-  StartupAbortedError,
-  type StartupSteps,
-} from './startup.js';
+import { StartupAbortedError, type StartupSteps } from './startup.js';
 
 const opened = vi.hoisted(() => [] as Database[]);
 

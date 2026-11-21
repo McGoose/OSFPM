@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { PERMISSION_LISTS } from '@osfpm/core/src/access/permission-lists.js';
 import { PermissionSyncError } from '@osfpm/core/src/access/permission-sync.js';
 import { createDatabase, type Database } from '@osfpm/core/src/db/client.js';
 import { API_PREFIX } from './api-version.js';
@@ -6,7 +7,6 @@ import { buildApp } from './app.js';
 import { TEST_PUBLIC_ORIGIN } from './test-support.js';
 import {
   isDatabaseUnreachable,
-  PERMISSION_LISTS,
   runStartup,
   StartupAbortedError,
   STARTUP_RETRY,

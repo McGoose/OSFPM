@@ -1,7 +1,5 @@
-import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PERMISSION_LISTS } from '@osfpm/core/src/access/permission-lists.js';
 import {
   PermissionSyncError,
   syncPermissions,
@@ -21,7 +19,7 @@ import {
 import { API_PREFIX } from './api-version.js';
 import { buildApp } from './app.js';
 import { TEST_PUBLIC_ORIGIN } from './test-support.js';
-import { PERMISSION_LISTS, runStartup, type StartupSteps } from './startup.js';
+import { runStartup, type StartupSteps } from './startup.js';
 
 /** A promise that is settled from outside, to hold a step half way. */
 function deferred() {
@@ -49,51 +47,6 @@ function recordingSteps(calls: string[]): StartupSteps {
 /** Every permission key in `PERMISSION_LISTS`. */
 const declaredKeys = () =>
   PERMISSION_LISTS.flatMap((list) => list.map((entry) => entry.key));
-
-describe('PERMISSION_LISTS', () => {
-  /** The export names of every permission list that a file in the core declares, by file. */
-  function declaredLists(): { file: string; name: string }[] {
-    const coreSrc = fileURLToPath(new URL('../../core/src/', import.meta.url));
-    return readdirSync(coreSrc, { recursive: true, withFileTypes: true })
-      .filter(
-        (entry) =>
-          entry.isFile() &&
-          entry.name.endsWith('.ts') &&
-          !entry.name.endsWith('.test.ts'),
-      )
-      .flatMap((entry) => {
-        const file = join(entry.parentPath, entry.name);
-        const text = readFileSync(file, 'utf8');
-        return [
-          ...text.matchAll(
-            /^export const (\w+): readonly PermissionDefinition\[\]/gm,
-          ),
-        ].map((match) => ({ file, name: match[1]! }));
-      });
-  }
-
-  it('holds every permission list a module of the core declares', async () => {
-    const declared = declaredLists();
-    // Guards against scanning the wrong folder and passing for nothing.
-    expect(declared.length).toBeGreaterThan(3);
-    for (const { file, name } of declared) {
-      const exported = (await import(pathToFileURL(file).href)) as Record<
-        string,
-        unknown
-      >;
-      expect(
-        PERMISSION_LISTS,
-        `${name} is declared but not synced at start-up: add it to PERMISSION_LISTS`,
-      ).toContain(exported[name]);
-    }
-    expect(PERMISSION_LISTS).toHaveLength(declared.length);
-  });
-
-  it('declares no key twice, because two lists would take turns at flagging it on every start', () => {
-    const keys = declaredKeys();
-    expect(new Set(keys).size).toBe(keys.length);
-  });
-});
 
 describe.each(testTargets)('start-up on $name', (target: TestTarget) => {
   let created: Awaited<ReturnType<TestTarget['create']>>;

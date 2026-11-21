@@ -34,7 +34,7 @@ The server does this, in this order:
 1. Opens the database. A PGlite data directory that cannot be opened stops the start.
 2. **Listens.** From here a supervisor's probe finds a live process.
 3. Runs pending migrations, unless `OSFPM_AUTO_MIGRATE` is `false`. With it off, the database must already be migrated, or step 4 fails.
-4. Syncs the permission catalogue: every `*_PERMISSIONS` list the core declares goes into the `permission` table, in one transaction, so all of them or none. The lists are in `src/startup.ts`; a test fails when the core declares one that is not there.
+4. Syncs the permission catalogue: every `*_PERMISSIONS` list the core declares goes into the `permission` table, in one transaction, so all of them or none. The core owns the list of lists (`PERMISSION_LISTS` in `packages/core/src/access/permission-lists.ts`) and the API imports it; a core test fails when a module declares one that is not in it.
 5. Opens every route.
 
 **While it starts (steps 3 and 4),** `GET /health` answers 200, `GET /health/ready` answers 503, and every other route answers a 503 problem `starting`: the same for a caller with a cookie and one without, before the session, the Origin or the rate limit are looked at, because the database may not be migrated or reachable yet. An unknown path is still a 404. A route that does not say `config: { availableWhileStarting: true }` waits, so a new route cannot be open by accident; only the two health routes say it. `/health/ready` keeps answering 503 after that until a trivial query to the database is answered.
@@ -184,19 +184,19 @@ Import core code by path, for example `@osfpm/core/src/db/write.js`: the core ha
 
 ## Folder map
 
-| Path                     | What it holds                                                                   |
-| ------------------------ | ------------------------------------------------------------------------------- |
-| `src/server.ts`          | The entry: config, database, start-up, app, listen, graceful shutdown           |
-| `src/startup.ts`         | `runStartup` (migrate, then sync the permission lists) and `PERMISSION_LISTS`   |
-| `src/app.ts`             | `buildApp`, which returns the Fastify instance without listening                |
-| `src/config.ts`          | Environment variables validated with Zod                                        |
-| `src/errors.ts`          | The error table and the problem responses                                       |
-| `src/logging.ts`         | The privacy rules for log lines                                                 |
-| `src/auth/plugin.ts`     | The auth plugin: cookie to acting user, the `auth` option, the cross-site check |
-| `src/auth/cookie.ts`     | The session cookie's name and how it is set and cleared                         |
-| `src/auth/rate-limit.ts` | `AUTH_RATE_LIMIT` and `SESSION_RATE_LIMIT`, the two limits, in one place        |
-| `src/routes/`            | One plugin per area: health, meta, openapi, auth                                |
-| `src/test-support.ts`    | `createTestApp`, a test app on a throwaway database. Only tests import it       |
+| Path                     | What it holds                                                                    |
+| ------------------------ | -------------------------------------------------------------------------------- |
+| `src/server.ts`          | The entry: config, database, start-up, app, listen, graceful shutdown            |
+| `src/startup.ts`         | `runStartup` (migrate, then sync the core's `PERMISSION_LISTS`), `STARTUP_RETRY` |
+| `src/app.ts`             | `buildApp`, which returns the Fastify instance without listening                 |
+| `src/config.ts`          | Environment variables validated with Zod                                         |
+| `src/errors.ts`          | The error table and the problem responses                                        |
+| `src/logging.ts`         | The privacy rules for log lines                                                  |
+| `src/auth/plugin.ts`     | The auth plugin: cookie to acting user, the `auth` option, the cross-site check  |
+| `src/auth/cookie.ts`     | The session cookie's name and how it is set and cleared                          |
+| `src/auth/rate-limit.ts` | `AUTH_RATE_LIMIT` and `SESSION_RATE_LIMIT`, the two limits, in one place         |
+| `src/routes/`            | One plugin per area: health, meta, openapi, auth                                 |
+| `src/test-support.ts`    | `createTestApp`, a test app on a throwaway database. Only tests import it        |
 
 ## Tests
 
