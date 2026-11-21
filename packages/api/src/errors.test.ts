@@ -42,6 +42,19 @@ const SCOPE = { organisationId: ID, projectId: ID };
 /** A value the tests look for in output. It must never appear in a response or a log. */
 const SECRET = 'secret-marker-4f9c';
 
+/** The text of every non-test source file in the core. */
+function readCoreSources(): string[] {
+  const coreSrc = fileURLToPath(new URL('../../core/src/', import.meta.url));
+  return readdirSync(coreSrc, { recursive: true, withFileTypes: true })
+    .filter(
+      (entry) =>
+        entry.isFile() &&
+        entry.name.endsWith('.ts') &&
+        !entry.name.endsWith('.test.ts'),
+    )
+    .map((entry) => readFileSync(join(entry.parentPath, entry.name), 'utf8'));
+}
+
 /** One error of each class in the table, built the way the core builds it. */
 const fixtures = new Map<abstract new (...args: never[]) => Error, () => Error>(
   [
@@ -145,6 +158,17 @@ const testRoutes: FastifyPluginAsync = (app) => {
     },
     () => ({ ok: true }),
   );
+  typed.post(
+    '/test/record',
+    {
+      schema: {
+        body: z.object({
+          attributes: z.record(z.string(), z.object({ amount: z.number() })),
+        }),
+      },
+    },
+    () => ({ ok: true }),
+  );
   return Promise.resolve();
 };
 
@@ -224,6 +248,37 @@ describe.each(testTargets)('problem responses on $name', (target) => {
       }
     });
 
+    it('shows the fixed text for a legal hold input error, not its message', async () => {
+      const response = await throwing('LegalHoldInputError');
+      const body = expectProblem(response, {
+        status: 422,
+        code: 'invalid-input',
+        instance: `${API_PREFIX}/test/throw/LegalHoldInputError`,
+      });
+      expect(body.detail).not.toContain('A hold needs a reason');
+    });
+
+    it('passes on an error message only for a class whose JSDoc says it carries no ids or values', () => {
+      const sources = readCoreSources();
+      const passThrough = PROBLEM_TABLE.filter((row) => row.detail === null);
+      // Guards against checking nothing.
+      expect(passThrough.length).toBeGreaterThan(2);
+      for (const row of passThrough) {
+        const name = row.errorClass.name;
+        const declaration = new RegExp(
+          '/\\*\\*((?:(?!\\*/)[\\s\\S])*)\\*/\\s*export class ' + name + '\\b',
+        );
+        const found = sources
+          .map((text) => declaration.exec(text))
+          .find((match) => match !== null);
+        expect(found, `${name} has no JSDoc in the core`).toBeDefined();
+        expect(
+          found![1],
+          `${name} passes its message on, but its JSDoc does not say it carries no ids or values`,
+        ).toMatch(/carries no|never what/i);
+      }
+    });
+
     it('maps the subclasses of a row to that row', async () => {
       for (const name of [
         'AccountHasChildrenError',
@@ -255,17 +310,8 @@ describe.each(testTargets)('problem responses on $name', (target) => {
     });
 
     it('covers every error class the core exports: mapped, a subclass of a mapped one, or listed as a 500', () => {
-      const coreSrc = fileURLToPath(
-        new URL('../../core/src/', import.meta.url),
-      );
       const parents = new Map<string, string>();
-      for (const entry of readdirSync(coreSrc, {
-        recursive: true,
-        withFileTypes: true,
-      })) {
-        if (!entry.isFile() || !entry.name.endsWith('.ts')) continue;
-        if (entry.name.endsWith('.test.ts')) continue;
-        const text = readFileSync(join(entry.parentPath, entry.name), 'utf8');
+      for (const text of readCoreSources()) {
         for (const match of text.matchAll(
           /^export class (\w+) extends (\w+)/gm,
         )) {
@@ -413,6 +459,30 @@ describe.each(testTargets)('problem responses on $name', (target) => {
         expect(text).not.toContain('not a number');
         expect(text).not.toContain('not-a-number');
       }
+    });
+
+    it('never echoes a record key or a value, only the schema field names', async () => {
+      const response = await ctx.app.inject({
+        method: 'POST',
+        url: `${API_PREFIX}/test/record`,
+        payload: {
+          attributes: {
+            [SECRET]: { amount: `not a number ${SECRET}` },
+            '07123456789': { amount: 'x' },
+          },
+        },
+      });
+      const body = expectProblem(response, {
+        status: 400,
+        code: 'validation-failed',
+        instance: `${API_PREFIX}/test/record`,
+      });
+      expect(body.errors).toEqual([
+        { in: 'body', path: 'attributes.*.amount', code: 'invalid_type' },
+        { in: 'body', path: 'attributes.*.amount', code: 'invalid_type' },
+      ]);
+      expect(response.body).not.toContain(SECRET);
+      expect(response.body).not.toContain('07123456789');
     });
 
     it('does not log the submitted values either', async () => {

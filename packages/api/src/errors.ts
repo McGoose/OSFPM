@@ -106,8 +106,9 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
     title: 'Record in the wrong state',
     detail: 'The record is in the wrong state for this operation.',
   },
-  // The four input errors below document that they carry no ids and no
-  // values, so their own message is safe to show.
+  // The three input errors below document that they carry no ids and no
+  // values, so their own message is safe to show. A test checks that every row
+  // with `detail: null` is such a class.
   {
     errorClass: ContractInputError,
     status: 422,
@@ -130,11 +131,14 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
     detail: null,
   },
   {
+    // Its JSDoc does not say its message is free of ids and values, so the
+    // response has fixed text. The class says: a reason is missing, or a scope
+    // is half set.
     errorClass: LegalHoldInputError,
     status: 422,
     code: 'invalid-input',
     title: 'Invalid input',
-    detail: null,
+    detail: 'The legal hold needs a reason, and its scope must be complete.',
   },
   {
     // Its message lists where the payload is wrong and never what is in it.

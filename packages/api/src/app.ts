@@ -3,7 +3,6 @@ import Fastify from 'fastify';
 import {
   jsonSchemaTransform,
   serializerCompiler,
-  validatorCompiler,
   type ZodTypeProvider,
 } from 'fastify-type-provider-zod';
 import type { Database } from '@osfpm/core/src/db/client.js';
@@ -17,6 +16,7 @@ import {
   type LoggerSettings,
 } from './logging.js';
 import { PACKAGE_VERSION } from './package-info.js';
+import { safeValidatorCompiler } from './validation.js';
 import { healthRoutes } from './routes/health.js';
 import { metaRoutes } from './routes/meta.js';
 import { openapiRoutes } from './routes/openapi.js';
@@ -65,7 +65,7 @@ export function buildApp(options: BuildAppOptions) {
     frameworkErrors: handleFrameworkError,
   }).withTypeProvider<ZodTypeProvider>();
 
-  app.setValidatorCompiler(validatorCompiler);
+  app.setValidatorCompiler(safeValidatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   app.decorate('db', options.db);
   registerErrorHandling(app);

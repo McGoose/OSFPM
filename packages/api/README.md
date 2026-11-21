@@ -37,7 +37,7 @@ Read from the environment when the server starts and validated with Zod. An inva
 | `OSFPM_DATA_DIR` | none        | Data directory for PGlite, for small installs. Set this **or** `DATABASE_URL`; both or neither fail |
 | `HOST`           | `127.0.0.1` | Address to listen on                                                                                |
 | `PORT`           | `3000`      | Port to listen on, digits only, 0 to 65535 (`0` lets the system choose)                             |
-| `LOG_LEVEL`      | `info`      | `fatal`, `error`, `warn`, `info`, `debug`, `trace` or `silent`                                      |
+| `LOG_LEVEL`      | `info`      | `fatal`, `error`, `warn`, `info`, `debug`, `trace` or `silent`, in any case                         |
 
 An empty variable counts as not set.
 
@@ -60,15 +60,15 @@ Every error is `application/problem+json` (RFC 9457) with `type` (`/problems/<co
 
 The one table in `src/errors.ts` (`PROBLEM_TABLE`) maps core errors by class:
 
-| Error                                                                                  | Status |
-| -------------------------------------------------------------------------------------- | ------ |
-| Request validation (Zod); lists the failing field paths, never the values              | 400    |
-| `AccessDeniedError` and the other access-denied errors                                 | 403    |
-| `RecordNotFoundError`, and an unknown route                                            | 404    |
-| `VersionConflictError`, `RecordStateError` and its subclasses                          | 409    |
-| The module input errors, such as `ContractInputError` and `CostLineInputError`         | 422    |
-| The service cannot answer, such as the database being down                             | 503    |
-| Anything else, including `RecordWriteError`: a generic message and the request ID only | 500    |
+| Error                                                                                                    | Status |
+| -------------------------------------------------------------------------------------------------------- | ------ |
+| Request validation (Zod); lists the failing field paths, never the values or a record key (shown as `*`) | 400    |
+| `AccessDeniedError` and the other access-denied errors                                                   | 403    |
+| `RecordNotFoundError`, and an unknown route                                                              | 404    |
+| `VersionConflictError`, `RecordStateError` and its subclasses                                            | 409    |
+| The module input errors, such as `ContractInputError` and `CostLineInputError`                           | 422    |
+| The service cannot answer, such as the database being down                                               | 503    |
+| Anything else, including `RecordWriteError`: a generic message and the request ID only                   | 500    |
 
 Fastify's own refusals of a malformed request (bad JSON, a body over the limit, an unsupported media type, a malformed URL) are 400, 413 and 415 problems with fixed text.
 

@@ -69,7 +69,13 @@ const environmentSchema = z.object({
     )
     .transform(Number)
     .default(3000),
-  LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
+  // Any case, because `LOG_LEVEL=INFO` is what people type. The value is
+  // lowercased before it is checked, and a wrong one is not repeated.
+  LOG_LEVEL: z
+    .string()
+    .transform((value) => value.toLowerCase())
+    .pipe(z.enum(LOG_LEVELS))
+    .default('info'),
 });
 
 const VARIABLES = Object.keys(environmentSchema.shape);

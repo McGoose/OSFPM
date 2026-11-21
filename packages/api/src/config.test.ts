@@ -76,6 +76,17 @@ describe('loadConfig', () => {
   });
 
   it.each([
+    ['INFO', 'info'],
+    ['Debug', 'debug'],
+    ['WARN', 'warn'],
+    ['SiLeNt', 'silent'],
+  ])('reads LOG_LEVEL=%s as %s', (value, expected) => {
+    expect(
+      loadConfig({ DATABASE_URL: POSTGRES, LOG_LEVEL: value }).logLevel,
+    ).toBe(expected);
+  });
+
+  it.each([
     ['PORT', 'abc'],
     ['PORT', '70000'],
     ['PORT', '-1'],
