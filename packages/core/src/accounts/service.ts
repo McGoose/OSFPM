@@ -12,7 +12,6 @@ import {
 } from '../db/schema/index.js';
 import {
   insertRecord,
-  lockProjectChanges,
   RecordStateError,
   softDeleteRecord,
   updateRecord,
@@ -301,14 +300,8 @@ async function hasLiveCostLines(
   scope: PermissionScope,
   accounts: SQL,
 ): Promise<boolean> {
-  if (scope.projectId !== null) {
-    await lockProjectChanges(tx, scope.organisationId, scope.projectId);
-  }
-  await tx
-    .select({ id: account.id })
-    .from(account)
-    .where(accounts)
-    .for('update');
+  void scope;
+  await tx.select({ id: account.id }).from(account).where(accounts);
   const [found] = await tx
     .select({ id: costLine.id })
     .from(costLine)

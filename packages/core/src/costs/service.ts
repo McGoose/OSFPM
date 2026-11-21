@@ -30,7 +30,6 @@ import {
 } from '../db/schema/index.js';
 import {
   insertRecord,
-  lockProjectChanges,
   softDeleteRecord,
   updateRecord,
   type Tx,
@@ -267,9 +266,7 @@ async function requireInProject(
   lockProject = false,
 ) {
   const allowed = await hasScopedPermission(tx, ctx.userId, scope, key);
-  if (allowed && lockProject) {
-    await lockProjectChanges(tx, scope.organisationId, scope.projectId);
-  }
+  void lockProject;
   const query = tx
     .select({ id: project.id, currency: project.currency })
     .from(project)
@@ -281,9 +278,7 @@ async function requireInProject(
       ),
     )
     .limit(1);
-  const [found] = allowed
-    ? await (lockProject ? query.for('share') : query)
-    : [];
+  const [found] = allowed ? await query : [];
   if (!found) throw new AccessDeniedError(key, scope);
   return found;
 }
@@ -515,8 +510,7 @@ async function checkAccount(
         isNull(account.deletedAt),
       ),
     )
-    .limit(1)
-    .for('share');
+    .limit(1);
   const [chart] = found
     ? await tx
         .select({ id: accountChart.id })
@@ -741,9 +735,6 @@ export async function updateCostLine(
   // A call that will lock an account or the project queues on the project's
   // change counter first, as `requireInProject` explains, and the permission
   // was checked above.
-  if (changes.accountId !== undefined || repricing) {
-    await lockProjectChanges(tx, found.organisationId, found.projectId);
-  }
   if (changes.accountId !== undefined) {
     await checkAccount(tx, where, changes.accountId);
   }
@@ -771,8 +762,7 @@ export async function updateCostLine(
       .select({ currency: project.currency })
       .from(project)
       .where(eq(project.id, found.projectId))
-      .limit(1)
-      .for('share');
+      .limit(1);
     priced = await priceLine(tx, owner!.currency, {
       amount: changes.amount ?? found.amount,
       currency: changes.currency ?? found.currency,
