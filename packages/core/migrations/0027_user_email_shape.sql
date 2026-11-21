@@ -1,0 +1,2 @@
+ALTER TABLE "user" DROP CONSTRAINT "user_email_normalised_check";--> statement-breakpoint
+ALTER TABLE "user" ADD CONSTRAINT "user_email_normalised_check" CHECK ("user"."email" = lower("user"."email") and "user"."email" !~ '[[:space:]]' and "user"."email" like '%_@_%');

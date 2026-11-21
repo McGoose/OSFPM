@@ -1095,9 +1095,17 @@ describe.each(testTargets)('database schema on $name', (target) => {
         constraint: 'user_email_normalised_check',
       };
 
-      // No whitespace anywhere, and lower case. `[[:space:]]` covers space, tab,
-      // line feed, carriage return, vertical tab and form feed.
+      // Lower case, no whitespace anywhere (`[[:space:]]` covers space, tab, line
+      // feed, carriage return, vertical tab and form feed), and an `@` with at
+      // least one character before it and one after it.
       it.each([
+        ['an empty', ''],
+        ['an at-sign-only', '@'],
+        ['a nothing-after-the-@', 'a@'],
+        ['a nothing-before-the-@', '@b'],
+        ['a nothing-after-the-@ domain-less', 'someone@'],
+        ['a nothing-before-the-@ domain-only', '@example.test'],
+        ['a no-@', 'someone.example.test'],
         ['an upper-case', 'Mixed.Case@example.test'],
         ['a leading-space', ' leading@example.test'],
         ['a trailing-space', 'trailing@example.test '],
@@ -1134,6 +1142,11 @@ describe.each(testTargets)('database schema on $name', (target) => {
           `${email}\t`,
           `${email}\n`,
           'normalised before@example.test',
+          '',
+          '@',
+          'normalised.before@',
+          '@example.test',
+          'normalised.before.example.test',
         ]) {
           const failure = await failureOf(() =>
             database.db
@@ -1145,8 +1158,9 @@ describe.each(testTargets)('database schema on $name', (target) => {
         }
       });
 
-      it('accepts a lower-case email with no whitespace in it', async () => {
+      it('accepts a lower-case email with no whitespace and an @ with something on each side', async () => {
         for (const email of [
+          'a@b',
           'plain@example.test',
           'first.last+tag@example.test',
           'under_score-and-dash@sub.example.test',
