@@ -2,3 +2,10 @@ packages:
   - 'packages/*'
 allowBuilds:
   esbuild: false
+overrides:
+  # drizzle-kit's deprecated loader (@esbuild-kit/core-utils) asks for
+  # esbuild ~0.18.20, which any website can send requests to when it runs a
+  # development server (GHSA-67mh-4wv8-2f99, fixed in 0.25.0). drizzle-kit never
+  # runs one, but the old copy is the only vulnerable one in the tree. 0.25.12 is
+  # the version drizzle-kit itself already uses.
+  '@esbuild-kit/core-utils>esbuild': 0.25.12
