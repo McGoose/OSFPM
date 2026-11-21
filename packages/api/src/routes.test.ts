@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import {
@@ -13,6 +14,11 @@ import { API_PREFIX } from './api-version.js';
 import { buildApp } from './app.js';
 import { PACKAGE_NAME, PACKAGE_VERSION } from './package-info.js';
 import { createTestApp, UUID_V7 } from './test-support.js';
+
+/** The API package's own `package.json`, read from the file. */
+const packageJson = JSON.parse(
+  readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+) as { name: string; version: string };
 
 /**
  * A database handle of this target's kind that was opened with the core's
@@ -227,15 +233,17 @@ describe.each(testTargets)('the routes on $name', (target) => {
       expect(response.json()).toEqual({
         name: 'OSFPM',
         package: '@osfpm/api',
-        version: PACKAGE_VERSION,
+        version: packageJson.version,
         apiVersion: 'v1',
         database: target.name === 'pglite' ? 'pglite' : 'postgresql',
       });
     });
 
-    it('reads the version from the API package', () => {
-      expect(PACKAGE_NAME).toBe('@osfpm/api');
-      expect(PACKAGE_VERSION).toMatch(/^\d+\.\d+\.\d+/);
+    it('reads the name and version from the API package.json', () => {
+      // The file read here is the one the constants must come from, so a
+      // constant that is hard-coded, or read from the wrong package, differs.
+      expect(PACKAGE_NAME).toBe(packageJson.name);
+      expect(PACKAGE_VERSION).toBe(packageJson.version);
     });
 
     it('shows no host name and no path', async () => {
@@ -261,7 +269,7 @@ describe.each(testTargets)('the routes on $name', (target) => {
         paths: Record<string, Record<string, unknown>>;
       };
       expect(openapi.startsWith('3.1.')).toBe(true);
-      expect(info.version).toBe(PACKAGE_VERSION);
+      expect(info.version).toBe(packageJson.version);
 
       expect(Object.keys(paths).sort()).toEqual([
         `${API_PREFIX}/health`,

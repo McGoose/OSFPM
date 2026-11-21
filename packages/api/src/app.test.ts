@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { newId } from '@osfpm/core/src/db/ids.js';
 import { testTargets } from '@osfpm/core/src/db/test-support.js';
 import { createTestApp, UUID_V7 } from './test-support.js';
 
@@ -21,13 +22,33 @@ describe.each(testTargets)('the app on $name', (target) => {
     );
   });
 
-  it('ignores a request ID sent by the caller', async () => {
-    const response = await ctx.app.inject({
+  it('ignores a request ID sent by the caller, even a valid UUIDv7', async () => {
+    // A value that would pass any check on the shape of the ID, so only
+    // ignoring the header can make the response differ from it.
+    const chosen = newId();
+    const valid = await ctx.app.inject({
+      method: 'GET',
+      url: '/nowhere',
+      headers: { 'x-request-id': chosen },
+    });
+    expect(valid.headers['x-request-id']).toMatch(UUID_V7);
+    expect(valid.headers['x-request-id']).not.toBe(chosen);
+
+    const odd = await ctx.app.inject({
       method: 'GET',
       url: '/nowhere',
       headers: { 'x-request-id': 'chosen-by-the-caller' },
     });
-    expect(response.headers['x-request-id']).toMatch(UUID_V7);
+    expect(odd.headers['x-request-id']).toMatch(UUID_V7);
+
+    // The log line carries the server's ID, not the caller's.
+    ctx.lines.length = 0;
+    await ctx.app.inject({
+      method: 'GET',
+      url: '/nowhere',
+      headers: { 'x-request-id': chosen },
+    });
+    expect(ctx.lines.join('')).not.toContain(chosen);
   });
 
   it('logs one line per request: method, route, status, duration and request ID', async () => {

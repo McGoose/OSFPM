@@ -1,6 +1,5 @@
-import type { Database } from '@osfpm/core/src/db/client.js';
 import type { TestTarget } from '@osfpm/core/src/db/test-support.js';
-import { buildApp, type App } from './app.js';
+import { buildApp } from './app.js';
 import type { LogLevel } from './config.js';
 
 /** Matches a UUIDv7, the form of every request ID. */
@@ -9,7 +8,7 @@ export const UUID_V7 =
 
 /**
  * An app over a throwaway, empty database on `target`, with the log lines it
- * writes collected in `logs`. The API serves no table yet, so the database is
+ * writes collected in `lines`. The API serves no table yet, so the database is
  * not migrated. Only tests import this file.
  */
 export async function createTestApp(
@@ -40,9 +39,3 @@ export async function createTestApp(
     },
   };
 }
-
-/** The pieces of a test app a test needs to read. */
-export type TestApp = {
-  readonly app: App;
-  readonly database: Database;
-};

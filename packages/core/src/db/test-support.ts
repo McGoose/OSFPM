@@ -142,7 +142,7 @@ function deferred() {
 }
 
 /** How many sessions of the test database are waiting for a lock right now. */
-export async function lockWaiters(db: SchemaDb): Promise<number> {
+async function lockWaiters(db: SchemaDb): Promise<number> {
   const result = await db.execute<{ waiting: number }>(
     sql`select count(*)::int as waiting
         from pg_stat_activity
