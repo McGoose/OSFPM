@@ -82,14 +82,28 @@ describe.skipIf(postgres === undefined)(
 
     it('waits while another session holds the lock, migrates nothing meanwhile, and goes on when it is let go', async () => {
       const world = await emptyDatabase();
+      // Another server, half way through its own migration.
+      const holder = await world.pool.connect();
+      let held = true;
+      /** Lets go of the lock and gives the connection back, once, whatever the test did. */
+      const letGo = async () => {
+        if (!held) return;
+        held = false;
+        try {
+          await holder.query('select pg_advisory_unlock($1::bigint)', [
+            MIGRATION_LOCK_KEY,
+          ]);
+        } finally {
+          holder.release();
+        }
+      };
+      let migrating: Promise<void> | undefined;
       try {
-        // Another server, half way through its own migration.
-        const holder = await world.pool.connect();
         await holder.query('select pg_advisory_lock($1::bigint)', [
           MIGRATION_LOCK_KEY,
         ]);
         let finished = false;
-        const migrating = migrate(world.database).then(() => {
+        migrating = migrate(world.database).then(() => {
           finished = true;
         });
 
@@ -102,10 +116,7 @@ describe.skipIf(postgres === undefined)(
         expect(finished).toBe(false);
         expect(await world.tableExists('session')).toBe(false);
 
-        await holder.query('select pg_advisory_unlock($1::bigint)', [
-          MIGRATION_LOCK_KEY,
-        ]);
-        holder.release();
+        await letGo();
         await migrating;
 
         expect(finished).toBe(true);
@@ -115,6 +126,10 @@ describe.skipIf(postgres === undefined)(
         // lock can be taken again at once.
         expect(await world.lockIsFree()).toBe(true);
       } finally {
+        // If an assertion failed above, the holder must not stay checked out:
+        // closing the pool would wait for it until the test timed out.
+        await letGo();
+        await migrating?.catch(() => undefined);
         await world.cleanup();
       }
     }, 60_000);
