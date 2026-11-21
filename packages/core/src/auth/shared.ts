@@ -101,8 +101,7 @@ export async function lockUser(
     .select({ id: user.id, status: user.status })
     .from(user)
     .where(and(eq(user.id, userId), isNull(user.deletedAt)))
-    .limit(1)
-    .for('no key update');
+    .limit(1);
   if (!row) throw new AuthStateError('user-not-found');
   return row;
 }
