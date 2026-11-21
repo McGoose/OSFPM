@@ -29,16 +29,19 @@ curl http://127.0.0.1:3000/api/v1/meta
 
 ## Start-up
 
-The server does this, in this order, before it listens:
+The server does this, in this order:
 
 1. Opens the database. A PGlite data directory that cannot be opened stops the start.
-2. Runs pending migrations, unless `OSFPM_AUTO_MIGRATE` is `false`. With it off, the database must already be migrated, or step 3 fails.
-3. Syncs the permission catalogue: every `*_PERMISSIONS` list the core declares goes into the `permission` table, in one transaction, so all of them or none. The lists are in `src/startup.ts`; a test fails when the core declares one that is not there.
-4. Listens.
+2. **Listens.** From here a supervisor's probe finds a live process.
+3. Runs pending migrations, unless `OSFPM_AUTO_MIGRATE` is `false`. With it off, the database must already be migrated, or step 4 fails.
+4. Syncs the permission catalogue: every `*_PERMISSIONS` list the core declares goes into the `permission` table, in one transaction, so all of them or none. The lists are in `src/startup.ts`; a test fails when the core declares one that is not there.
+5. Opens every route.
 
-`GET /health/ready` answers 503 until steps 2 and 3 have finished, and then also checks that the database answers. Because the server listens last, a probe sees a refused connection while migrations run; the 503 keeps an app that is started some other way from reporting ready too early.
+**While it starts (steps 3 and 4),** `GET /health` answers 200, `GET /health/ready` answers 503, and every other route answers a 503 problem `starting`: the same for a caller with a cookie and one without, before the session, the Origin or the rate limit are looked at, because the database may not be migrated or reachable yet. An unknown path is still a 404. A route that does not say `config: { availableWhileStarting: true }` waits, so a new route cannot be open by accident; only the two health routes say it. `/health/ready` keeps answering 503 after that until a trivial query to the database is answered.
 
-A start-up failure stops the process with exit code 1. A `PermissionSyncError` (a permission was flagged sensitive while an organisation role still holds an `all-projects` grant of it) prints its own message, which names the permission and the roles and says how to fix it, and no stack. Any other failure, including an unreachable PostgreSQL server, prints a generic line with the error's class name and system code, plus one log line with no request in it that holds the class name only: driver messages can hold SQL and connection details. The server does not retry; a supervisor restarts it.
+**If the database cannot be reached** (the connection is refused, reset or times out, the host is not found, or PostgreSQL is starting up or shutting down), the server does not exit. It tries steps 3 and 4 again after a wait of one second, doubling after each failure up to thirty seconds, for as long as it takes (`STARTUP_RETRY` in `src/startup.ts`), and stays at 503. It writes one warning line per attempt: the attempt number, the wait, the error's class and its short system code, such as `ECONNREFUSED`. A line never holds the host, the URL or the password. Migrations are safe to run again. A stop signal ends the waiting at once.
+
+**Any other failure stops start-up.** A wrong password, a database that does not exist, a failed migration and a `PermissionSyncError` are not cured by waiting. The server writes one log line with no request in it that holds the error's class name only, prints a message and exits with code 1. A `PermissionSyncError` (a permission was flagged sensitive while an organisation role still holds an `all-projects` grant of it) prints its own message, which names the permission and the roles and says how to fix it, and no stack. Any other failure prints a generic line with the error's class name and system code: driver messages can hold SQL and connection details.
 
 ## Configuration
 
@@ -84,7 +87,7 @@ All routes are under `/api/v1`.
 
 | Route                              | Auth                   | Answer                                                                                                                                                                                                                       |
 | ---------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /api/v1/health`               | none                   | `200 {"status":"ok"}`: the process is alive                                                                                                                                                                                  |
+| `GET /api/v1/health`               | none                   | `200 {"status":"ok"}`: the process is alive, also while it starts                                                                                                                                                            |
 | `GET /api/v1/health/ready`         | none                   | `200 {"status":"ready"}` when start-up has finished and the database answers a trivial query, else a 503                                                                                                                     |
 | `GET /api/v1/meta`                 | none                   | Product name (`OSFPM`), package name and version, API version `v1`, and the database kind. Nothing secret                                                                                                                    |
 | `GET /api/v1/openapi.json`         | none                   | The OpenAPI 3.1 document, generated from the Zod route schemas. There is no web UI                                                                                                                                           |
@@ -103,19 +106,19 @@ Every error is `application/problem+json` (RFC 9457) with `type` (`/problems/<co
 
 The one table in `src/errors.ts` (`PROBLEM_TABLE`) maps core errors by class:
 
-| Error                                                                                                    | Status |
-| -------------------------------------------------------------------------------------------------------- | ------ |
-| Request validation (Zod); lists the failing field paths, never the values or a record key (shown as `*`) | 400    |
-| `AuthInputError`: fixed text that names no field and no value                                            | 400    |
-| No usable session (`AuthenticationRequiredError`), and `AuthStateError` whatever its reason: one text    | 401    |
-| `AccessDeniedError` and the other access-denied errors                                                   | 403    |
-| `OriginMismatchError`: a request that changes data has a session cookie and a wrong or missing `Origin`  | 403    |
-| `RecordNotFoundError`, and an unknown route                                                              | 404    |
-| `VersionConflictError`, `RecordStateError` and its subclasses                                            | 409    |
-| The module input errors, such as `ContractInputError` and `CostLineInputError`                           | 422    |
-| `RateLimitedError`: too many requests from one address, with `Retry-After`                               | 429    |
-| The service cannot answer, such as the database being down or start-up not finished                      | 503    |
-| Anything else, including `RecordWriteError`: a generic message and the request ID only                   | 500    |
+| Error                                                                                                                                    | Status |
+| ---------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| Request validation (Zod); lists the failing field paths, never the values or a record key (shown as `*`)                                 | 400    |
+| `AuthInputError`: fixed text that names no field and no value                                                                            | 400    |
+| No usable session (`AuthenticationRequiredError`), and `AuthStateError` whatever its reason: one text                                    | 401    |
+| `AccessDeniedError` and the other access-denied errors                                                                                   | 403    |
+| `OriginMismatchError`: a request that changes data has a session cookie and a wrong or missing `Origin`                                  | 403    |
+| `RecordNotFoundError`, and an unknown route                                                                                              | 404    |
+| `VersionConflictError`, `RecordStateError` and its subclasses                                                                            | 409    |
+| The module input errors, such as `ContractInputError` and `CostLineInputError`                                                           | 422    |
+| `RateLimitedError`: too many requests from one address, with `Retry-After`                                                               | 429    |
+| The service cannot answer, such as the database being down; `StartingError` (code `starting`) for a route asked before start-up finished | 503    |
+| Anything else, including `RecordWriteError`: a generic message and the request ID only                                                   | 500    |
 
 Fastify's own refusals of a malformed request (bad JSON, a body over the limit, an unsupported media type, a malformed URL) are 400, 413 and 415 problems with fixed text.
 

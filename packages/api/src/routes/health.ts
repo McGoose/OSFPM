@@ -52,7 +52,7 @@ export const healthRoutes: FastifyPluginAsyncZod = (app) => {
   app.get(
     '/health',
     {
-      config: { auth: 'none' },
+      config: { auth: 'none', availableWhileStarting: true },
       schema: {
         summary: 'Liveness',
         description: 'The process is alive. It does not check the database.',
@@ -65,7 +65,7 @@ export const healthRoutes: FastifyPluginAsyncZod = (app) => {
   app.get(
     '/health/ready',
     {
-      config: { auth: 'none' },
+      config: { auth: 'none', availableWhileStarting: true },
       schema: {
         summary: 'Readiness',
         description:

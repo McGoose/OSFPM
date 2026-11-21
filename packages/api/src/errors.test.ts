@@ -37,6 +37,7 @@ import {
   PROBLEM_TABLE,
   RateLimitedError,
   ServiceUnavailableError,
+  StartingError,
 } from './errors.js';
 import { createTestApp, UUID_V7 } from './test-support.js';
 
@@ -96,6 +97,7 @@ const fixtures = new Map<abstract new (...args: never[]) => Error, () => Error>(
     [AuthStateError, () => new AuthStateError('user-disabled')],
     [OriginMismatchError, () => new OriginMismatchError()],
     [RateLimitedError, () => new RateLimitedError()],
+    [StartingError, () => new StartingError()],
     [
       SensitivePayloadInvalidError,
       () =>

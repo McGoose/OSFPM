@@ -5,7 +5,12 @@ import { createDatabase, type Database } from '@osfpm/core/src/db/client.js';
 import { buildApp, type App } from './app.js';
 import { ConfigError, loadConfig, type Config } from './config.js';
 import { errorClassName, type LoggerSettings } from './logging.js';
-import { runStartup, type StartupSteps } from './startup.js';
+import {
+  runStartup,
+  StartupAbortedError,
+  type StartupRetry,
+  type StartupSteps,
+} from './startup.js';
 
 /** The signals that stop the server. The process is the usual source. */
 type Signal = 'SIGINT' | 'SIGTERM';
@@ -33,16 +38,27 @@ export type StartOptions = {
   readonly logStream?: LoggerSettings['stream'];
   /** Replaces the migration and the permission sync, to watch or fail them. */
   readonly startupSteps?: StartupSteps;
+  /** Replaces the waits between attempts while the database is unreachable. */
+  readonly startupRetry?: StartupRetry;
 };
 
-/** A server that is listening. */
+/** A server that is listening. It may still be starting: see `ready`. */
 export type RunningServer = {
   readonly app: App;
   readonly database: Database;
   /**
-   * Stops accepting requests, lets requests in flight finish, closes the app
-   * and then the database. Safe to call more than once: later calls wait for
-   * the first.
+   * Settles when start-up is over. Resolves once the migrations and the
+   * permission sync have finished and the server answers every route. Rejects
+   * with the error when start-up fails for a reason that retrying does not cure
+   * (the server keeps listening, answering 503 `starting`, until it is
+   * stopped), and with a `StartupAbortedError` when `stop` ended it first.
+   * Awaiting it is optional: a rejection nobody awaits is not unhandled.
+   */
+  readonly ready: Promise<void>;
+  /**
+   * Ends start-up if it is still going, stops accepting requests, lets
+   * requests in flight finish, closes the app and then the database. Safe to
+   * call more than once: later calls wait for the first.
    */
   readonly stop: () => Promise<void>;
 };
@@ -59,22 +75,26 @@ async function quietly(action: () => PromiseLike<unknown>): Promise<void> {
 }
 
 /**
- * Opens the database, builds the app, runs pending migrations (unless
- * `config.autoMigrate` is false), syncs the permission lists (see `runStartup`)
- * and only then listens. On SIGTERM or SIGINT it shuts down in order: stop
- * accepting requests, close the app, close the database, then exit with code
- * 0, or 1 if shutdown failed or took longer than the limit.
+ * Opens the database, builds the app and listens, and then, in the background,
+ * runs pending migrations (unless `config.autoMigrate` is false) and syncs the
+ * permission lists (see `runStartup`). The returned server's `ready` settles
+ * when that is over. On SIGTERM or SIGINT it shuts down in order: end start-up
+ * if it is still going, stop accepting requests, close the app, close the
+ * database, then exit with code 0, or 1 if shutdown failed or took longer than
+ * the limit.
  *
- * Anything that fails before the server listens stops it, after one log line
- * with no request in it that names the error's class and nothing else. That
- * includes a PGlite data directory that cannot be opened, a failed migration,
- * a `PermissionSyncError` and an unreachable PostgreSQL server, whose first
- * query is the migration or the sync. A supervisor restarts the process; the
- * server does not retry.
+ * It listens first so a supervisor's probe finds a live process while the
+ * migrations run. Until start-up has finished, `/health` answers, `/health/ready`
+ * is a 503, and every other route is a 503 problem `starting`. If the database
+ * cannot be reached, start-up waits and tries again (see `STARTUP_RETRY`)
+ * instead of stopping the server. A failure that waiting does not cure, such as
+ * a failed migration or a `PermissionSyncError`, is logged once, as one line
+ * with no request in it that names the error's class and nothing else, and
+ * rejects `ready`; the server then keeps answering 503 `starting` until it is
+ * stopped. The command-line entry stops it and exits with code 1.
  *
- * The server listens last, so a probe sees no connection while migrations run.
- * Readiness answers 503 until they and the sync have finished, which keeps an
- * app that was started another way from reporting ready too early.
+ * A PGlite data directory that cannot be opened fails here, before the server
+ * listens, because it is a local fault that no retry will fix.
  *
  * The signal listeners stay registered through shutdown. With none left, Node
  * restores the default action, and a second Ctrl+C, or a supervisor sending
@@ -82,7 +102,7 @@ async function quietly(action: () => PromiseLike<unknown>): Promise<void> {
  * signal that arrives during shutdown is ignored.
  *
  * @throws The listen or open error, for example when the port is taken, after
- * closing the database it had opened. Nothing is left running.
+ * one log line and closing the database it had opened. Nothing is left running.
  */
 export async function startServer(
   config: Config,
@@ -107,11 +127,6 @@ export async function startServer(
     if (config.database.driver === 'pglite') {
       await database.db.execute('select 1');
     }
-    await runStartup(
-      app,
-      { autoMigrate: config.autoMigrate },
-      options.startupSteps,
-    );
     await app.listen({ host: config.host, port: config.port });
   } catch (error) {
     // The class name only (see `loggerOptions`): a driver message can hold
@@ -122,9 +137,32 @@ export async function startServer(
     throw error;
   }
 
+  // Start-up runs in the background. `stop` aborts it, so a wait between
+  // attempts ends at once and a step that fails because the database is being
+  // closed is not reported as a failure.
+  const startup = new AbortController();
+  const ready = runStartup(
+    app,
+    { autoMigrate: config.autoMigrate },
+    options.startupSteps,
+    {
+      signal: startup.signal,
+      ...(options.startupRetry ? { retry: options.startupRetry } : {}),
+    },
+  );
+  // Handled here, so a caller that never awaits `ready` does not crash the
+  // process with an unhandled rejection. Awaiting it still rejects.
+  ready.catch((error: unknown) => {
+    if (error instanceof StartupAbortedError) return;
+    // The class name only (see `loggerOptions`): a driver message can hold
+    // SQL, and a PermissionSyncError names organisation ids.
+    app.log.fatal({ err: error }, 'the server could not start');
+  });
+
   let stopping: Promise<void> | undefined;
   const stop = () => {
     stopping ??= (async () => {
+      startup.abort();
       try {
         await app.close();
       } finally {
@@ -161,11 +199,12 @@ export async function startServer(
   }
   for (const signal of SIGNALS) signals.on(signal, onSignal);
 
-  return { app, database, stop };
+  return { app, database, ready, stop };
 }
 
 /**
- * What the command-line entry prints when start-up fails. A
+ * What the command-line entry prints when start-up fails, in `startServer` or
+ * in the `ready` it returns. A
  * `PermissionSyncError` prints its own message and no stack: it names the
  * permission and the roles to fix, and holds no values. Anything else prints
  * the error's class name and system code only, because driver messages can
@@ -180,7 +219,10 @@ export function describeStartupFailure(error: unknown): string {
 /**
  * The command-line entry. An invalid configuration prints its problems and
  * stops with code 1. They name variables and never show values. A failure to
- * start prints `describeStartupFailure` and stops with code 1.
+ * start, whether the server could not listen or start-up failed for a reason
+ * waiting does not cure, prints `describeStartupFailure`, stops the server and
+ * exits with code 1. While the database is unreachable it neither fails nor
+ * exits: it waits, and a stop signal ends it.
  */
 async function main(): Promise<void> {
   let config: Config;
@@ -194,11 +236,22 @@ async function main(): Promise<void> {
     }
     throw error;
   }
+  let server: RunningServer;
   try {
-    await startServer(config);
+    server = await startServer(config);
   } catch (error) {
     console.error(describeStartupFailure(error));
     process.exitCode = 1;
+    return;
+  }
+  try {
+    await server.ready;
+  } catch (error) {
+    // Stopped by a signal: the signal handler is shutting the server down.
+    if (error instanceof StartupAbortedError) return;
+    console.error(describeStartupFailure(error));
+    process.exitCode = 1;
+    await quietly(() => server.stop());
   }
 }
 

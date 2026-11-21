@@ -11,7 +11,11 @@ import type { Database } from '@osfpm/core/src/db/client.js';
 import { newId } from '@osfpm/core/src/db/ids.js';
 import { API_PREFIX } from './api-version.js';
 import { authPlugin } from './auth/plugin.js';
-import { handleFrameworkError, registerErrorHandling } from './errors.js';
+import {
+  handleFrameworkError,
+  registerErrorHandling,
+  StartingError,
+} from './errors.js';
 import {
   createLogController,
   loggerOptions,
@@ -36,6 +40,14 @@ export type Readiness = {
 };
 
 declare module 'fastify' {
+  interface FastifyContextConfig {
+    /**
+     * The route answers while the server is still starting. Only the two health
+     * routes say so; every other route is a 503 problem `starting` until
+     * start-up has finished.
+     */
+    availableWhileStarting?: boolean;
+  }
   interface FastifyInstance {
     /** The database every route plugin works on. The caller of `buildApp` owns it. */
     db: Database;
@@ -70,7 +82,8 @@ export type BuildAppOptions = {
  * answered as a problem response (see `registerErrorHandling`).
  *
  * The app starts not ready: it does not migrate or sync anything itself (see
- * `runStartup`), and `/health/ready` answers 503 until that has run.
+ * `runStartup`). Until that has run, `/health/ready` answers 503 and every
+ * route but `/health` and `/health/ready` answers a 503 problem `starting`.
  *
  * Every request gets a UUIDv7 from the core's generator. A request ID sent by
  * the caller is ignored, so a caller cannot choose what appears in the logs.
@@ -116,6 +129,23 @@ export function buildApp(options: BuildAppOptions) {
   app.addHook('onRequest', (request, reply, done) => {
     reply.header('x-request-id', request.id);
     done();
+  });
+
+  // Before the auth plugin and the rate limiter, which look in the database,
+  // and before any route does: while the server starts, that database may be
+  // unmigrated or out of reach. A route that does not say
+  // `availableWhileStarting` waits, so a new route cannot be open by accident.
+  // An unknown route has nothing to protect and is the usual 404.
+  app.addHook('onRequest', (request, _reply, done) => {
+    if (
+      request.is404 ||
+      app.readiness.isReady() ||
+      request.routeOptions.config.availableWhileStarting === true
+    ) {
+      done();
+      return;
+    }
+    done(new StartingError());
   });
 
   // The cookie parser and the rate limiter first, then the auth plugin that

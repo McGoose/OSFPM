@@ -38,6 +38,19 @@ export class ServiceUnavailableError extends Error {
 }
 
 /**
+ * The server is listening but has not finished starting: the migrations and the
+ * permission sync are still to do, or the database cannot be reached yet. Maps
+ * to a 503 problem `starting` for every route but the two health routes. The
+ * message and the response say nothing about why.
+ */
+export class StartingError extends Error {
+  constructor() {
+    super('The server has not finished starting');
+    this.name = 'StartingError';
+  }
+}
+
+/**
  * The route needs a signed-in user and the request has none. Maps to a 401.
  * The message is the same whatever the reason (no cookie, an unknown token, an
  * expired or revoked session, a disabled user), so a caller learns nothing
@@ -235,6 +248,13 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
     code: 'invalid-input',
     title: 'Invalid input',
     detail: null,
+  },
+  {
+    errorClass: StartingError,
+    status: 503,
+    code: 'starting',
+    title: 'Starting',
+    detail: 'The server is starting. Try again shortly.',
   },
   {
     errorClass: ServiceUnavailableError,
