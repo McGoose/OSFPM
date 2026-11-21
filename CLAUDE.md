@@ -42,10 +42,14 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Permission checks run only on the server through the policy engine.
 - Organisation role grants reach projects only with `reach = 'all-projects'`, never for sensitive permissions.
 - Every endpoint gets a test proving 403 without access and no sensitive fields without `sensitive:read`.
-- Routes validate input with Zod schemas and never return core errors directly; the error table in `packages/api/src/errors.ts` maps them.
 - A string from a caller never indexes a plain object and never goes through `in`. Use Object.hasOwn, a Map, or check it against the constant list first.
 - A guard that checks for live rows pointing at a record locks them (FOR UPDATE on the record, FOR SHARE on the reference) so a concurrent write can't slip past it.
 - Lock order: take the project's change counter (lockProjectChanges) before any row lock. Every writer follows this order, or concurrent writes can deadlock.
+
+## Code rules
+
+- Routes validate input with Zod schemas and never return core errors directly; the error table in `packages/api/src/errors.ts` maps them.
+- Log lines use the logger's known keys (req, res, err) or plain scalar fields; never log whole objects or request data.
 
 ## Comments and docs
 
