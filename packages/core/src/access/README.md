@@ -6,7 +6,8 @@ Permission checks and the error a denied call throws. They run on the server onl
 
 - `hasProjectPermission`, `hasOrganisationPermission` and `hasScopedPermission` return true or false for a user, a scope and a permission key.
 - `AccessDeniedError` is thrown by a service for a denied call. The layer above maps it to a 403.
-- `syncPermissions` and `PermissionDefinition` fill the `permission` catalogue from the keys a module declares. Nothing calls it at start-up yet. It throws `PermissionSyncError` when a key is flagged sensitive while organisation roles hold `all-projects` grants of it (see below).
+- `PERMISSION_LISTS` (`permission-lists.ts`) is the one registry of every permission list a module declares. A module that adds a `*_PERMISSIONS` list adds it there; `permission-lists.test.ts` scans the core and fails when one is missing.
+- `syncPermissions` and `PermissionDefinition` fill the `permission` catalogue from the keys a module declares. The API server calls it for every list in `PERMISSION_LISTS` when it starts (`packages/api/src/startup.ts`). It throws `PermissionSyncError` when a key is flagged sensitive while organisation roles hold `all-projects` grants of it (see below).
 - `test-fixtures.ts` seeds organisations, users and grants for tests, using invented people from _The Last Withdrawal_.
 
 **Organisation roles in projects**
@@ -33,4 +34,4 @@ The database enforces the limits, all with SQLSTATE `23514` and the name in the 
 - Pass a scope to `AccessDeniedError` only when the caller named it, as a create or a list does. A call by id leaves it out, so an unknown id is refused like a forbidden one.
 - Flag a permission `grantsSensitive` when it exposes sensitive data.
 
-**Tests:** `permissions.test.ts` (`syncPermissions`, including `PermissionSyncError`, and `hasProjectPermission` through project membership), `project-permission-reach.test.ts` (organisation roles in projects), `reach-concurrency.test.ts` (an all-projects grant racing the sensitive flag on two real connections; PostgreSQL only, skipped on PGlite), `organisation-permission.test.ts`, `scoped-permission.test.ts` and `access-denied-error.test.ts`. The `reach` constraints and triggers are tested in `src/db/schema.test.ts`, and `src/accounts/organisation-role-reach.test.ts` goes through a real service.
+**Tests:** `permission-lists.test.ts` (the registry holds every declared list, no key twice), `permissions.test.ts` (`syncPermissions`, including `PermissionSyncError`, and `hasProjectPermission` through project membership), `project-permission-reach.test.ts` (organisation roles in projects), `reach-concurrency.test.ts` (an all-projects grant racing the sensitive flag on two real connections; PostgreSQL only, skipped on PGlite), `organisation-permission.test.ts`, `scoped-permission.test.ts` and `access-denied-error.test.ts`. The `reach` constraints and triggers are tested in `src/db/schema.test.ts`, and `src/accounts/organisation-role-reach.test.ts` goes through a real service.

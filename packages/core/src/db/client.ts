@@ -24,10 +24,14 @@ export type DbConfig =
     }
   | { readonly driver: 'pglite'; readonly client: PGlite };
 
-/** A PostgreSQL handle over a node-postgres pool. `close` ends the pool. */
+/**
+ * A PostgreSQL handle over a node-postgres pool. `close` ends the pool. `db`
+ * also gives the pool as `$client`, which the migrator needs to take a
+ * connection and hold its lock on it.
+ */
 export type PostgresDb = {
   readonly driver: 'postgres';
-  readonly db: NodePgDatabase<typeof schema>;
+  readonly db: NodePgDatabase<typeof schema> & { readonly $client: pg.Pool };
   readonly close: () => Promise<void>;
 };
 

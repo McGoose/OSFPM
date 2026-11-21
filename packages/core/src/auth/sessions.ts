@@ -45,10 +45,14 @@ export const SESSION_DEFAULTS = {
 /**
  * Why a session was revoked, recorded on the session and in the audit event.
  * A fixed list, so a caller cannot put free text, and with it a secret, into
- * the audit trail.
+ * the audit trail. `logout` is a user ending the session they are on;
+ * `user-revoked` is a user ending another of their own sessions, from the list
+ * of where they are signed in. `revoked_reason` is plain text, so a new reason
+ * needs no migration.
  */
 export const SESSION_REVOKE_REASONS = [
   'logout',
+  'user-revoked',
   'user-disabled',
   'password-changed',
   'recovery-used',

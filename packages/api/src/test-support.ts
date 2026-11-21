@@ -7,23 +7,52 @@ export const UUID_V7 =
   /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 /**
+ * The public origin of every test app: the only `Origin` its requests with a
+ * session cookie may carry. An invented host, never a real one.
+ */
+export const TEST_PUBLIC_ORIGIN = 'https://osfpm.example.test';
+
+/**
  * An app over a throwaway, empty database on `target`, with the log lines it
- * writes collected in `lines`. The API serves no table yet, so the database is
- * not migrated. Only tests import this file.
+ * writes collected in `lines`. The database is not migrated, and no start-up
+ * runs, so the app is marked ready by hand where `runStartup` would do it.
+ * Only tests import this file.
  */
 export async function createTestApp(
   target: TestTarget,
-  options: { readonly logLevel?: LogLevel } = {},
+  options: {
+    readonly logLevel?: LogLevel;
+    /** Proxies whose `X-Forwarded-For` the app believes. None by default. */
+    readonly trustedProxies?: readonly string[];
+    /**
+     * The coarse limit per address. A test app gets a limit it will not reach by
+     * default, because a test sends far more requests than a client from one
+     * address; a test of the limit passes `ADDRESS_RATE_LIMIT`.
+     */
+    readonly addressRateLimit?: {
+      readonly max: number;
+      readonly timeWindowMs: number;
+    };
+  } = {},
 ) {
   const { database, cleanup } = await target.create();
   const lines: string[] = [];
   const app = buildApp({
     db: database,
+    publicOrigin: TEST_PUBLIC_ORIGIN,
+    addressRateLimit: options.addressRateLimit ?? {
+      max: 1_000_000,
+      timeWindowMs: 60_000,
+    },
+    ...(options.trustedProxies === undefined
+      ? {}
+      : { trustedProxies: options.trustedProxies }),
     logger: {
       level: options.logLevel ?? 'info',
       stream: { write: (line) => void lines.push(line) },
     },
   });
+  app.readiness.markReady();
   return {
     app,
     database,

@@ -23,6 +23,7 @@ import {
   VersionConflictError,
 } from '@osfpm/core/src/db/write.js';
 import { testTargets } from '@osfpm/core/src/db/test-support.js';
+import { InstallationMissingError } from '@osfpm/core/src/installation/server-id.js';
 import { LegalHoldInputError } from '@osfpm/core/src/legal-hold/service.js';
 import {
   ComplianceReportDeniedError,
@@ -31,9 +32,13 @@ import {
 } from '@osfpm/core/src/sensitive/service.js';
 import { API_PREFIX } from './api-version.js';
 import {
+  AuthenticationRequiredError,
   INTERNAL_ERRORS,
+  OriginMismatchError,
   PROBLEM_TABLE,
+  RateLimitedError,
   ServiceUnavailableError,
+  StartingError,
 } from './errors.js';
 import { createTestApp, UUID_V7 } from './test-support.js';
 
@@ -88,6 +93,12 @@ const fixtures = new Map<abstract new (...args: never[]) => Error, () => Error>(
       ServiceUnavailableError,
       () => new ServiceUnavailableError(`the database at db.internal is down`),
     ],
+    [AuthenticationRequiredError, () => new AuthenticationRequiredError()],
+    [AuthInputError, () => new AuthInputError('method')],
+    [AuthStateError, () => new AuthStateError('user-disabled')],
+    [OriginMismatchError, () => new OriginMismatchError()],
+    [RateLimitedError, () => new RateLimitedError()],
+    [StartingError, () => new StartingError()],
     [
       SensitivePayloadInvalidError,
       () =>
@@ -110,8 +121,7 @@ const internalFixtures = new Map<
   ],
   [MissingActingUserError, () => new MissingActingUserError('token')],
   [PermissionSyncError, () => new PermissionSyncError([])],
-  [AuthInputError, () => new AuthInputError('method')],
-  [AuthStateError, () => new AuthStateError('user-disabled')],
+  [InstallationMissingError, () => new InstallationMissingError()],
 ]);
 
 /** Everything a test route can throw, by name: the fixtures, the subclasses, and a few odd ones. */
@@ -120,6 +130,13 @@ const thrown = new Map<string, () => unknown>([
     ([errorClass, make]) => [errorClass.name, make] as const,
   ),
   ['AccountHasChildrenError', () => new AccountHasChildrenError(ID)],
+  // Each reason the auth services give, to show none of them reaches a caller.
+  ['AuthStateError-user-not-found', () => new AuthStateError('user-not-found')],
+  [
+    'AuthStateError-installation-missing',
+    () => new AuthStateError('installation-missing'),
+  ],
+  ['AuthStateError-setup-complete', () => new AuthStateError('setup-complete')],
   ['AccountInUseError', () => new AccountInUseError('account', ID)],
   [
     'AccountInUseError-stop-posting',
@@ -140,7 +157,10 @@ const testRoutes: FastifyPluginAsync = (app) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
   typed.get(
     '/test/throw/:name',
-    { schema: { params: z.object({ name: z.string() }) } },
+    {
+      config: { auth: 'none' },
+      schema: { params: z.object({ name: z.string() }) },
+    },
     (request) => {
       const make = thrown.get(request.params.name);
       if (make === undefined) throw new Error('no such test error');
@@ -150,6 +170,7 @@ const testRoutes: FastifyPluginAsync = (app) => {
   typed.post(
     '/test/validate',
     {
+      config: { auth: 'none' },
       schema: {
         querystring: z.object({ page: z.coerce.number().int() }),
         body: z.object({
@@ -164,6 +185,7 @@ const testRoutes: FastifyPluginAsync = (app) => {
   typed.post(
     '/test/record',
     {
+      config: { auth: 'none' },
       schema: {
         body: z.object({
           attributes: z.record(z.string(), z.object({ amount: z.number() })),
@@ -280,6 +302,57 @@ describe.each(testTargets)('problem responses on $name', (target) => {
           `${name} passes its message on, but its JSDoc does not say it carries no ids or values`,
         ).toMatch(/carries no|never what/i);
       }
+    });
+
+    describe('the auth errors', () => {
+      it('maps AuthInputError to a 400 with fixed text that names no field and no value', async () => {
+        const response = await throwing('AuthInputError');
+        const body = expectProblem(response, {
+          status: 400,
+          code: 'bad-request',
+          instance: `${API_PREFIX}/test/throw/AuthInputError`,
+        });
+        expect(body.detail).toBe('A value in the request is not accepted.');
+        // Its own message is "Invalid method": the field name stays out.
+        expect(response.body).not.toContain('Invalid');
+      });
+
+      it('maps AuthStateError to the 401 of a missing session, word for word, whatever the reason', async () => {
+        const answers = new Set<string>();
+        for (const name of [
+          'AuthenticationRequiredError',
+          'AuthStateError',
+          'AuthStateError-user-not-found',
+          'AuthStateError-installation-missing',
+          'AuthStateError-setup-complete',
+        ]) {
+          const response = await throwing(name);
+          const body = expectProblem(response, {
+            status: 401,
+            code: 'authentication-required',
+            instance: `${API_PREFIX}/test/throw/${name}`,
+          });
+          answers.add(
+            JSON.stringify({
+              ...body,
+              requestId: undefined,
+              instance: undefined,
+            }),
+          );
+          // The reason is for the audit trail alone. The `instance` is left
+          // out: it repeats the path of this test route, which is named after it.
+          expect(JSON.stringify({ ...body, instance: undefined })).not.toMatch(
+            /disabled|not-found|installation|setup|refused/i,
+          );
+        }
+        expect(answers.size).toBe(1);
+      });
+
+      it('no longer lists either of them as a deliberate 500', () => {
+        const listed = INTERNAL_ERRORS.map((entry) => entry.errorClass);
+        expect(listed).not.toContain(AuthInputError);
+        expect(listed).not.toContain(AuthStateError);
+      });
     });
 
     it('maps the subclasses of a row to that row', async () => {
