@@ -1,7 +1,8 @@
-import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { syncPermissions } from '../access/permission-sync.js';
 import {
+  base,
   grantOnProject,
   ORIGIN,
   seedOrganisation,
@@ -14,9 +15,20 @@ import {
   type AccountContext,
 } from '../accounts/service.js';
 import type { Database, SchemaDb } from '../db/client.js';
-import { account, costLine } from '../db/schema/index.js';
+import {
+  account,
+  accountChart,
+  costLine,
+  project,
+} from '../db/schema/index.js';
 import { createMigratedDatabase, testTargets } from '../db/test-support.js';
-import type { Tx } from '../db/write.js';
+import {
+  insertRecord,
+  RecordWriteError,
+  updateRecord,
+  type Tx,
+  type WriteContext,
+} from '../db/write.js';
 import { COST_PERMISSIONS } from './permissions.js';
 import {
   CostLineInputError,
@@ -264,6 +276,230 @@ describe.skipIf(postgres === undefined)(
           );
         }
         expect(bookingWins + removalWins).toBe(12);
+      },
+    );
+  },
+);
+
+/**
+ * A change of a project's currency and a booking of a cost line, on two real
+ * connections. The database refuses the change while the project has live cost
+ * lines (`0022_project_currency_locked.sql`), and the cost line service prices a
+ * line against the project's currency under a share lock on the project, so
+ * whichever comes second must wait for the first and then see its result: either
+ * the line exists and the currency stays, or the currency has changed and the
+ * line, written in the old one, is refused. The currency changes through the
+ * write helper, as a project update does, so the test also shows that the two
+ * take their locks in an order that cannot deadlock. A loser must fail with its
+ * own clean refusal, never with a deadlock error. PostgreSQL only, as above.
+ */
+describe.skipIf(postgres === undefined)(
+  'a currency change and a booking at the same moment on PostgreSQL',
+  () => {
+    let database: Database;
+    let cleanup: () => Promise<void>;
+    const db = () => database.db;
+    const write: WriteContext = {
+      actor: { type: 'system', id: null },
+      originServer: ORIGIN,
+      clock: () => NOW,
+    };
+
+    beforeAll(async () => {
+      ({ database, cleanup } = await createMigratedDatabase(postgres!));
+      await syncPermissions(db(), COST_PERMISSIONS);
+    });
+    afterAll(async () => {
+      await cleanup();
+    });
+
+    /** A project in pounds with a postable account and a user who may book. */
+    async function world() {
+      const org = await seedOrganisation(database);
+      // Written through the helper, as a real project's records are. That gives
+      // the project its change counter, which every writer in it queues on.
+      const chart = await insertRecord(
+        db(),
+        accountChart,
+        {
+          ...base(org.organisationId),
+          projectId: org.projectId,
+          key: 'house',
+          name: 'House chart',
+        },
+        write,
+      );
+      const bookable = await insertRecord(
+        db(),
+        account,
+        {
+          ...base(org.organisationId),
+          chartId: chart.id,
+          code: '5100',
+          name: 'Camera',
+        },
+        write,
+      );
+      const userId = await seedUser(database);
+      await grantOnProject(
+        database,
+        org.organisationId,
+        org.projectId,
+        userId,
+        ['costs:edit'],
+      );
+      const costs: CostContext = {
+        userId,
+        originServer: ORIGIN,
+        clock: () => NOW,
+      };
+      return {
+        ...org,
+        // A line in pounds, which needs no rate while the project is in pounds
+        // and is refused once the project is in dollars.
+        book: (tx: Tx) =>
+          createCostLine(tx, costs, {
+            organisationId: org.organisationId,
+            projectId: org.projectId,
+            stage: 'budget',
+            sourceType: 'other',
+            accountId: bookable.id,
+            description: 'Camera hire',
+            territory: 'GB',
+            productionPhase: 'principal-photography',
+            amount: '1000.00',
+            currency: 'GBP',
+          }),
+        changeCurrency: (tx: Tx) =>
+          updateRecord(
+            tx,
+            project,
+            org.projectId,
+            1,
+            { currency: 'USD' },
+            write,
+          ),
+      };
+    }
+
+    const currencyOf = async (projectId: string) =>
+      (
+        await db()
+          .select({ currency: project.currency })
+          .from(project)
+          .where(eq(project.id, projectId))
+      )[0]!.currency;
+
+    /**
+     * How many live cost lines of the organisation are priced in a currency
+     * other than their project's: a line with no rate must be in the project's
+     * currency, and a line with a rate must not be.
+     */
+    const mispricedLines = async (organisationId: string) => {
+      const [row] = await db()
+        .select({ n: sql<number>`count(*)::int` })
+        .from(costLine)
+        .innerJoin(
+          project,
+          and(
+            eq(project.organisationId, costLine.organisationId),
+            eq(project.id, costLine.projectId),
+          ),
+        )
+        .where(
+          and(
+            eq(costLine.organisationId, organisationId),
+            isNull(costLine.deletedAt),
+            or(
+              and(
+                isNull(costLine.fxRate),
+                ne(costLine.currency, project.currency),
+              ),
+              and(
+                isNotNull(costLine.fxRate),
+                eq(costLine.currency, project.currency),
+              ),
+            ),
+          ),
+        );
+      return Number(row!.n);
+    };
+
+    const succeeded = (outcomes: PromiseSettledResult<unknown>[]) =>
+      outcomes.filter((outcome) => outcome.status === 'fulfilled').length;
+
+    /** A change that lost must have been refused by the currency lock, not by a deadlock or anything else. */
+    const expectRefusedByTheLock = (outcome: PromiseSettledResult<unknown>) => {
+      expect(outcome.status).toBe('rejected');
+      const reason = (outcome as PromiseRejectedResult).reason as unknown;
+      expect(reason).toBeInstanceOf(RecordWriteError);
+      expect(reason).toMatchObject({
+        code: '23514',
+        constraint: 'project_currency_locked',
+      });
+    };
+
+    /** A booking that lost must have been refused by the service for its currency, not by a deadlock or anything else. */
+    const expectRefusedForItsCurrency = (
+      outcome: PromiseSettledResult<unknown>,
+    ) => {
+      expect(outcome.status).toBe('rejected');
+      expect((outcome as PromiseRejectedResult).reason).toBeInstanceOf(
+        CostLineInputError,
+      );
+    };
+
+    it(
+      'lets exactly one of them succeed, in either order, and leaves no live cost line priced in another currency than its project’s',
+      { timeout: 120_000 },
+      async () => {
+        // The booking is open first: the change has to wait for it, then finds
+        // the line and refuses.
+        const bookingFirst = await world();
+        const [booking, change] = await interleave(
+          db(),
+          bookingFirst.book,
+          bookingFirst.changeCurrency,
+        );
+        expect(booking.status).toBe('fulfilled');
+        expectRefusedByTheLock(change);
+        expect(succeeded([booking, change])).toBe(1);
+        expect(await currencyOf(bookingFirst.projectId)).toBe('GBP');
+        expect(await mispricedLines(bookingFirst.organisationId)).toBe(0);
+
+        // The change is open first: the booking has to wait for it, then prices
+        // its pounds against a project in dollars and refuses.
+        const changeFirst = await world();
+        const [changed, booked] = await interleave(
+          db(),
+          changeFirst.changeCurrency,
+          changeFirst.book,
+        );
+        expect(changed.status).toBe('fulfilled');
+        expectRefusedForItsCurrency(booked);
+        expect(succeeded([changed, booked])).toBe(1);
+        expect(await currencyOf(changeFirst.projectId)).toBe('USD');
+        expect(await mispricedLines(changeFirst.organisationId)).toBe(0);
+
+        // Both start at once, with no ordering forced, a number of times. Which
+        // one wins varies; that one wins and the other loses never does.
+        for (let round = 0; round < 12; round += 1) {
+          const w = await world();
+          const [bookingOutcome, changeOutcome] = await Promise.allSettled([
+            db().transaction((tx) => w.book(tx)),
+            db().transaction((tx) => w.changeCurrency(tx)),
+          ]);
+          const label = `round ${round}`;
+          expect(succeeded([bookingOutcome, changeOutcome]), label).toBe(1);
+          if (bookingOutcome.status === 'fulfilled') {
+            expectRefusedByTheLock(changeOutcome);
+            expect(await currencyOf(w.projectId), label).toBe('GBP');
+          } else {
+            expectRefusedForItsCurrency(bookingOutcome);
+            expect(await currencyOf(w.projectId), label).toBe('USD');
+          }
+          expect(await mispricedLines(w.organisationId), label).toBe(0);
+        }
       },
     );
   },
