@@ -56,6 +56,13 @@ export const episode = tenantTable(
     }),
     // Target for composite tenant foreign keys in later tables.
     unique('episode_organisation_id_id_unique').on(t.organisationId, t.id),
+    // Target for the cost line foreign key, which keeps a line in the same
+    // project as its episode.
+    unique('episode_organisation_project_id_unique').on(
+      t.organisationId,
+      t.projectId,
+      t.id,
+    ),
     unique('episode_project_number_unique').on(t.projectId, t.number),
     check(
       'episode_status_check',

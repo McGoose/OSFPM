@@ -29,6 +29,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - A unique key that includes a nullable column is NULLS NOT DISTINCT unless several NULLs are meant to be allowed; Drizzle can't express it on indexes, so add it by hand in the migration with a comment.
 - No legal or financial numbers (rates, caps, thresholds, deadlines) in code: they live in rule packs as data.
 - Exception: shipped default values (legal periods, rates) may live in one constant marked `verified: false`, until the rule-pack engine replaces them. Never repeat them elsewhere.
+- Money columns are numeric; in TypeScript they are decimal strings, never number. Arithmetic on money happens in the database.
 - Modules never read other modules' tables; they use core services and events.
 - Tenant records are written only through the write helper in `src/db/write.ts`.
 - Test fixtures may insert rows directly to set up state. Code under test always writes through the write helper.
@@ -41,6 +42,8 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Permission checks run only on the server through the policy engine.
 - Every endpoint gets a test proving 403 without access and no sensitive fields without `sensitive:read`.
 - A string from a caller never indexes a plain object and never goes through `in`. Use Object.hasOwn, a Map, or check it against the constant list first.
+- A guard that checks for live rows pointing at a record locks them (FOR UPDATE on the record, FOR SHARE on the reference) so a concurrent write can't slip past it.
+- Lock order: take the project's change counter (lockProjectChanges) before any row lock. Every writer follows this order, or concurrent writes can deadlock.
 
 ## Comments and docs
 
@@ -66,6 +69,7 @@ Only the fictional demo production _The Last Withdrawal_ or invented data. Never
 - Branches are named `type/pNN-slug`, for example `docs/p01b-claude-md`.
 - British spelling (organisation, licence) in code identifiers and docs.
 - Run the full test suite before every commit.
+- Before deliberately breaking code to check that a test catches it, commit or stash your work first, and undo the break with git, not by copying a backup file back.
 - If `node -v` does not match `.nvmrc`, or `pnpm` will not run, stop and tell the maintainer. Do not run the tools another way.
 - Ask before any change not listed in the prompt, and before adding any dependency the prompt does not name.
 - Read only the files a task needs; do not explore the repo for context.

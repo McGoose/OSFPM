@@ -11,6 +11,7 @@ import {
 import { newId } from './ids.js';
 import { migrate } from './migrate.js';
 import { hasProjectResolver, isOrganisationLevel } from './project-resolver.js';
+import { sensitiveColumns } from './sensitive.js';
 import * as schemaModule from './schema/index.js';
 import {
   department,
@@ -310,6 +311,64 @@ describe('project resolution in the schema', () => {
   });
 });
 
+/**
+ * Every `numeric` column that does not hold money, as `table.column`, with why.
+ * CLAUDE.md, Data rules: money columns are numeric, and what a line or contract
+ * is worth is what people are paid, so a money column is marked sensitive and
+ * its value stays out of change events (Privacy rule). A numeric column that is
+ * not listed here is taken for money. Drizzle has no way to record what a
+ * column means, so this list is the declaration. Adding an entry needs a reason
+ * a reviewer can check.
+ */
+const NUMERIC_NOT_MONEY: Record<string, string> = {
+  'cost_line.fx_rate':
+    'An exchange rate, a ratio between two currencies; it may appear in change events (the amounts it converts do not)',
+  'location.latitude': 'A coordinate in degrees',
+  'location.longitude': 'A coordinate in degrees',
+};
+
+describe('numeric columns in the schema', () => {
+  const numericColumns = schemaTables.flatMap((table) =>
+    getTableConfig(table)
+      .columns.filter((column) => column.getSQLType().startsWith('numeric'))
+      .map((column) => ({
+        table,
+        column: column.name,
+        name: `${getTableName(table)}.${column.name}`,
+      })),
+  );
+
+  it('finds the numeric columns it is meant to check', () => {
+    // Guards against the filter matching nothing and passing for nothing.
+    expect(numericColumns.map((c) => c.name)).toEqual(
+      expect.arrayContaining([
+        'contract.total_value',
+        'cost_line.amount',
+        'cost_line.amount_project_currency',
+        'cost_line.fx_rate',
+        'cost_line_scheme.qualifying_amount',
+      ]),
+    );
+  });
+
+  it('are all marked sensitive, except the ones listed as not money', () => {
+    const unmarked = numericColumns
+      .filter((c) => !sensitiveColumns(c.table).has(c.column))
+      .map((c) => c.name)
+      .sort();
+    // Equal, not a subset: an entry that is marked sensitive now, or that is no
+    // longer a numeric column, is stale and must go, and a new numeric column
+    // must be marked or listed.
+    expect(unmarked).toEqual(Object.keys(NUMERIC_NOT_MONEY).sort());
+  });
+
+  it('give every column not holding money a reason', () => {
+    for (const [name, reason] of Object.entries(NUMERIC_NOT_MONEY)) {
+      expect(reason.trim().length, name).toBeGreaterThan(0);
+    }
+  });
+});
+
 describe.each(testTargets)('database schema on $name', (target) => {
   describe('migrations', () => {
     it('apply to an empty database, and re-running is a no-op', async () => {
@@ -333,6 +392,8 @@ describe.each(testTargets)('database schema on $name', (target) => {
           'contract',
           'contract_link',
           'contract_party',
+          'cost_line',
+          'cost_line_scheme',
           'department',
           'episode',
           'installation',
@@ -629,6 +690,8 @@ describe.each(testTargets)('database schema on $name', (target) => {
         'contract_link',
         'account_chart',
         'account',
+        'cost_line',
+        'cost_line_scheme',
       ]) {
         it(`${table} has every standard column with the right type and nullability`, async () => {
           const columns = await columnsOf(database, table);
@@ -668,6 +731,8 @@ describe.each(testTargets)('database schema on $name', (target) => {
           'contract',
           'contract_party',
           'contract_link',
+          'cost_line',
+          'cost_line_scheme',
           'legal_hold',
           'organisation',
           'project',

@@ -141,6 +141,27 @@
       "when": 1795207023615,
       "tag": "0019_charts_of_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1795212943560,
+      "tag": "0020_cost_lines",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1795261553454,
+      "tag": "0021_cost_line_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1795261645163,
+      "tag": "0022_project_currency_locked",
+      "breakpoints": true
     }
   ]
 }

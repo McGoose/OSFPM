@@ -1,23 +1,24 @@
 # @osfpm/core
 
-The database layer and shared services of OSFPM: schema, write helper, access checks, sensitive data, production structure, retention, legal holds, contracts and charts of accounts. Other modules and the future API build on it. They use its services and events and never read each other's tables.
+The database layer and shared services of OSFPM: schema, write helper, access checks, sensitive data, production structure, retention, legal holds, contracts, charts of accounts and cost lines. Other modules and the future API build on it. They use its services and events and never read each other's tables.
 
 `src/index.ts` exports only a placeholder version constant today. Import from the module folders by path.
 
 ## Folder map
 
-| Path                | What it holds                                                                           |
-| ------------------- | --------------------------------------------------------------------------------------- |
-| `src/db/`           | Clients, the Drizzle schema, the write helper and the column conventions                |
-| `src/access/`       | Permission checks and `AccessDeniedError`                                               |
-| `src/sensitive/`    | The one service that reads and writes crew personal data                                |
-| `src/projects/`     | `createProject`, which also creates the main unit                                       |
-| `src/retention/`    | Retention classes' shipped periods and the end-date calculation                         |
-| `src/legal-hold/`   | Placing, releasing and checking legal holds                                             |
-| `src/contracts/`    | The contracts registry, with amounts hidden from those without `contracts:read-value`   |
-| `src/accounts/`     | Charts of accounts: organisation templates, project copies and their account trees      |
-| `migrations/`       | Forward-only SQL migrations and Drizzle snapshots. Never edit one that has been applied |
-| `drizzle.config.ts` | Drizzle Kit settings; the `db:generate` script writes a migration from the schema       |
+| Path                | What it holds                                                                             |
+| ------------------- | ----------------------------------------------------------------------------------------- |
+| `src/db/`           | Clients, the Drizzle schema, the write helper and the column conventions                  |
+| `src/access/`       | Permission checks and `AccessDeniedError`                                                 |
+| `src/sensitive/`    | The one service that reads and writes crew personal data                                  |
+| `src/projects/`     | `createProject`, which also creates the main unit                                         |
+| `src/retention/`    | Retention classes' shipped periods and the end-date calculation                           |
+| `src/legal-hold/`   | Placing, releasing and checking legal holds                                               |
+| `src/contracts/`    | The contracts registry, with amounts hidden from those without `contracts:read-value`     |
+| `src/accounts/`     | Charts of accounts: organisation templates, project copies and their account trees        |
+| `src/costs/`        | Cost lines and incentive scheme tags, with amounts hidden from those without `costs:read` |
+| `migrations/`       | Forward-only SQL migrations and Drizzle snapshots. Never edit one that has been applied   |
+| `drizzle.config.ts` | Drizzle Kit settings; the `db:generate` script writes a migration from the schema         |
 
 Each module folder has its own README with entry points and the rules that apply to it. The rules for all code are in `CLAUDE.md` at the repository root.
 

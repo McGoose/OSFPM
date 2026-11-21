@@ -1,0 +1,2 @@
+CREATE INDEX "cost_line_organisation_account_idx" ON "cost_line" USING btree ("organisation_id","account_id") WHERE "cost_line"."deleted_at" is null;--> statement-breakpoint
+CREATE INDEX "cost_line_organisation_project_stage_idx" ON "cost_line" USING btree ("organisation_id","project_id","stage") WHERE "cost_line"."deleted_at" is null;

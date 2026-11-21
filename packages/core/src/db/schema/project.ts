@@ -41,6 +41,12 @@ export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
  * organisation. A project's own changes are numbered in its own `change_seq`
  * counter (see the resolver below). Create projects with `createProject`,
  * which also creates the main unit.
+ *
+ * `currency` cannot change while the project has live cost lines: a trigger
+ * refuses it with SQLSTATE 23514 and the constraint name
+ * `project_currency_locked`, because the lines hold amounts in that currency
+ * (`0022_project_currency_locked.sql`). The trigger is hand-written SQL, so the
+ * Drizzle schema does not declare it.
  */
 export const project = tenantTable(
   'project',

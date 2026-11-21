@@ -8,6 +8,8 @@ export * from './company.js';
 export * from './contract-link.js';
 export * from './contract-party.js';
 export * from './contract.js';
+export * from './cost-line-scheme.js';
+export * from './cost-line.js';
 export * from './department.js';
 export * from './episode.js';
 export * from './installation.js';
