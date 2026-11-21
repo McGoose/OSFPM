@@ -1,0 +1,2 @@
+ALTER TABLE "user" DROP CONSTRAINT "user_email_lowercase_check";--> statement-breakpoint
+ALTER TABLE "user" ADD CONSTRAINT "user_email_normalised_check" CHECK ("user"."email" = lower(btrim("user"."email")));

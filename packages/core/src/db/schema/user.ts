@@ -26,6 +26,12 @@ export type UserStatus = (typeof USER_STATUSES)[number];
  * `owner_org_id` or `visibility`. It must never hold personal details such as
  * phone, address or medical data (CLAUDE.md, Privacy rule): those belong to
  * `person` and `person_sensitive`.
+ *
+ * `email` is stored normalised: lower case, with no spaces at either end. The
+ * `user_email_normalised_check` CHECK enforces it, so the unique index on `email`
+ * means one account per address however a caller typed it, and a login can look
+ * an address up with `lower(btrim(input))`. `btrim` removes spaces only, so a
+ * caller still strips tabs and line breaks before it looks up or stores one.
  */
 export const user = pgTable(
   'user',
@@ -41,7 +47,11 @@ export const user = pgTable(
   (t) => [
     retentionClassForeignKey('user', t.retentionClass),
     uniqueIndex('user_email_unique').on(t.email),
-    check('user_email_lowercase_check', sql`${t.email} = lower(${t.email})`),
+    // Replaces `user_email_lowercase_check`, which this implies.
+    check(
+      'user_email_normalised_check',
+      sql`${t.email} = lower(btrim(${t.email}))`,
+    ),
     check('user_status_check', sql`${t.status} in (${sqlList(USER_STATUSES)})`),
   ],
 );

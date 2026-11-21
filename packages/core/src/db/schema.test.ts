@@ -1090,16 +1090,47 @@ describe.each(testTargets)('database schema on $name', (target) => {
     });
 
     describe('user', () => {
-      it('rejects an upper-case email', async () => {
+      const NORMALISED = {
+        code: SQLSTATE.checkViolation,
+        constraint: 'user_email_normalised_check',
+      };
+
+      it.each([
+        ['an upper-case', 'Mixed.Case@example.test'],
+        ['a leading-space', ' leading@example.test'],
+        ['a trailing-space', 'trailing@example.test '],
+        ['a space-padded', '  padded@example.test  '],
+        ['a space-padded upper-case', ' Padded.Upper@Example.test '],
+        ['a space-only', '   '],
+      ])('rejects %s email', async (_label, email) => {
         const failure = await failureOf(() =>
-          database.db
-            .insert(user)
-            .values(userValues({ email: 'Mixed.Case@example.test' })),
+          database.db.insert(user).values(userValues({ email })),
         );
-        expect(failure).toEqual({
-          code: SQLSTATE.checkViolation,
-          constraint: 'user_email_lowercase_check',
-        });
+        expect(failure).toEqual(NORMALISED);
+      });
+
+      it('rejects changing a stored email to one that is not normalised', async () => {
+        const email = 'normalised.before@example.test';
+        await database.db.insert(user).values(userValues({ email }));
+        for (const bad of ['Normalised.Before@example.test', `${email} `]) {
+          const failure = await failureOf(() =>
+            database.db
+              .update(user)
+              .set({ email: bad })
+              .where(eq(user.email, email)),
+          );
+          expect(failure).toEqual(NORMALISED);
+        }
+      });
+
+      it('accepts a lower-case email with no spaces at the ends, spaces inside the name included', async () => {
+        for (const email of [
+          'plain@example.test',
+          'first.last+tag@example.test',
+          'with space inside@example.test',
+        ]) {
+          await database.db.insert(user).values(userValues({ email }));
+        }
       });
 
       it('rejects a duplicate email', async () => {
