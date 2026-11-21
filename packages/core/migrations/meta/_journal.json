@@ -155,6 +155,13 @@
       "when": 1795261553454,
       "tag": "0021_cost_line_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1795261645163,
+      "tag": "0022_project_currency_locked",
+      "breakpoints": true
     }
   ]
 }

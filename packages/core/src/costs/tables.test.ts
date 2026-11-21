@@ -1,6 +1,7 @@
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  ORIGIN,
   seedCompany,
   seedEpisode,
   seedOrganisation,
@@ -13,13 +14,14 @@ import {
 import type { Database } from '../db/client.js';
 import { declaredRetentionClasses } from '../db/columns.js';
 import { newId } from '../db/ids.js';
-import { costLine, costLineScheme } from '../db/schema/index.js';
+import { costLine, costLineScheme, project } from '../db/schema/index.js';
 import {
   createMigratedDatabase,
   failureOf,
   SQLSTATE,
   testTargets,
 } from '../db/test-support.js';
+import { RecordWriteError, updateRecord } from '../db/write.js';
 import {
   costLineValues,
   schemeValues,
@@ -753,4 +755,149 @@ describe.each(testTargets)('the cost tables on $name', (target) => {
       });
     });
   });
+
+  // `0022_project_currency_locked.sql`: a trigger, so only the migrated
+  // database shows whether it is there.
+  describe('the project currency lock', () => {
+    const LOCKED = {
+      code: SQLSTATE.checkViolation,
+      constraint: 'project_currency_locked',
+    };
+    const setCurrency = (projectId: string, currency: string) =>
+      db().update(project).set({ currency }).where(eq(project.id, projectId));
+    const currencyOf = async (projectId: string) =>
+      (await db().select().from(project).where(eq(project.id, projectId)))[0]!
+        .currency;
+    /** A project of its own with one live cost line. */
+    const projectWithLine = async () => {
+      const world = await seedWorld();
+      const line = await seedCostLine(
+        database,
+        world.organisationId,
+        world.projectId,
+        world.accountId,
+      );
+      return { world, line };
+    };
+
+    it('refuses to change the currency of a project with a live cost line, naming the rule in the message and the constraint, and changes nothing', async () => {
+      const { world } = await projectWithLine();
+      const failure = await refusalOf(() =>
+        setCurrency(world.projectId, 'USD'),
+      );
+      expect(failure).toMatchObject(LOCKED);
+      expect(failure.message).toContain('project_currency_locked');
+      // The message names the rule and carries no value of the row.
+      expect(failure.message).not.toMatch(/GBP|USD/);
+      expect(await currencyOf(world.projectId)).toBe('GBP');
+    });
+
+    it('refuses it through the write helper, as a RecordWriteError without values', async () => {
+      const { world } = await projectWithLine();
+      const failure = await updateRecord(
+        db(),
+        project,
+        world.projectId,
+        1,
+        { currency: 'USD' },
+        {
+          actor: { type: 'system', id: null },
+          originServer: ORIGIN,
+          clock: () => new Date(),
+        },
+      ).catch((e: unknown) => e);
+      expect(failure).toBeInstanceOf(RecordWriteError);
+      expect(failure).toMatchObject(LOCKED);
+      expect((failure as Error).message).not.toMatch(/GBP|USD/);
+      expect(await currencyOf(world.projectId)).toBe('GBP');
+    });
+
+    it('allows the change while the project has no cost lines, or only removed ones', async () => {
+      const none = await seedWorld();
+      await setCurrency(none.projectId, 'USD');
+      expect(await currencyOf(none.projectId)).toBe('USD');
+
+      const { world, line } = await projectWithLine();
+      await db()
+        .update(costLine)
+        .set({ deletedAt: new Date() })
+        .where(eq(costLine.id, line.id));
+      await setCurrency(world.projectId, 'EUR');
+      expect(await currencyOf(world.projectId)).toBe('EUR');
+    });
+
+    it('allows it again once the last live line is removed, and refuses it again when a new one is added', async () => {
+      const { world, line } = await projectWithLine();
+      expect(
+        await refusalOf(() => setCurrency(world.projectId, 'USD')),
+      ).toMatchObject(LOCKED);
+      await db()
+        .update(costLine)
+        .set({ deletedAt: new Date() })
+        .where(eq(costLine.id, line.id));
+      await setCurrency(world.projectId, 'USD');
+      await seedCostLine(
+        database,
+        world.organisationId,
+        world.projectId,
+        world.accountId,
+        { currency: 'USD', amount: '5.0000', amountProjectCurrency: '5.0000' },
+      );
+      expect(
+        await refusalOf(() => setCurrency(world.projectId, 'EUR')),
+      ).toMatchObject(LOCKED);
+    });
+
+    it('is about the project’s own lines: a line of another project, even in the same organisation, does not count', async () => {
+      const { world } = await projectWithLine();
+      const other = await seedProject(database, world.organisationId);
+      await setCurrency(other, 'USD');
+      expect(await currencyOf(other)).toBe('USD');
+    });
+
+    it('lets everything else about a project with cost lines change, and the currency be set to the value it has', async () => {
+      const { world } = await projectWithLine();
+      await db()
+        .update(project)
+        .set({
+          title: 'The Last Withdrawal (director’s cut)',
+          status: 'production',
+        })
+        .where(eq(project.id, world.projectId));
+      // A statement that names the column without changing it is not a change.
+      await setCurrency(world.projectId, 'GBP');
+      expect(await currencyOf(world.projectId)).toBe('GBP');
+    });
+  });
 });
+
+/**
+ * Runs `action` and returns the SQLSTATE, constraint name and message of the
+ * driver error it failed with, which `failureOf` leaves out. The message is for
+ * triggers, which name their rule in it.
+ */
+async function refusalOf(action: () => PromiseLike<unknown>) {
+  try {
+    await action();
+  } catch (error) {
+    let current: unknown = error;
+    while (current && typeof current === 'object') {
+      const found = current as {
+        code?: unknown;
+        constraint?: unknown;
+        message?: unknown;
+        cause?: unknown;
+      };
+      if (typeof found.code === 'string') {
+        return {
+          code: found.code,
+          constraint: found.constraint,
+          message: String(found.message),
+        };
+      }
+      current = found.cause;
+    }
+    throw error;
+  }
+  throw new Error('Expected the statement to fail, but it succeeded');
+}

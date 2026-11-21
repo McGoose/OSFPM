@@ -80,7 +80,11 @@ export type ProductionPhase = (typeof PRODUCTION_PHASES)[number];
  * `fx_rate` is NULL and the two amounts are equal; otherwise `fx_rate` is
  * required and the service has the database compute
  * `amount_project_currency` from it. Those two rules need the project's
- * currency, which a CHECK cannot read, so the service enforces them.
+ * currency, which a CHECK cannot read, so the service enforces them. For the same
+ * reason a trigger on `project` refuses to change the project's currency while
+ * the project has live cost lines (`project_currency_locked`,
+ * `0022_project_currency_locked.sql`), so no line is left priced in a currency
+ * the project no longer has.
  *
  * `territory` is an ISO 3166-1 alpha-2 code, or `WW` for worldwide. A line has
  * at most one payee, a company or a person of the library; the payee's

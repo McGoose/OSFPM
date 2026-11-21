@@ -64,6 +64,9 @@ import {
  * and `fxRate` must be left out; otherwise `fxRate` is required and the amount
  * is `round(amount * fx_rate, 4)`, rounding halves away from zero. An amount
  * has at most four places and a rate ten; more is refused rather than rounded.
+ * A line is priced in the project's currency under a share lock on the project,
+ * because the database refuses to change that currency while the project has
+ * live cost lines.
  *
  * A call that names a cost line by id fails with `AccessDeniedError` when the
  * line does not exist, is removed or belongs to another organisation, exactly
@@ -242,27 +245,33 @@ function scopeOf(row: CostLineRow): PermissionScope {
 /**
  * For a project the caller named: the error says it is a project. The project
  * must exist in the named organisation, or the answer is the same as for a
- * forbidden one.
+ * forbidden one. `lockProject` reads the project with a share lock, which holds
+ * until the transaction ends: a call that prices a line against the project's
+ * currency sets it, so that a change of that currency, which the database
+ * refuses while live cost lines exist, waits for the line to commit and then
+ * sees it (`0022_project_currency_locked.sql`).
  */
 async function requireInProject(
   tx: Tx,
   ctx: CostContext,
   scope: { organisationId: string; projectId: string },
   key: string,
+  lockProject = false,
 ) {
   const allowed = await hasScopedPermission(tx, ctx.userId, scope, key);
+  const query = tx
+    .select({ id: project.id, currency: project.currency })
+    .from(project)
+    .where(
+      and(
+        eq(project.id, scope.projectId),
+        eq(project.organisationId, scope.organisationId),
+        isNull(project.deletedAt),
+      ),
+    )
+    .limit(1);
   const [found] = allowed
-    ? await tx
-        .select({ id: project.id, currency: project.currency })
-        .from(project)
-        .where(
-          and(
-            eq(project.id, scope.projectId),
-            eq(project.organisationId, scope.organisationId),
-            isNull(project.deletedAt),
-          ),
-        )
-        .limit(1)
+    ? await (lockProject ? query.for('share') : query)
     : [];
   if (!found) throw new AccessDeniedError(key, scope);
   return found;
@@ -635,7 +644,13 @@ export async function createCostLine(
     organisationId: values.organisationId,
     projectId: values.projectId,
   };
-  const found = await requireInProject(tx, ctx, scope, COSTS_EDIT_PERMISSION);
+  const found = await requireInProject(
+    tx,
+    ctx,
+    scope,
+    COSTS_EDIT_PERMISSION,
+    true,
+  );
   await checkAccount(tx, scope, values.accountId);
   checkOnePayee(values.payeePersonId, values.payeeCompanyId);
   await checkReferences(tx, scope, values);
@@ -732,11 +747,13 @@ export async function updateCostLine(
     changes.currency !== undefined ||
     changes.fxRate !== undefined
   ) {
+    // Share-locked, as in `createCostLine`: the line is priced in this currency.
     const [owner] = await tx
       .select({ currency: project.currency })
       .from(project)
       .where(eq(project.id, found.projectId))
-      .limit(1);
+      .limit(1)
+      .for('share');
     priced = await priceLine(tx, owner!.currency, {
       amount: changes.amount ?? found.amount,
       currency: changes.currency ?? found.currency,
