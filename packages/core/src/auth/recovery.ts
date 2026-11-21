@@ -86,8 +86,9 @@ export function generateRecoveryCodes(
  * not matter. A disabled or deleted user's code is not used up and does not
  * work. The code is marked used in one conditional UPDATE, so two requests
  * with the same code succeed once. Audited as `auth.recovery-code-used`, with
- * no code. Failed attempts are not audited here; the login route counts those
- * for rate limiting.
+ * no code. Failed attempts are not audited here yet; they will be, with the
+ * method and a failure reason and never the submitted code (see the README,
+ * "Decided for the routes").
  *
  * @throws RecordWriteError when the database fails; it carries the SQLSTATE
  * only, never the code or its hash.

@@ -17,7 +17,7 @@ Pass the transaction handle to every function, and the time as `now`. The servic
 
 - A token or code is random and shown to the caller once. Only its SHA-256 hash is stored, and the row is found by that hash. SHA-256 is enough because the values hold at least 80 bits of randomness; passwords are low-entropy, so they use Argon2id instead.
 - A session lasts 12 hours without a request and 30 days in all. A request slides the idle end, never past the absolute end, and writes at most once a minute. A disabled or deleted user's session is not valid, and disabling a user revokes their sessions.
-- Each security-relevant change writes one `audit_event` (`auth.session-created`, `auth.session-revoked`, `auth.sessions-revoked`, `auth.user-disabled`, `auth.user-enabled`, `auth.recovery-codes-generated`, `auth.recovery-code-used`, `auth.setup-code-issued`, `auth.setup-code-used`). Details hold scalar values such as a method, a reason or a count, never a secret. An attempt that changes nothing writes no event.
+- Each security-relevant change writes one `audit_event` (`auth.session-created`, `auth.session-revoked`, `auth.sessions-revoked`, `auth.user-disabled`, `auth.user-enabled`, `auth.recovery-codes-generated`, `auth.recovery-code-used`, `auth.setup-code-issued`, `auth.setup-code-used`). Details hold scalar values such as a method, a reason or a count, never a secret. An attempt that changes nothing writes no event yet; failed attempts will be audited (see "Decided for the routes").
 - Rows carry the server's own id as `origin_server`, read from the `installation` row, so the services refuse until that row exists.
 
 **Rules you must not break**
@@ -29,5 +29,11 @@ Pass the transaction handle to every function, and the time as `now`. The servic
 - A string from a caller is checked against a constant list (`SESSION_METHODS`, `SESSION_REVOKE_REASONS`, the code alphabet) and never used as a key.
 - Lock order: a service that checks a user's state and then writes takes the user row first (`lockUser`); the setup-code functions take the `installation` row. Nothing here touches a project, so the project change counter does not come into it.
 - No setup code is issued, or accepted, once `installation.setup_completed_at` is set.
+
+**Decided for the routes (P-03b2, P-03b3); nothing of this is built yet**
+
+- Failed sign-in attempts and failed code attempts will be audited: a wrong password, passkey, authenticator code, recovery code, setup code or invite token. An event holds the method and a failure reason from a fixed list, never a submitted value: no password, code, token or typed email address, and no hash of one. The target is the user only when the server found them by its own means, and there is none for an address it does not know.
+- The client still gets one uniform answer for every failure, as `consumeRecoveryCode` and `consumeSetupCode` do today. The reason is for the audit trail alone. These services return `false` for every failure, so P-03b2 decides whether the services record the event, since they know the reason, or report the reason to the route. Either way, the "attempt that changed nothing writes no event" check in `audit.test.ts` changes with it.
+- Counting failures for rate limiting is a separate job from auditing them.
 
 **Tests:** `pnpm test packages/core/src/auth` runs `tokens.test.ts`, `password.test.ts`, `sessions.test.ts`, `recovery.test.ts`, `setup-code.test.ts`, `audit.test.ts`, `shared.test.ts` and `tables.test.ts` (every CHECK and unique rule). They run on PGlite, and on PostgreSQL too when `DATABASE_URL` is set. The scan for who writes which table is `src/db/write-helper-scan.test.ts`.
