@@ -1,10 +1,10 @@
-import type { FastifyPluginAsync } from 'fastify';
+import Fastify, { type FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { testTargets } from '@osfpm/core/src/db/test-support.js';
 import { API_PREFIX } from './api-version.js';
-import { REDACTED } from './logging.js';
+import { loggerOptions, REDACTED } from './logging.js';
 import { createTestApp } from './test-support.js';
 
 /** A value that must never reach a log line. */
@@ -214,5 +214,57 @@ describe.each(testTargets)('what the log never holds, on $name', (target) => {
     expect(log).toContain('kept-value');
     expect(log).toContain('page=2');
     expect(log).toContain(REDACTED);
+  });
+});
+
+describe('the two layers that keep credentials out of a log', () => {
+  /** An app whose logger has only the options named here taken away, to test the other layer alone. */
+  async function loggerWithout(
+    ...removed: ('formatters' | 'serializers' | 'hooks' | 'redact')[]
+  ) {
+    const lines: string[] = [];
+    const options = {
+      ...(loggerOptions({
+        level: 'info',
+        stream: { write: (line) => void lines.push(line) },
+      }) as Record<string, unknown>),
+    };
+    for (const name of removed) delete options[name];
+    const app = Fastify({ logger: options as never });
+    await app.ready();
+    return { app, lines };
+  }
+
+  const credentials = {
+    headers: {
+      authorization: `Bearer ${SECRET}`,
+      cookie: `session=${SECRET}`,
+      'set-cookie': `session=${SECRET}`,
+    },
+    req: { headers: { authorization: SECRET, cookie: SECRET } },
+    res: { headers: { 'set-cookie': SECRET } },
+  };
+
+  it('has fixed redact paths that mask authorization, cookie and set-cookie on their own', async () => {
+    const { app, lines } = await loggerWithout(
+      'formatters',
+      'serializers',
+      'hooks',
+    );
+    app.log.info(credentials, 'by hand');
+    await app.close();
+    expect(lines.join('')).not.toContain(SECRET);
+    expect(lines.join('')).toContain(REDACTED);
+  });
+
+  it('has a scrubbing formatter that masks them on its own, and token-named keys the paths cannot name', async () => {
+    const { app, lines } = await loggerWithout('redact');
+    app.log.info(
+      { headers: credentials.headers, other: { 'x-auth-token': SECRET } },
+      'by hand',
+    );
+    await app.close();
+    expect(lines.join('')).not.toContain(SECRET);
+    expect(lines.join('')).toContain(REDACTED);
   });
 });

@@ -29,6 +29,22 @@ export function errorClassName(error: unknown): string {
 }
 
 /**
+ * Header paths that pino itself masks if a line carries them. This is the
+ * second layer, under the scrubbing formatter below: it does not depend on the
+ * formatter's code, so a change that breaks one layer does not open the other.
+ * It names only the three credential headers, because a path cannot match "any
+ * key named like a token"; the formatter does that.
+ */
+const REDACT_PATHS = [
+  'headers.authorization',
+  'headers.cookie',
+  'headers["set-cookie"]',
+  'req.headers.authorization',
+  'req.headers.cookie',
+  'res.headers["set-cookie"]',
+];
+
+/**
  * Keys whose value is never logged, at any depth: credentials, and anything
  * named like a token (a header such as `x-auth-token`, a query parameter such as
  * `api_token`).
@@ -83,10 +99,12 @@ function scrub(value: unknown, depth: number): unknown {
  * - A response is described by its status code only.
  * - An error is described by its class name only.
  * - No request or response body, and no header, is ever logged. If a line is
- *   written by hand, every key named like a token, and `authorization`,
- *   `cookie` and `set-cookie`, is masked at any depth, whatever key the object
- *   sits under; a token-named query parameter inside a string is masked too;
- *   and a request, reply or other class instance is logged as its class name.
+ *   written by hand, two independent layers mask credentials. A scrubbing
+ *   formatter masks every key named like a token, and `authorization`,
+ *   `cookie` and `set-cookie`, at any depth, whatever key the object sits
+ *   under; it also masks a token-named query parameter inside a string, and
+ *   logs a request, reply or other class instance as its class name. Under it,
+ *   fixed redact paths mask the three credential headers.
  * - A message is never taken from an error. Pino does that when a line has an
  *   error and no message, and Fastify's own warnings do it with a message that
  *   quotes the whole URL; the class name is used instead.
@@ -110,6 +128,7 @@ export function loggerOptions(
   return {
     level: settings.level ?? 'info',
     ...(settings.stream ? { stream: settings.stream } : {}),
+    redact: { paths: REDACT_PATHS, censor: REDACTED },
     formatters: {
       log: (object) =>
         Object.fromEntries(
