@@ -29,18 +29,49 @@ export function errorClassName(error: unknown): string {
 }
 
 /**
- * Header paths the logger masks if a line ever carries them. The serialisers
- * below already keep headers out, so this is a second layer, for a line a
- * future change writes by hand.
+ * Keys whose value is never logged, at any depth: credentials, and anything
+ * named like a token (a header such as `x-auth-token`, a query parameter such as
+ * `api_token`).
  */
-const REDACT_PATHS = [
-  'headers.authorization',
-  'headers.cookie',
-  'headers["set-cookie"]',
-  'req.headers.authorization',
-  'req.headers.cookie',
-  'res.headers["set-cookie"]',
-];
+const SECRET_KEY =
+  /token|^(?:authorization|proxy-authorization|cookie|set-cookie)$/i;
+
+/** A query parameter named like a token, inside a URL or a message: `?token=abc`. */
+const TOKEN_PARAMETER = /([?&;][^=&;\s"']*token[^=&;\s"']*=)[^&;\s"']*/gi;
+
+/** How deep a logged object is searched. Deeper than this is cut off, which also ends a cycle. */
+const MAX_DEPTH = 8;
+
+/** Masks the value of every token-named query parameter in `text`. */
+function maskTokenParameters(text: string): string {
+  return text.replace(TOKEN_PARAMETER, `$1${REDACTED}`);
+}
+
+/** Top-level keys that the serialisers below already reduce to safe fields. */
+const SERIALISED_KEYS: ReadonlySet<string> = new Set(['req', 'res', 'err']);
+
+/**
+ * A copy of `value` that is safe to log. Keys matching `SECRET_KEY` are
+ * masked, token-named query parameters in strings are masked, and an object
+ * that is not a plain one (a Fastify request, a reply, a socket) becomes
+ * `[ClassName]`: it is never walked, so nothing inside it can be logged.
+ */
+function scrub(value: unknown, depth: number): unknown {
+  if (typeof value === 'string') return maskTokenParameters(value);
+  if (value === null || typeof value !== 'object') return value;
+  if (value instanceof Date) return value;
+  if (depth >= MAX_DEPTH) return '[Truncated]';
+  if (Array.isArray(value)) return value.map((item) => scrub(item, depth + 1));
+  const prototype: unknown = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return `[${value.constructor?.name ?? 'Object'}]`;
+  }
+  const copy: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    copy[key] = SECRET_KEY.test(key) ? REDACTED : scrub(item, depth + 1);
+  }
+  return copy;
+}
 
 /**
  * Fastify's logger options for a server that logs no personal data (CLAUDE.md,
@@ -52,8 +83,13 @@ const REDACT_PATHS = [
  * - A response is described by its status code only.
  * - An error is described by its class name only.
  * - No request or response body, and no header, is ever logged. If a line is
- *   written by hand with `authorization`, `cookie` or `set-cookie` headers,
- *   their values are masked.
+ *   written by hand, every key named like a token, and `authorization`,
+ *   `cookie` and `set-cookie`, is masked at any depth, whatever key the object
+ *   sits under; a token-named query parameter inside a string is masked too;
+ *   and a request, reply or other class instance is logged as its class name.
+ * - A message is never taken from an error. Pino does that when a line has an
+ *   error and no message, and Fastify's own warnings do it with a message that
+ *   quotes the whole URL; the class name is used instead.
  *
  * Returns `false` for no settings: logging off.
  */
@@ -74,7 +110,45 @@ export function loggerOptions(
   return {
     level: settings.level ?? 'info',
     ...(settings.stream ? { stream: settings.stream } : {}),
-    redact: { paths: REDACT_PATHS, censor: REDACTED },
+    formatters: {
+      log: (object) =>
+        Object.fromEntries(
+          Object.entries(object).map(([key, value]) => [
+            key,
+            SERIALISED_KEYS.has(key)
+              ? value
+              : SECRET_KEY.test(key)
+                ? REDACTED
+                : scrub(value, 1),
+          ]),
+        ),
+    },
+    hooks: {
+      logMethod(args, method) {
+        const [first, ...rest] = args as [unknown, ...unknown[]];
+        // `log.error(error)` and `log.error({ err })` with no message: pino
+        // would use the error's message, which can quote values or a URL.
+        const hasMessage = typeof rest[0] === 'string';
+        if (first instanceof Error) {
+          method.apply(this, [{ err: first }, errorClassName(first)] as never);
+        } else if (
+          first !== null &&
+          typeof first === 'object' &&
+          'err' in first &&
+          !hasMessage
+        ) {
+          method.apply(this, [first, errorClassName(first.err)] as never);
+        } else {
+          // Fastify writes some warnings as a plain string with the URL in it.
+          method.apply(
+            this,
+            args.map((arg) =>
+              typeof arg === 'string' ? maskTokenParameters(arg) : arg,
+            ) as never,
+          );
+        }
+      },
+    },
     // Fastify types `err` as a full error with message and stack. It is
     // deliberately smaller here, so the type is widened.
     serializers: serializers as unknown as NonNullable<

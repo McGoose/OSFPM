@@ -76,7 +76,7 @@ Fastify's own refusals of a malformed request (bad JSON, a body over the limit, 
 
 ## Logging
 
-One line per request, written when the response is sent: method, route pattern, status code, duration and request ID. A line never holds a URL, a query, a path parameter, a header or a body, so a `token` in a query string or an `authorization` header cannot reach it. Errors are logged by class name and request ID, never by message. If a handler logs a header by hand, `authorization`, `cookie` and `set-cookie` are masked (CLAUDE.md, Privacy rule).
+One line per request, written when the response is sent: method, route pattern, status code, duration and request ID. A line never holds a URL, a query, a path parameter, a header or a body, so a `token` in a query string or an `authorization` header cannot reach it. Errors are logged by class name and request ID, never by message. If a handler writes a line by hand, every key named like a `token`, and `authorization`, `cookie` and `set-cookie`, is masked at any depth; a token-named query parameter inside a string is masked; and a request or reply object is logged as its class name only. A line never takes its message from an error, because Fastify's own warnings quote the whole URL there (CLAUDE.md, Privacy rule).
 
 The caller of `buildApp` chooses only the level and the destination. What a line may hold is fixed in `src/logging.ts`.
 

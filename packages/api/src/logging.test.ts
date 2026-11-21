@@ -38,6 +38,37 @@ const echoRoute: FastifyPluginAsync = (app) => {
         return { ok: true };
       },
     );
+  // Routes that go wrong in ways Fastify itself reports. Fastify's messages
+  // for these name the full URL, query included.
+  app.get('/test/twice', async (_request, reply) => {
+    await reply.send({ first: true });
+    return reply.send({ second: true });
+  });
+  app.get('/test/headers-sent', (_request, reply) => {
+    reply.raw.writeHead(200, { 'content-type': 'text/plain' });
+    reply.raw.write('partial');
+    return reply.send({ late: true });
+  });
+  // Lines a careless handler writes by hand, under keys with no serialiser.
+  app
+    .withTypeProvider<ZodTypeProvider>()
+    .get(
+      '/test/by-hand',
+      { schema: { querystring: z.looseObject({}) } },
+      (request) => {
+        request.log.info({ headers: request.headers }, 'headers by hand');
+        request.log.info({ query: request.query }, 'query by hand');
+        request.log.info({ request }, 'request by hand');
+        request.log.info({ url: request.url }, 'url by hand');
+        request.log.info(
+          { nested: { deep: { 'x-auth-token': SECRET, kept: 'kept-value' } } },
+          'nested by hand',
+        );
+        request.log.error(new Error(`an error that quotes ${SECRET}`));
+        request.log.error({ err: new Error(`quotes ${SECRET} too`) });
+        return { ok: true };
+      },
+    );
   return Promise.resolve();
 };
 
@@ -145,5 +176,43 @@ describe.each(testTargets)('what the log never holds, on $name', (target) => {
       'route',
     ]);
     expect(ctx.lines.join('')).not.toContain(SECRET);
+  });
+  it('does not repeat a URL that Fastify itself reports, query included', async () => {
+    ctx.lines.length = 0;
+    await ctx.app.inject({
+      method: 'GET',
+      url: `${API_PREFIX}/test/twice?token=${SECRET}&page=2`,
+    });
+    // Fastify throws out of this one after it has logged its warning.
+    await ctx.app
+      .inject({
+        method: 'GET',
+        url: `${API_PREFIX}/test/headers-sent?token=${SECRET}&page=2`,
+      })
+      .catch(() => undefined);
+    // Fastify did report both mistakes, so the check below is not vacuous.
+    expect(ctx.lines.join('')).toMatch(/already sent|did you forget/i);
+    expect(ctx.lines.join('')).not.toContain(SECRET);
+  });
+
+  it('masks token-named and credential keys in a line written by hand, whatever key it sits under', async () => {
+    ctx.lines.length = 0;
+    await ctx.app.inject({
+      method: 'GET',
+      url: `${API_PREFIX}/test/by-hand?token=${SECRET}-q&api_token=${SECRET}-q2&page=2`,
+      headers: {
+        authorization: `Bearer ${SECRET}-auth`,
+        cookie: `session=${SECRET}-cookie`,
+        'x-auth-token': `${SECRET}-header`,
+      },
+    });
+    const log = ctx.lines.join('');
+    expect(log).not.toContain(SECRET);
+    expect(log).not.toContain('Bearer');
+    // The lines were written, and what is not secret is still there.
+    expect(log).toContain('headers by hand');
+    expect(log).toContain('kept-value');
+    expect(log).toContain('page=2');
+    expect(log).toContain(REDACTED);
   });
 });
