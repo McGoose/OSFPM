@@ -1,6 +1,16 @@
+import {
+  cpSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { eq, getTableName, is, sql } from 'drizzle-orm';
 import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { syncPermissions } from '../access/permission-sync.js';
 import type { Database } from './client.js';
 import {
   declaredRetentionClasses,
@@ -9,7 +19,7 @@ import {
   tenantTableNames,
 } from './columns.js';
 import { newId } from './ids.js';
-import { migrate } from './migrate.js';
+import { MIGRATIONS_FOLDER, migrate } from './migrate.js';
 import { hasProjectResolver, isOrganisationLevel } from './project-resolver.js';
 import { sensitiveColumns } from './sensitive.js';
 import * as schemaModule from './schema/index.js';
@@ -657,6 +667,68 @@ describe.each(testTargets)('database schema on $name', (target) => {
           ['scratch_plain', false, ['x', 'y']],
         ]);
       } finally {
+        await cleanup();
+      }
+    });
+  });
+
+  describe('role_permission.reach on an existing database', () => {
+    const REACH_MIGRATION = '0023_role_permission_reach';
+
+    it('gives a grant written before the column existed own-scope', async () => {
+      const { database, cleanup } = await target.create();
+      const folder = mkdtempSync(join(tmpdir(), 'osfpm-migrations-'));
+      try {
+        // Stop one migration short: a copy of the folder whose journal ends
+        // before the reach migration.
+        cpSync(MIGRATIONS_FOLDER, folder, { recursive: true });
+        const journalPath = join(folder, 'meta', '_journal.json');
+        const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as {
+          entries: { tag: string }[];
+        };
+        const cut = journal.entries.findIndex((e) => e.tag === REACH_MIGRATION);
+        expect(cut).toBeGreaterThan(0);
+        writeFileSync(
+          journalPath,
+          JSON.stringify({
+            ...journal,
+            entries: journal.entries.slice(0, cut),
+          }),
+        );
+        await migrate(database, folder);
+        // Plain SQL, so the rows do not depend on columns added later.
+        const organisationId = newId();
+        const roleId = newId();
+        const grantId = newId();
+        const origin = newId();
+        await database.db.execute(
+          sql`insert into organisation (id, organisation_id, owner_org_id, origin_server,
+                slug, name, country, default_locale, default_timezone, base_currency, status)
+              values (${organisationId}, ${organisationId}, ${organisationId}, ${origin},
+                'upgrade-org', 'Demo Pictures', 'GB', 'en-GB', 'Europe/London', 'GBP', 'active')`,
+        );
+        await database.db.execute(
+          sql`insert into permission (key, module, description)
+              values ('upgrade:read', 'upgrade', 'Upgrade test')`,
+        );
+        await database.db.execute(
+          sql`insert into role (id, origin_server, organisation_id, owner_org_id, key, name)
+              values (${roleId}, ${origin}, ${organisationId}, ${organisationId}, 'upgrade', 'Upgrade')`,
+        );
+        await database.db.execute(
+          sql`insert into role_permission (id, origin_server, organisation_id, owner_org_id,
+                role_id, permission_key)
+              values (${grantId}, ${origin}, ${organisationId}, ${organisationId},
+                ${roleId}, 'upgrade:read')`,
+        );
+        await migrate(database);
+        const [row] = await rows(
+          database,
+          sql`select reach from role_permission where id = ${grantId}`,
+        );
+        expect(row).toEqual({ reach: 'own-scope' });
+      } finally {
+        rmSync(folder, { recursive: true, force: true });
         await cleanup();
       }
     });
@@ -1331,6 +1403,374 @@ describe.each(testTargets)('database schema on $name', (target) => {
                    where id = ${link!.id}) as link_deleted`,
           );
           expect(row).toEqual({ role_name: 'Renamed', link_deleted: true });
+        });
+      });
+
+      describe('role_permission reach', () => {
+        const ORG_ROLE_ONLY = 'role_permission_all_projects_org_role_only';
+        const NOT_SENSITIVE = 'role_permission_all_projects_not_sensitive';
+        const NO_DEPARTMENT =
+          'role_permission_all_projects_no_department_check';
+        const orgRoleOnly = {
+          code: SQLSTATE.checkViolation,
+          constraint: ORG_ROLE_ONLY,
+        };
+        const notSensitive = {
+          code: SQLSTATE.checkViolation,
+          constraint: NOT_SENSITIVE,
+        };
+
+        let permissionCounter = 0;
+        /** A catalogue row that nothing else in this file uses. */
+        const newPermission = async (grantsSensitive = false) => {
+          permissionCounter += 1;
+          const key = `reach:key-${permissionCounter}`;
+          await database.db.insert(permission).values({
+            key,
+            module: 'reach',
+            description: 'Reach test',
+            grantsSensitive,
+          });
+          return key;
+        };
+
+        const grant = (
+          roleId: string,
+          permissionKey: string,
+          overrides: Partial<typeof rolePermission.$inferInsert> = {},
+        ) => ({
+          ...rolePermissionValues(a.organisationId, roleId, null),
+          permissionKey,
+          reach: 'all-projects' as const,
+          ...overrides,
+        });
+
+        const reachOf = async (id: string) => {
+          const [row] = await rows(
+            database,
+            sql`select reach from role_permission where id = ${id}`,
+          );
+          return row!.reach;
+        };
+
+        it('defaults reach to own-scope', async () => {
+          const r = await insertRole(
+            database,
+            a.organisationId,
+            'reach-default',
+          );
+          const [row] = await database.db
+            .insert(rolePermission)
+            .values(rolePermissionValues(a.organisationId, r, null))
+            .returning({ id: rolePermission.id });
+          expect(await reachOf(row!.id)).toBe('own-scope');
+        });
+
+        it('rejects an unknown reach', async () => {
+          const r = await insertRole(database, a.organisationId, 'reach-bad');
+          const failure = await failureOf(() =>
+            database.db.insert(rolePermission).values(
+              grant(r, 'budget:read', {
+                reach: 'everywhere' as never,
+              }),
+            ),
+          );
+          expect(failure).toEqual(
+            checkViolation('role_permission_reach_check'),
+          );
+        });
+
+        it('accepts an organisation-wide all-projects grant on an organisation role', async () => {
+          const r = await insertRole(database, a.organisationId, 'reach-ok');
+          const key = await newPermission();
+          const [row] = await database.db
+            .insert(rolePermission)
+            .values(grant(r, key))
+            .returning({ id: rolePermission.id });
+          expect(await reachOf(row!.id)).toBe('all-projects');
+        });
+
+        it('rejects a department-scoped all-projects grant, but allows a department-scoped own-scope one', async () => {
+          const r = await insertRole(database, a.organisationId, 'reach-dept');
+          const d = await insertDepartment(database, a.organisationId, 'reach');
+          const key = await newPermission();
+          const failure = await failureOf(() =>
+            database.db
+              .insert(rolePermission)
+              .values(grant(r, key, { departmentId: d })),
+          );
+          expect(failure).toEqual(checkViolation(NO_DEPARTMENT));
+          await database.db
+            .insert(rolePermission)
+            .values(grant(r, key, { departmentId: d, reach: 'own-scope' }));
+        });
+
+        it('rejects an all-projects grant on a project role, naming the rule in the message', async () => {
+          const projectRole = await insertProjectRole(
+            database,
+            a.organisationId,
+            a.projectId,
+            'reach-project-role',
+          );
+          const key = await newPermission();
+          const failure = await failureWithMessageOf(() =>
+            database.db.insert(rolePermission).values(grant(projectRole, key)),
+          );
+          expect(failure).toMatchObject(orgRoleOnly);
+          expect(failure.message).toContain(ORG_ROLE_ONLY);
+        });
+
+        it('rejects making a grant on a project role all-projects', async () => {
+          const projectRole = await insertProjectRole(
+            database,
+            a.organisationId,
+            a.projectId,
+            'reach-project-role-update',
+          );
+          const key = await newPermission();
+          const [row] = await database.db
+            .insert(rolePermission)
+            .values(grant(projectRole, key, { reach: 'own-scope' }))
+            .returning({ id: rolePermission.id });
+          const failure = await failureOf(() =>
+            database.db
+              .update(rolePermission)
+              .set({ reach: 'all-projects' })
+              .where(eq(rolePermission.id, row!.id)),
+          );
+          expect(failure).toEqual(orgRoleOnly);
+        });
+
+        it('rejects pointing an all-projects grant at a project role', async () => {
+          const orgRole = await insertRole(
+            database,
+            a.organisationId,
+            'reach-repoint',
+          );
+          const projectRole = await insertProjectRole(
+            database,
+            a.organisationId,
+            a.projectId,
+            'reach-repoint-project-role',
+          );
+          const key = await newPermission();
+          const [row] = await database.db
+            .insert(rolePermission)
+            .values(grant(orgRole, key))
+            .returning({ id: rolePermission.id });
+          const failure = await failureOf(() =>
+            database.db
+              .update(rolePermission)
+              .set({ roleId: projectRole })
+              .where(eq(rolePermission.id, row!.id)),
+          );
+          expect(failure).toEqual(orgRoleOnly);
+        });
+
+        it('rejects turning an organisation role with all-projects grants into a project role, naming the rule in the message', async () => {
+          const r = await insertRole(database, a.organisationId, 'reach-turn');
+          const key = await newPermission();
+          await database.db.insert(rolePermission).values(grant(r, key));
+          const failure = await failureWithMessageOf(() =>
+            database.db
+              .update(role)
+              .set({ projectId: a.projectId })
+              .where(eq(role.id, r)),
+          );
+          expect(failure).toMatchObject(orgRoleOnly);
+          expect(failure.message).toContain(ORG_ROLE_ONLY);
+          const [row] = await rows(
+            database,
+            sql`select project_id from role where id = ${r}`,
+          );
+          expect(row).toEqual({ project_id: null });
+        });
+
+        it('keeps a role organisation-wide while only a deleted all-projects grant references it', async () => {
+          const r = await insertRole(
+            database,
+            a.organisationId,
+            'reach-turn-deleted',
+          );
+          const key = await newPermission();
+          await database.db
+            .insert(rolePermission)
+            .values(grant(r, key, { deletedAt: new Date() }));
+          const failure = await failureOf(() =>
+            database.db
+              .update(role)
+              .set({ projectId: a.projectId })
+              .where(eq(role.id, r)),
+          );
+          expect(failure).toEqual(orgRoleOnly);
+        });
+
+        it('lets a role with only own-scope grants become a project role', async () => {
+          const r = await insertRole(database, a.organisationId, 'reach-free');
+          const key = await newPermission();
+          await database.db
+            .insert(rolePermission)
+            .values(grant(r, key, { reach: 'own-scope' }));
+          await database.db
+            .update(role)
+            .set({ projectId: a.projectId })
+            .where(eq(role.id, r));
+          const [row] = await rows(
+            database,
+            sql`select project_id from role where id = ${r}`,
+          );
+          expect(row).toEqual({ project_id: a.projectId });
+        });
+
+        it('rejects an all-projects grant of a sensitive permission, naming the rule in the message', async () => {
+          const r = await insertRole(database, a.organisationId, 'reach-sens');
+          const key = await newPermission(true);
+          const failure = await failureWithMessageOf(() =>
+            database.db.insert(rolePermission).values(grant(r, key)),
+          );
+          expect(failure).toMatchObject(notSensitive);
+          expect(failure.message).toContain(NOT_SENSITIVE);
+        });
+
+        it('allows an own-scope grant of a sensitive permission', async () => {
+          const r = await insertRole(database, a.organisationId, 'reach-own');
+          const key = await newPermission(true);
+          await database.db
+            .insert(rolePermission)
+            .values(grant(r, key, { reach: 'own-scope' }));
+        });
+
+        it('rejects making an own-scope grant of a sensitive permission all-projects', async () => {
+          const r = await insertRole(database, a.organisationId, 'reach-widen');
+          const key = await newPermission(true);
+          const [row] = await database.db
+            .insert(rolePermission)
+            .values(grant(r, key, { reach: 'own-scope' }))
+            .returning({ id: rolePermission.id });
+          const failure = await failureOf(() =>
+            database.db
+              .update(rolePermission)
+              .set({ reach: 'all-projects' })
+              .where(eq(rolePermission.id, row!.id)),
+          );
+          expect(failure).toEqual(notSensitive);
+        });
+
+        it('rejects pointing an all-projects grant at a sensitive permission', async () => {
+          const r = await insertRole(database, a.organisationId, 'reach-swap');
+          const plain = await newPermission();
+          const sensitive = await newPermission(true);
+          const [row] = await database.db
+            .insert(rolePermission)
+            .values(grant(r, plain))
+            .returning({ id: rolePermission.id });
+          const failure = await failureOf(() =>
+            database.db
+              .update(rolePermission)
+              .set({ permissionKey: sensitive })
+              .where(eq(rolePermission.id, row!.id)),
+          );
+          expect(failure).toEqual(notSensitive);
+        });
+
+        it('rejects flagging a permission sensitive while an all-projects grant exists, naming the rule in the message', async () => {
+          const r = await insertRole(database, a.organisationId, 'reach-flip');
+          const key = await newPermission();
+          await database.db.insert(rolePermission).values(grant(r, key));
+          const failure = await failureWithMessageOf(() =>
+            database.db
+              .update(permission)
+              .set({ grantsSensitive: true })
+              .where(eq(permission.key, key)),
+          );
+          expect(failure).toMatchObject(notSensitive);
+          expect(failure.message).toContain(NOT_SENSITIVE);
+          const [row] = await rows(
+            database,
+            sql`select grants_sensitive from permission where key = ${key}`,
+          );
+          expect(row).toEqual({ grants_sensitive: false });
+        });
+
+        it('rejects the same flip made through syncPermissions', async () => {
+          const r = await insertRole(database, a.organisationId, 'reach-sync');
+          const key = await newPermission();
+          await database.db.insert(rolePermission).values(grant(r, key));
+          const failure = await failureOf(() =>
+            syncPermissions(database.db, [
+              {
+                key,
+                module: 'reach',
+                description: 'Reach test',
+                grantsSensitive: true,
+              },
+            ]),
+          );
+          expect(failure).toEqual(notSensitive);
+        });
+
+        it('counts a deleted all-projects grant when a permission is flagged sensitive', async () => {
+          const r = await insertRole(
+            database,
+            a.organisationId,
+            'reach-flip-deleted',
+          );
+          const key = await newPermission();
+          await database.db
+            .insert(rolePermission)
+            .values(grant(r, key, { deletedAt: new Date() }));
+          const failure = await failureOf(() =>
+            database.db
+              .update(permission)
+              .set({ grantsSensitive: true })
+              .where(eq(permission.key, key)),
+          );
+          expect(failure).toEqual(notSensitive);
+        });
+
+        it('lets a permission with only own-scope grants become sensitive', async () => {
+          const r = await insertRole(
+            database,
+            a.organisationId,
+            'reach-flip-ok',
+          );
+          const key = await newPermission();
+          await database.db
+            .insert(rolePermission)
+            .values(grant(r, key, { reach: 'own-scope' }));
+          await database.db
+            .update(permission)
+            .set({ grantsSensitive: true })
+            .where(eq(permission.key, key));
+          const [row] = await rows(
+            database,
+            sql`select grants_sensitive from permission where key = ${key}`,
+          );
+          expect(row).toEqual({ grants_sensitive: true });
+        });
+
+        it('does not block other changes to a permission or a role that has all-projects grants', async () => {
+          const r = await insertRole(database, a.organisationId, 'reach-other');
+          const key = await newPermission();
+          await database.db.insert(rolePermission).values(grant(r, key));
+          await database.db
+            .update(permission)
+            .set({ description: 'Reworded' })
+            .where(eq(permission.key, key));
+          await database.db
+            .update(role)
+            .set({ name: 'Renamed' })
+            .where(eq(role.id, r));
+          const [row] = await rows(
+            database,
+            sql`select
+                  (select description from permission where key = ${key}) as description,
+                  (select name from role where id = ${r}) as role_name`,
+          );
+          expect(row).toEqual({
+            description: 'Reworded',
+            role_name: 'Renamed',
+          });
         });
       });
 
