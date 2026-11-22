@@ -44,9 +44,13 @@ export type PermissionSyncConflict = {
  * `role_permission_all_projects_not_sensitive`), so the database refuses the
  * change. Nothing from the list was written.
  *
- * The message and `conflicts` name each permission key and the organisation
- * roles, by organisation id and role key, and say how to fix it: remove those
- * grants, then restart. They carry no names, descriptions or other values.
+ * The server narrows the grants of managed roles by itself before the sync
+ * (`narrowManagedSensitiveGrants`), so only roles an organisation made can be
+ * named here. The message and `conflicts` name each permission key and those
+ * roles, by organisation id and role key, and say how to fix it: the release that
+ * flags the permission must ship a migration that narrows the grants to
+ * own-scope, and until it does an operator narrows or removes them and restarts.
+ * They carry no names, descriptions or other values.
  */
 export class PermissionSyncError extends Error {
   constructor(readonly conflicts: readonly PermissionSyncConflict[]) {
@@ -66,8 +70,10 @@ export class PermissionSyncError extends Error {
                 .join(', ')}.`,
           )
           .join(' ') +
-        ' Remove those grants, then restart. A removed grant still counts: ' +
-        'change its reach to own-scope or delete the row.',
+        ' The release that flags this permission must ship a migration that ' +
+        'narrows these grants to own-scope. Until it does, narrow or remove ' +
+        'them, then restart. A removed grant still counts: change its reach ' +
+        'to own-scope or delete the row.',
     );
     this.name = 'PermissionSyncError';
   }
@@ -154,8 +160,9 @@ async function allProjectsHolders(
  * leaves the caller's transaction usable.
  *
  * @throws PermissionSyncError when a key is flagged `grantsSensitive` while
- * organisation roles hold `all-projects` grants of it. It names the key and the
- * roles; nothing is written.
+ * organisation roles hold `all-projects` grants of it (the managed roles' own
+ * grants are narrowed first, by `narrowManagedSensitiveGrants`). It names the key
+ * and the roles; nothing is written.
  * @throws The database's own error when a key breaks the key-format CHECK.
  */
 export async function syncPermissions(

@@ -1,4 +1,4 @@
-import { like, sql } from 'drizzle-orm';
+import { eq, like, or, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PERMISSION_LISTS } from '../access/permission-lists.js';
 import { syncPermissions } from '../access/permission-sync.js';
@@ -8,7 +8,10 @@ import { newId } from '../db/ids.js';
 import { auditEvent, SECURITY_TABLES } from '../db/schema/index.js';
 import { getTableName } from 'drizzle-orm';
 import { createMigratedDatabase, testTargets } from '../db/test-support.js';
-import { topUpAdministratorRoles } from './administrator-role.js';
+import {
+  narrowManagedSensitiveGrants,
+  topUpAdministratorRoles,
+} from './administrator-role.js';
 import { ensureInstallation } from './ensure-installation.js';
 import { completeFirstRunSetup } from './first-run-setup.js';
 import {
@@ -71,6 +74,11 @@ const LATER_PERMISSIONS = [
   },
 ];
 const LATER_LISTS = [...PERMISSION_LISTS, LATER_PERMISSIONS];
+/** The release after that flags the same permission sensitive. */
+const LATER_SENSITIVE_LISTS = [
+  ...PERMISSION_LISTS,
+  LATER_PERMISSIONS.map((entry) => ({ ...entry, grantsSensitive: true })),
+];
 
 describe.each(testTargets)('auth audit events on $name', (target) => {
   let database: Database;
@@ -89,8 +97,17 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
   });
 
   const db = () => database.db;
+  // The auth services' events: `auth.*`, and the one about a role's grant.
   const authEvents = () =>
-    db().select().from(auditEvent).where(like(auditEvent.category, 'auth.%'));
+    db()
+      .select()
+      .from(auditEvent)
+      .where(
+        or(
+          like(auditEvent.category, 'auth.%'),
+          eq(auditEvent.category, AUTH_AUDIT.grantReachReduced),
+        ),
+      );
   const byCategory = async (category: string) =>
     (await authEvents()).filter((event) => event.category === category);
 
@@ -378,6 +395,12 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
       now: at(39 * MINUTE),
       lists: LATER_LISTS,
     });
+    // And the one after that flags it sensitive, so the role's grant of it is
+    // narrowed.
+    await narrowManagedSensitiveGrants(db(), {
+      now: at(40 * MINUTE),
+      lists: LATER_SENSITIVE_LISTS,
+    });
     secrets.push(
       firstRunCode,
       normaliseHumanCode(firstRunCode)!,
@@ -577,6 +600,28 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
     expect(JSON.stringify(events)).not.toContain('later:');
   });
 
+  it('records the narrowing of a managed grant, from the system, naming the role, the permission and both reaches, and nothing else', async () => {
+    const events = await byCategory(AUTH_AUDIT.grantReachReduced);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      action: 'reduce-reach',
+      actorType: 'system',
+      actorId: null,
+      targetType: 'role',
+      organisationId: setupOrganisationId,
+      details: {
+        permissionKey: 'later:read',
+        from: 'all-projects',
+        to: 'own-scope',
+      },
+    });
+    expect(events[0]!.occurredAt).toEqual(at(40 * MINUTE));
+    // The role it names is the one setup made.
+    const [created] = await byCategory(AUTH_AUDIT.roleCreated);
+    expect(events[0]!.targetId).toBe(created!.targetId);
+    expect(events[0]!.details).toMatchObject({ roleId: created!.targetId });
+  });
+
   it('records each passkey registration started and finished, for its user, with the passkey as the target of the second', async () => {
     const started = (
       await byCategory(AUTH_AUDIT.passkeyRegistrationStarted)
@@ -680,6 +725,11 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
     await topUpAdministratorRoles(db(), {
       now: at(20 * MINUTE),
       lists: LATER_LISTS,
+    });
+    // Nothing left to narrow.
+    await narrowManagedSensitiveGrants(db(), {
+      now: at(20 * MINUTE),
+      lists: LATER_SENSITIVE_LISTS,
     });
     expect((await authEvents()).length).toBe(before);
   });

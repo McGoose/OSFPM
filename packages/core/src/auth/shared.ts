@@ -57,6 +57,12 @@ export const AUTH_AUDIT = {
   roleCreated: 'auth.role-created',
   membershipCreated: 'auth.membership-created',
   administratorRoleToppedUp: 'auth.administrator-role-topped-up',
+  /**
+   * A grant of a managed role was narrowed from `all-projects` to `own-scope`
+   * because a release flagged its permission sensitive. The one category here that
+   * is not under `auth.`: the event is about a role (SC-10, decision D-56).
+   */
+  grantReachReduced: 'role.grant-reach-reduced',
 } as const;
 
 /** Details of an auth audit event: scalar values only, so nothing nested can hide a secret. */

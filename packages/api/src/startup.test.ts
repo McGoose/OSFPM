@@ -4,14 +4,26 @@ import {
   PermissionSyncError,
   syncPermissions,
 } from '@osfpm/core/src/access/permission-sync.js';
+import { withManagedRoleMaintenance } from '@osfpm/core/src/access/managed-role.js';
 import {
   grantOnOrganisation,
   seedOrganisation,
   seedUser,
 } from '@osfpm/core/src/access/test-fixtures.js';
+import { completeFirstRunSetup } from '@osfpm/core/src/auth/first-run-setup.js';
+import { AUTH_AUDIT } from '@osfpm/core/src/auth/shared.js';
+import {
+  demoSetupInput,
+  seedFirstRun,
+} from '@osfpm/core/src/auth/test-support.js';
 import type { Database } from '@osfpm/core/src/db/client.js';
 import { migrate } from '@osfpm/core/src/db/migrate.js';
-import { permission } from '@osfpm/core/src/db/schema/index.js';
+import {
+  auditEvent,
+  changeEvent,
+  permission,
+  rolePermission,
+} from '@osfpm/core/src/db/schema/index.js';
 import {
   testTargets,
   type TestTarget,
@@ -82,6 +94,26 @@ describe.each(testTargets)('start-up on $name', (target: TestTarget) => {
     const response = await ready();
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ status: 'ready' });
+  });
+
+  it('narrows managed grants first, in the transaction of the sync, then syncs every list', async () => {
+    const calls: string[] = [];
+    const steps: StartupSteps = {
+      ...recordingSteps(calls),
+      narrowManagedGrants: () => {
+        calls.push('narrow');
+        return Promise.resolve(0);
+      },
+    };
+    await runStartup(app, { autoMigrate: true }, steps);
+
+    // The sync refuses to flag a permission while a managed role holds it
+    // everywhere, so the narrowing cannot come after it.
+    expect(calls).toEqual([
+      'migrate',
+      'narrow',
+      ...PERMISSION_LISTS.map(() => 'sync'),
+    ]);
   });
 
   it('makes the installation after the sync, then tops up the Administrator role, then reports ready', async () => {
@@ -231,7 +263,7 @@ describe.each(testTargets)('start-up on $name', (target: TestTarget) => {
       const { message } = error as PermissionSyncError;
       expect(message).toContain(key);
       expect(message).toContain(`role admin in organisation ${organisationId}`);
-      expect(message).toContain('Remove those grants, then restart');
+      expect(message).toContain('ship a migration that narrows');
       expect((await ready()).statusCode).toBe(503);
     });
 
@@ -242,6 +274,122 @@ describe.each(testTargets)('start-up on $name', (target: TestTarget) => {
       ).rejects.toBeInstanceOf(PermissionSyncError);
       // Only the row the test inserted is there: the lists share one transaction.
       expect(await storedKeys()).toEqual(['sensitive:read:medical']);
+    });
+  });
+
+  describe('a permission that a release newly flags sensitive, while the Administrator role holds it in every project', () => {
+    const KEY = 'sensitive:read:medical';
+
+    /**
+     * A server as the release before left it: first-run setup is done, and the
+     * Administrator role holds `KEY` with `all-projects` reach, because it was an
+     * ordinary permission then. The test writes the rows directly, as fixtures do,
+     * with the managed-role triggers off as only the server's own code switches
+     * them off.
+     */
+    async function installedBeforeTheFlag() {
+      await migrate(database);
+      const now = new Date();
+      const code = await seedFirstRun(database, now);
+      const done = await completeFirstRunSetup(
+        database.db,
+        demoSetupInput(code),
+        now,
+      );
+      if (!done.ok) throw new Error('the setup was refused');
+      await database.db.execute(
+        "update permission set grants_sensitive = false where key = 'sensitive:read:medical'",
+      );
+      await withManagedRoleMaintenance(database.db, (tx) =>
+        tx.execute(
+          "update role_permission set reach = 'all-projects' where permission_key = 'sensitive:read:medical'",
+        ),
+      );
+      return done.organisation.id;
+    }
+
+    const grants = async () =>
+      (await database.db.select().from(rolePermission)).filter(
+        (grant) => grant.permissionKey === KEY,
+      );
+    const flagged = async () =>
+      (await database.db.select().from(permission)).find(
+        (row) => row.key === KEY,
+      )!.grantsSensitive;
+    const reductions = async () =>
+      (await database.db.select().from(auditEvent)).filter(
+        (event) => event.category === AUTH_AUDIT.grantReachReduced,
+      );
+
+    it('narrows the managed role’s grant to own-scope and starts', async () => {
+      const organisationId = await installedBeforeTheFlag();
+      expect((await grants()).map((grant) => grant.reach)).toEqual([
+        'all-projects',
+      ]);
+
+      await runStartup(app, { autoMigrate: false });
+
+      expect((await grants()).map((grant) => grant.reach)).toEqual([
+        'own-scope',
+      ]);
+      expect(await flagged()).toBe(true);
+      expect((await ready()).statusCode).toBe(200);
+      const events = await reductions();
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        actorType: 'system',
+        organisationId,
+        details: { permissionKey: KEY, from: 'all-projects', to: 'own-scope' },
+      });
+    });
+
+    it('does nothing at the next start: no further event, no further change', async () => {
+      await installedBeforeTheFlag();
+      await runStartup(app, { autoMigrate: false });
+      const events = (await database.db.select().from(auditEvent)).length;
+      const changes = (await database.db.select().from(changeEvent)).length;
+
+      await runStartup(app, { autoMigrate: false });
+
+      expect((await database.db.select().from(auditEvent)).length).toBe(events);
+      expect((await database.db.select().from(changeEvent)).length).toBe(
+        changes,
+      );
+      expect(await reductions()).toHaveLength(1);
+    });
+
+    it('still stops for a role an organisation made, names it, and takes the narrowing back with the sync', async () => {
+      await installedBeforeTheFlag();
+      const other = await seedOrganisation(database);
+      const owner = await seedUser(database);
+      await grantOnOrganisation(
+        database,
+        other.organisationId,
+        owner,
+        'admin',
+        [KEY],
+        { reach: 'all-projects' },
+      );
+
+      const error = await runStartup(app, { autoMigrate: false }).then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+
+      expect(error).toBeInstanceOf(PermissionSyncError);
+      const { message } = error as PermissionSyncError;
+      expect(message).toContain(
+        `role admin in organisation ${other.organisationId}`,
+      );
+      expect(message).toContain('ship a migration that narrows');
+      // One transaction: the managed role’s grant is as it was, and nothing was audited.
+      expect((await grants()).map((grant) => grant.reach).sort()).toEqual([
+        'all-projects',
+        'all-projects',
+      ]);
+      expect(await flagged()).toBe(false);
+      expect(await reductions()).toEqual([]);
+      expect((await ready()).statusCode).toBe(503);
     });
   });
 });
