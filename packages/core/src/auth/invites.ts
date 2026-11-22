@@ -542,8 +542,7 @@ export function revokeInvite(
             eq(invite.organisationId, organisationId),
           ),
         )
-        .limit(1)
-        .for('update');
+        .limit(1);
       if (stateOf(row, now) !== 'live') {
         throw new RecordNotFoundError('invite', inviteId);
       }
@@ -763,8 +762,7 @@ async function runAccept(
     })
     .from(invite)
     .where(eq(invite.id, known.id))
-    .limit(1)
-    .for('update');
+    .limit(1);
   // Judged again under the lock: a revoke or another accept may have got there
   // between the read above and the lock.
   const late = stateOf(locked, now);
