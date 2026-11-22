@@ -28,6 +28,10 @@ Each table has its cleanup, and `TRANSIENT_CLEANUPS` lists them. A cleanup takes
 - `login_challenge`: `cleanupExpiredChallenges` deletes every challenge that has expired.
 - `setup_code`: `cleanupSetupCodes` deletes every code that was used, revoked or has expired.
 
+**The `security-log` class**
+
+Reserved for audit rows that hold IP addresses, as its description in `0013_seed_retention_classes` says. No table uses it yet.
+
 **Rules you must not break**
 
 - Legal and financial periods live only in `SHIPPED_RETENTION_DEFAULTS`, each marked `verified: false`, until the rule-pack engine replaces them. Never repeat a shipped period anywhere else.

@@ -18,6 +18,7 @@ The database layer: clients, the Drizzle schema, the write helper and the column
 - Tag sensitive columns with `markSensitive`. Never put a sensitive value in a log, an error or an audit detail.
 - IDs come from `newId()` (UUIDv7). The database never makes them.
 - Migrations are forward-only. Put a comment above each hand-written SQL block, such as the append-only triggers, and say so in the commit message.
+- Migrations may change metadata of existing rows (retention class, defaults) without audit events; they never change security state (revoke, disable, grant).
 - Name foreign keys `<table>_<target>_fk`. A key that starts with `organisation_id` keeps the reference inside one organisation.
 
 **Tests:** `schema.test.ts` checks every table's structure and constraints. `change-log.test.ts` and `write-project.test.ts` cover the write helper. `production-structure.test.ts`, `library.test.ts` and `retention-class.test.ts` cover their tables. `migrate-lock.test.ts` checks, with the migrator replaced, the order of what `migrate` does around it and that it runs on the one connection that holds the lock. `migrate.test.ts`, on PostgreSQL only, runs the real migrator: two migrators at once, one that waits for a held lock, a pool of one connection, and a failed migration. `test-support.ts` provides the PGlite and PostgreSQL targets.
