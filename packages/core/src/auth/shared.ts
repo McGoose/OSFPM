@@ -50,6 +50,12 @@ export const AUTH_AUDIT = {
   passkeyRenamed: 'auth.passkey-renamed',
   passkeyRevoked: 'auth.passkey-revoked',
   installationCreated: 'auth.installation-created',
+  setupCheckFailed: 'auth.setup-check-failed',
+  setupCompleted: 'auth.setup-completed',
+  userCreated: 'auth.user-created',
+  organisationCreated: 'auth.organisation-created',
+  roleCreated: 'auth.role-created',
+  membershipCreated: 'auth.membership-created',
 } as const;
 
 /** Details of an auth audit event: scalar values only, so nothing nested can hide a secret. */
@@ -58,7 +64,9 @@ export type AuthAuditDetails = Record<string, string | number | boolean | null>;
 /**
  * Records one auth audit event in the caller's transaction (CLAUDE.md, Data
  * rules: security tables are audited, not change-logged). The event is install
- * level, with no organisation. Callers keep every secret out of `details`.
+ * level, with no organisation, unless `organisationId` is given: first-run setup
+ * writes about the organisation it made, and the organisation must exist by then.
+ * Callers keep every secret, and every address, out of `details`.
  */
 export function recordAuthAudit(
   tx: Tx,
@@ -68,6 +76,7 @@ export function recordAuthAudit(
     actor: AuthActor;
     targetType: string | null;
     targetId: string | null;
+    organisationId?: string | null;
     details?: AuthAuditDetails;
     occurredAt: Date;
   },
@@ -78,6 +87,7 @@ export function recordAuthAudit(
     actor: event.actor,
     targetType: event.targetType,
     targetId: event.targetId,
+    organisationId: event.organisationId ?? null,
     details: event.details ?? null,
     occurredAt: event.occurredAt,
   });

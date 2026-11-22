@@ -1,11 +1,15 @@
 import { like, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { PERMISSION_LISTS } from '../access/permission-lists.js';
+import { syncPermissions } from '../access/permission-sync.js';
+import { tenantTableNames } from '../db/columns.js';
 import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
 import { auditEvent, SECURITY_TABLES } from '../db/schema/index.js';
 import { getTableName } from 'drizzle-orm';
 import { createMigratedDatabase, testTargets } from '../db/test-support.js';
 import { ensureInstallation } from './ensure-installation.js';
+import { completeFirstRunSetup } from './first-run-setup.js';
 import {
   consumeLoginChallenge,
   createLoginChallenge,
@@ -30,9 +34,16 @@ import {
   revokeUserSessions,
   validateSession,
 } from './sessions.js';
-import { consumeSetupCode, issueSetupCode } from './setup-code.js';
+import {
+  checkSetupCode,
+  consumeSetupCode,
+  issueSetupCode,
+} from './setup-code.js';
 import { AUTH_AUDIT } from './shared.js';
 import {
+  DEMO_ADMIN_EMAIL,
+  DEMO_ADMIN_PASSWORD,
+  demoSetupInput,
   emailOf,
   everyRowAsText,
   passwordHashWith,
@@ -88,6 +99,7 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
   let passkeyUserId: string;
   let firstPasskeyId: string;
   let revokedPasskeyId: string;
+  let setupOrganisationId: string;
 
   beforeAll(async () => {
     userId = await seedActiveUser(database);
@@ -335,6 +347,25 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
       passkeyId: revokedPasskeyId,
       now: at(35 * MINUTE),
     });
+
+    // First-run setup, last, because it completes setup and the setup codes above
+    // needed it incomplete: a check that fails, then the setup itself.
+    for (const list of PERMISSION_LISTS) await syncPermissions(db(), list);
+    await checkSetupCode(db(), 'AAAA-AAAA-AAAA-AAAA', at(36 * MINUTE));
+    const firstRunCode = await issueSetupCode(db(), at(37 * MINUTE));
+    const setup = await completeFirstRunSetup(
+      db(),
+      demoSetupInput(firstRunCode),
+      at(38 * MINUTE),
+    );
+    if (!setup.ok) throw new Error('the setup was refused');
+    setupOrganisationId = setup.organisation.id;
+    secrets.push(
+      firstRunCode,
+      normaliseHumanCode(firstRunCode)!,
+      hashHumanCode(firstRunCode)!,
+      DEMO_ADMIN_PASSWORD,
+    );
   });
 
   it('records every kind of action the services take', async () => {
@@ -452,7 +483,8 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
     const issued = (await byCategory(AUTH_AUDIT.setupCodeIssued)).sort(
       (a, b) => a.occurredAt.getTime() - b.occurredAt.getTime(),
     );
-    expect(issued).toHaveLength(2);
+    // Two here, and the third that the first-run setup at the end of the flow used.
+    expect(issued).toHaveLength(3);
     expect(issued[0]).toMatchObject({
       action: 'issue',
       actorType: 'system',
@@ -464,13 +496,49 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
     expect((issued[1]!.details as { expiresAt: string }).expiresAt).toBe(
       at(17 * MINUTE + 24 * 60 * MINUTE).toISOString(),
     );
-    const [used] = await byCategory(AUTH_AUDIT.setupCodeUsed);
-    expect(used).toMatchObject({
+    // The code before it had been used, so there was none live to replace.
+    expect(issued[2]!.details).toMatchObject({ replaced: 0 });
+    const used = (await byCategory(AUTH_AUDIT.setupCodeUsed)).filter(
+      (event) => event.targetId === setupCodeId,
+    );
+    expect(used).toHaveLength(1);
+    expect(used[0]).toMatchObject({
       action: 'use',
       actorType: 'system',
       targetType: 'setup_code',
       targetId: setupCodeId,
     });
+  });
+
+  it('records a failed check of the setup code, the installation made, and the first-run setup as one event for each part, with ids and no address', async () => {
+    const [failed] = await byCategory(AUTH_AUDIT.setupCheckFailed);
+    expect(failed).toMatchObject({
+      action: 'check',
+      actorType: 'system',
+      actorId: null,
+      targetType: null,
+      targetId: null,
+      details: { purpose: 'check' },
+    });
+    for (const category of [
+      AUTH_AUDIT.installationCreated,
+      AUTH_AUDIT.userCreated,
+      AUTH_AUDIT.organisationCreated,
+      AUTH_AUDIT.roleCreated,
+      AUTH_AUDIT.membershipCreated,
+      AUTH_AUDIT.setupCompleted,
+    ]) {
+      expect(await byCategory(category), category).toHaveLength(1);
+    }
+    const [completed] = await byCategory(AUTH_AUDIT.setupCompleted);
+    expect(completed).toMatchObject({
+      organisationId: setupOrganisationId,
+      details: { organisationId: setupOrganisationId },
+    });
+    // The address is kept on the user and written in no event.
+    expect(JSON.stringify(await db().select().from(auditEvent))).not.toContain(
+      DEMO_ADMIN_EMAIL,
+    );
   });
 
   it('records each passkey registration started and finished, for its user, with the passkey as the target of the second', async () => {
@@ -591,17 +659,25 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
     }
   });
 
-  it('keeps all of this out of the change log', async () => {
-    const [changes] = await rowsOf(
+  it('keeps all of this out of the change log: the only changes in it are the tenant records the first-run setup made', async () => {
+    const found = await rowsOf(
       database,
-      sql`select count(*)::int as n from change_event`,
+      sql`select distinct entity_type from change_event`,
     );
-    const [counters] = await rowsOf(
+    const types = found.map((row) => String(row.entity_type));
+    expect(types.length).toBeGreaterThan(0);
+    // Tenant tables alone: no security table, and neither `user` nor `installation`.
+    for (const type of types) {
+      expect(tenantTableNames().has(type), type).toBe(true);
+    }
+    // The one counter is the new organisation's own; no other flow took one.
+    const counters = await rowsOf(
       database,
-      sql`select count(*)::int as n from change_seq`,
+      sql`select organisation_id, project_id from change_seq`,
     );
-    expect(changes!.n).toBe(0);
-    expect(counters!.n).toBe(0);
+    expect(counters).toEqual([
+      { organisation_id: setupOrganisationId, project_id: null },
+    ]);
     for (const table of SECURITY_TABLES) {
       const [found] = await rowsOf(
         database,

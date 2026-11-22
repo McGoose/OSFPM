@@ -14,6 +14,8 @@ import type {
   RegistrationResponseJSON,
 } from '@simplewebauthn/server';
 import { isoCBOR } from '@simplewebauthn/server/helpers';
+import { PERMISSION_LISTS } from '../access/permission-lists.js';
+import { syncPermissions } from '../access/permission-sync.js';
 import { ORIGIN, seedUser } from '../access/test-fixtures.js';
 import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
@@ -23,8 +25,11 @@ import {
   totpCredential,
   user,
 } from '../db/schema/index.js';
+import { ensureInstallation } from './ensure-installation.js';
+import type { FirstRunSetupInput } from './first-run-setup.js';
 import { hashPassword, PASSWORD_HASH_PARAMS } from './password.js';
 import { normalisePassword } from './password-policy.js';
+import { issueSetupCode } from './setup-code.js';
 
 /**
  * Helpers for the auth tests. Fixtures insert straight into the tables, as the
@@ -51,6 +56,62 @@ export async function markSetupComplete(
   at: Date = new Date(),
 ): Promise<void> {
   await database.db.update(installation).set({ setupCompletedAt: at });
+}
+
+/** The invented address of the administrator a first-run test sets up. */
+export const DEMO_ADMIN_EMAIL = 'ada.demo@demopictures.example';
+
+/**
+ * An invented password for that administrator. It holds no word of
+ * `DEMO_ADMIN_EMAIL` and is not on the policy's list, so the policy accepts it.
+ */
+export const DEMO_ADMIN_PASSWORD = 'meadow-lantern-slow-river';
+
+/**
+ * What the setup screen sends for the fictional Demo Pictures, with `code`: an
+ * administrator with `DEMO_ADMIN_PASSWORD` unless `password` is given, or is
+ * `null` for none (so the session must be secured first).
+ */
+export function demoSetupInput(
+  code: string,
+  options: { password?: string | null; email?: string } = {},
+): FirstRunSetupInput {
+  const password =
+    options.password === undefined ? DEMO_ADMIN_PASSWORD : options.password;
+  return {
+    code,
+    organisation: {
+      name: 'Demo Pictures',
+      country: 'GB',
+      baseCurrency: 'GBP',
+      locale: 'en-GB',
+      timeZone: 'Europe/London',
+    },
+    admin: {
+      email: options.email ?? DEMO_ADMIN_EMAIL,
+      displayName: 'Ada Demo',
+      ...(password === null ? {} : { password }),
+    },
+  };
+}
+
+/**
+ * Everything first-run setup needs: the installation row (made by the service
+ * start-up uses), the permission catalogue (every list in `PERMISSION_LISTS`, as
+ * start-up syncs them) and a live setup code, which it returns.
+ */
+export async function seedFirstRun(
+  database: Database,
+  now: Date = new Date(),
+): Promise<string> {
+  await ensureInstallation(database.db, {
+    baseUrl: 'https://osfpm.example.test',
+    now,
+  });
+  for (const list of PERMISSION_LISTS) {
+    await syncPermissions(database.db, list);
+  }
+  return issueSetupCode(database.db, now);
 }
 
 /** An active user with an invented address. */
