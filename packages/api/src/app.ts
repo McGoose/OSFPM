@@ -55,6 +55,12 @@ declare module 'fastify' {
   interface FastifyInstance {
     /** The database every route plugin works on. The caller of `buildApp` owns it. */
     db: Database;
+    /**
+     * The origin of `OSFPM_PUBLIC_URL` (see `BuildAppOptions.publicOrigin`). Start-up
+     * uses it for the installation's base URL and for the address it prints with
+     * the setup code.
+     */
+    publicOrigin: string;
     /** Whether start-up has finished (see `Readiness`). */
     readiness: Readiness;
   }
@@ -130,6 +136,7 @@ export function buildApp(options: BuildAppOptions) {
   app.setValidatorCompiler(safeValidatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   app.decorate('db', options.db);
+  app.decorate('publicOrigin', options.publicOrigin);
   // Not ready until `runStartup` says so. A caller that forgets gets 503s from
   // `/health/ready`, which is the safe way to be wrong.
   let ready = false;

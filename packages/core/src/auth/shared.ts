@@ -49,6 +49,7 @@ export const AUTH_AUDIT = {
   passkeyRegistered: 'auth.passkey-registered',
   passkeyRenamed: 'auth.passkey-renamed',
   passkeyRevoked: 'auth.passkey-revoked',
+  installationCreated: 'auth.installation-created',
 } as const;
 
 /** Details of an auth audit event: scalar values only, so nothing nested can hide a secret. */

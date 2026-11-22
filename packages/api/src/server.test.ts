@@ -7,10 +7,7 @@ import {
   syncPermissions,
 } from '@osfpm/core/src/access/permission-sync.js';
 import { createSession } from '@osfpm/core/src/auth/sessions.js';
-import {
-  seedActiveUser,
-  seedInstallation,
-} from '@osfpm/core/src/auth/test-support.js';
+import { seedActiveUser } from '@osfpm/core/src/auth/test-support.js';
 import type { Database } from '@osfpm/core/src/db/client.js';
 import { migrate } from '@osfpm/core/src/db/migrate.js';
 import { permission } from '@osfpm/core/src/db/schema/index.js';
@@ -48,6 +45,13 @@ const config: Config = {
   trustedProxies: [],
 };
 
+/**
+ * Where the setup code goes in these tests: nowhere. A server that starts with
+ * the real steps prints the code to standard error, which would fill the test
+ * output; `first-run-startup.test.ts` reads it.
+ */
+const quiet = { stderr: { write: () => true } };
+
 /** The URL the started server answers on. */
 function baseUrl(server: Awaited<ReturnType<typeof startServer>>): string {
   const address = server.app.server.address();
@@ -82,7 +86,10 @@ const called = (fn: ReturnType<typeof vi.fn>) =>
 
 describe('startServer', () => {
   it('listens, and stop() closes the app and then the database', async () => {
-    const server = await startServer(config, { signals: new EventEmitter() });
+    const server = await startServer(config, {
+      signals: new EventEmitter(),
+      ...quiet,
+    });
     await server.ready;
     const url = baseUrl(server);
     expect((await fetch(`${url}/nowhere`)).status).toBe(404);
@@ -98,7 +105,7 @@ describe('startServer', () => {
     async (signal) => {
       const signals = new EventEmitter();
       const exit = vi.fn();
-      const server = await startServer(config, { signals, exit });
+      const server = await startServer(config, { signals, exit, ...quiet });
       await server.ready;
       const url = baseUrl(server);
 
@@ -114,7 +121,7 @@ describe('startServer', () => {
   it('shuts down once when a second signal arrives during shutdown', async () => {
     const signals = new EventEmitter();
     const exit = vi.fn();
-    const server = await startServer(config, { signals, exit });
+    const server = await startServer(config, { signals, exit, ...quiet });
     await server.ready;
 
     signals.emit('SIGINT');
@@ -129,7 +136,7 @@ describe('startServer', () => {
   it('keeps listening for stop signals during shutdown, so a second one cannot kill the process half way', async () => {
     const signals = new EventEmitter();
     const exit = vi.fn();
-    const server = await startServer(config, { signals, exit });
+    const server = await startServer(config, { signals, exit, ...quiet });
     await server.ready;
 
     signals.emit('SIGTERM');
@@ -148,6 +155,7 @@ describe('startServer', () => {
       signals,
       exit,
       shutdownTimeoutMs: 100,
+      ...quiet,
     });
     await server.ready;
     // A database that never finishes closing, as a stuck query would cause.
@@ -181,10 +189,13 @@ describe('startServer', () => {
   });
 
   it('serves the session routes over HTTP once it has started: me, then logout, then the old cookie is refused', async () => {
-    const server = await startServer(config, { signals: new EventEmitter() });
+    const server = await startServer(config, {
+      signals: new EventEmitter(),
+      ...quiet,
+    });
     try {
       await server.ready;
-      await seedInstallation(server.database);
+      // The installation row is there already: start-up made it.
       const userId = await seedActiveUser(server.database);
       const { token } = await createSession(server.database.db, {
         userId,
@@ -221,6 +232,7 @@ describe('startServer', () => {
     it('migrates and syncs the permissions, and then answers ready', async () => {
       const server = await startServer(config, {
         signals: new EventEmitter(),
+        ...quiet,
       });
       try {
         await server.ready;
@@ -414,7 +426,10 @@ describe('startServer', () => {
   });
 
   it('closes the database and rethrows when the port cannot be bound', async () => {
-    const first = await startServer(config, { signals: new EventEmitter() });
+    const first = await startServer(config, {
+      signals: new EventEmitter(),
+      ...quiet,
+    });
     await first.ready;
     const address = first.app.server.address() as { port: number };
     try {

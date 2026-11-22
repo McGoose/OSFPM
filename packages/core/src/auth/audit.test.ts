@@ -5,6 +5,7 @@ import { newId } from '../db/ids.js';
 import { auditEvent, SECURITY_TABLES } from '../db/schema/index.js';
 import { getTableName } from 'drizzle-orm';
 import { createMigratedDatabase, testTargets } from '../db/test-support.js';
+import { ensureInstallation } from './ensure-installation.js';
 import {
   consumeLoginChallenge,
   createLoginChallenge,
@@ -37,7 +38,6 @@ import {
   passwordHashWith,
   rowsOf,
   seedActiveUser,
-  seedInstallation,
   seedPassword,
   softwareAuthenticator,
   totpCodeAt,
@@ -56,7 +56,11 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
 
   beforeAll(async () => {
     ({ database, cleanup } = await createMigratedDatabase(target));
-    await seedInstallation(database);
+    // Through the service, as the server does at start-up, so its event is here.
+    await ensureInstallation(database.db, {
+      baseUrl: 'https://osfpm.example.test',
+      now: T0,
+    });
   });
   afterAll(async () => {
     await cleanup();
