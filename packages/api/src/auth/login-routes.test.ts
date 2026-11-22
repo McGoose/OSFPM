@@ -13,7 +13,6 @@ import {
   createLoginChallenge,
 } from '@osfpm/core/src/auth/login-challenge.js';
 import { generateRecoveryCodes } from '@osfpm/core/src/auth/recovery.js';
-import { validateSession } from '@osfpm/core/src/auth/sessions.js';
 import { AUTH_AUDIT } from '@osfpm/core/src/auth/shared.js';
 import {
   emailOf,
@@ -121,6 +120,15 @@ describe.each(testTargets)(
           event.targetId === userId,
       );
 
+    /** A request to `GET /auth/me` that carries a session cookie: it is whoever the cookie is for. */
+    const meWith = (token: string) =>
+      ctx.app.inject({
+        method: 'GET',
+        url: `${API_PREFIX}/auth/me`,
+        headers: { cookie: `${SESSION_COOKIE}=${token}` },
+        remoteAddress: freshAddress(),
+      });
+
     const sessionsOf = async (userId: string) =>
       (await db().select().from(session)).filter(
         (row) => row.userId === userId,
@@ -174,14 +182,16 @@ describe.each(testTargets)(
         expect(cookie).toContain('Expires=');
         expect(cookie).not.toMatch(/Domain=/i);
 
-        const token = tokenIn(response)!;
-        const found = await validateSession(db(), token, new Date());
-        expect(found).toMatchObject({
-          user: { id: userId },
-          session: { method: 'password', scope: 'full' },
-        });
+        // The cookie is a live session: a request that carries it is that user.
+        const me = await meWith(tokenIn(response)!);
+        expect(me.statusCode).toBe(200);
+        expect(me.json<{ id: string }>().id).toBe(userId);
         const [stored] = await sessionsOf(userId);
-        expect(stored!.userAgentSummary).toBe('Firefox on Windows');
+        expect(stored).toMatchObject({
+          method: 'password',
+          scope: 'full',
+          userAgentSummary: 'Firefox on Windows',
+        });
       });
 
       it('audits the step and the session, and returns no token in the body', async () => {
@@ -377,9 +387,8 @@ describe.each(testTargets)(
         expect(
           response.json<{ user: { id: string; email: string } }>().user,
         ).toMatchObject({ id: userId, email });
-        const token = tokenIn(response)!;
-        const found = await validateSession(db(), token, new Date());
-        expect(found!.session).toMatchObject({
+        expect((await meWith(tokenIn(response)!)).statusCode).toBe(200);
+        expect((await sessionsOf(userId))[0]).toMatchObject({
           method: 'password+totp',
           scope: 'full',
         });
@@ -498,9 +507,9 @@ describe.each(testTargets)(
           },
           mustSecureAccount: true,
         });
-        const token = tokenIn(response)!;
-        const found = await validateSession(db(), token, new Date());
-        expect(found!.session).toMatchObject({
+        // `me` is open to a recovery session, so the cookie can be tried.
+        expect((await meWith(tokenIn(response)!)).statusCode).toBe(200);
+        expect((await sessionsOf(userId))[0]).toMatchObject({
           method: 'recovery',
           scope: 'recovery',
         });
