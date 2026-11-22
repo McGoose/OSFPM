@@ -303,8 +303,8 @@ describe.each(testTargets)('login tables on $name', (target) => {
       expect(failure).toEqual(unique('setup_code_single_live'));
     });
 
-    it('defaults to the security-log class', async () => {
-      expect(await defaultOf('setup_code')).toBe("'security-log'::text");
+    it('defaults to the transient class', async () => {
+      expect(await defaultOf('setup_code')).toBe("'transient'::text");
     });
   });
 

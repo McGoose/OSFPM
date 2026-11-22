@@ -19,7 +19,7 @@ retentionEndDate({
 
 **The `transient` class**
 
-For working rows that cleanup removes once they are of no use. `session` and `login_challenge` use it. The audit log is the record of what happened, so the row itself is not kept. The class counts from `record-created` and has no period, so `retentionEndDate` returns `null` for it: retention never purges these rows, cleanup does. No session cleanup exists yet; `cleanupExpiredChallenges` does the login challenges.
+For working rows that cleanup removes once they are of no use. `session`, `login_challenge` and `setup_code` use it. The audit log is the record of what happened, so the row itself is not kept. The class counts from `record-created` and has no period, so `retentionEndDate` returns `null` for it: retention never purges these rows, cleanup does. No cleanup of sessions or setup codes exists yet; `cleanupExpiredChallenges` does the login challenges.
 
 **Rules you must not break**
 
@@ -29,4 +29,4 @@ For working rows that cleanup removes once they are of no use. `session` and `lo
 - An unknown anchor is an error, not "no date". Returning `null` would keep a record forever without anyone being told.
 - Years are added to the calendar date. 29 February plus whole years is 28 February in a non-leap year.
 
-**Tests:** `retention.test.ts`, and `../db/retention-class.test.ts` for the `retention_class` table and for what the `transient` migration does to sessions and login challenges that already exist.
+**Tests:** `retention.test.ts`, and `../db/retention-class.test.ts` for the `retention_class` table and for what the `transient` migrations do to sessions, login challenges and setup codes that already exist.

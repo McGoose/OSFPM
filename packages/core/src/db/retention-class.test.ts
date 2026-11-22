@@ -289,7 +289,7 @@ describe.each(testTargets)('retention classes on $name', (target) => {
   describe('the transient class on an existing database', () => {
     const TRANSIENT_MIGRATION = '0027_transient_retention_class';
 
-    it('moves the sessions and login challenges written before it off security-log, and leaves a setup code there', async () => {
+    it('moves the sessions, login challenges and setup codes written before it off security-log, and leaves a class that was set on purpose', async () => {
       const { database: existing, cleanup: drop } = await target.create();
       const folder = mkdtempSync(join(tmpdir(), 'osfpm-migrations-'));
       try {
@@ -316,8 +316,11 @@ describe.each(testTargets)('retention classes on $name', (target) => {
         // Plain SQL, so the rows do not depend on columns added later.
         const userId = newId();
         const sessionId = newId();
+        const keptSessionId = newId();
         const challengeId = newId();
+        const keptChallengeId = newId();
         const setupCodeId = newId();
+        const keptSetupCodeId = newId();
         const origin = newId();
         await existing.db.execute(
           sql`insert into "user" (id, origin_server, email, display_name, locale, timezone, status)
@@ -330,15 +333,36 @@ describe.each(testTargets)('retention classes on $name', (target) => {
               values (${sessionId}, ${origin}, ${userId}, 'upgrade-session-hash', 'password',
                 now(), now() + interval '12 hours', now() + interval '30 days')`,
         );
+        // For each table, a row whose class was set on purpose, not left to the
+        // default.
+        await existing.db.execute(
+          sql`insert into session (id, origin_server, user_id, token_hash, method,
+                last_seen_at, idle_expires_at, absolute_expires_at, retention_class)
+              values (${keptSessionId}, ${origin}, ${userId}, 'upgrade-kept-hash', 'password',
+                now(), now() + interval '12 hours', now() + interval '30 days', 'standard')`,
+        );
         await existing.db.execute(
           sql`insert into login_challenge (id, origin_server, user_id, kind, token_hash, expires_at)
               values (${challengeId}, ${origin}, ${userId}, 'totp', 'upgrade-challenge-hash',
                 now() + interval '5 minutes')`,
         );
         await existing.db.execute(
+          sql`insert into
+                login_challenge (id, origin_server, user_id, kind, token_hash, expires_at, retention_class)
+              values (${keptChallengeId}, ${origin}, ${userId}, 'totp', 'upgrade-kept-challenge-hash',
+                now() + interval '5 minutes', 'standard')`,
+        );
+        await existing.db.execute(
           sql`insert into setup_code (id, origin_server, code_hash, expires_at)
               values (${setupCodeId}, ${origin}, 'upgrade-setup-hash',
                 now() + interval '1 day')`,
+        );
+        // Revoked, so it is not a second live code.
+        await existing.db.execute(
+          sql`insert into
+                setup_code (id, origin_server, code_hash, expires_at, revoked_at, retention_class)
+              values (${keptSetupCodeId}, ${origin}, 'upgrade-kept-setup-hash',
+                now() + interval '1 day', now(), 'standard')`,
         );
 
         const classes = async () =>
@@ -349,29 +373,45 @@ describe.each(testTargets)('retention classes on $name', (target) => {
                 sql`select 'session' as source, retention_class from session
                       where id = ${sessionId}
                     union all
+                    select 'kept_session', retention_class from session
+                      where id = ${keptSessionId}
+                    union all
                     select 'login_challenge', retention_class from login_challenge
                       where id = ${challengeId}
                     union all
+                    select 'kept_login_challenge', retention_class from login_challenge
+                      where id = ${keptChallengeId}
+                    union all
                     select 'setup_code', retention_class from setup_code
-                      where id = ${setupCodeId}`,
+                      where id = ${setupCodeId}
+                    union all
+                    select 'kept_setup_code', retention_class from setup_code
+                      where id = ${keptSetupCodeId}`,
               )
             ).map((row) => [
               row.source as string,
               row.retention_class as string,
             ]),
           );
-        // The starting point: all three were written under the old default.
+        // The starting point: one row per table under the old default, and
+        // one per table set on purpose.
         expect(await classes()).toEqual({
           session: 'security-log',
+          kept_session: 'standard',
           login_challenge: 'security-log',
+          kept_login_challenge: 'standard',
           setup_code: 'security-log',
+          kept_setup_code: 'standard',
         });
 
         await migrate(existing);
         expect(await classes()).toEqual({
           session: 'transient',
+          kept_session: 'standard',
           login_challenge: 'transient',
-          setup_code: 'security-log',
+          kept_login_challenge: 'standard',
+          setup_code: 'transient',
+          kept_setup_code: 'standard',
         });
       } finally {
         rmSync(folder, { recursive: true, force: true });
