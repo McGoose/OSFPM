@@ -8,9 +8,10 @@ import { user } from './user.js';
  * (SC-10). Only the SHA-256 hash is stored. At most one code is live, meaning
  * neither used nor revoked: a partial unique index on a constant enforces it,
  * so issuing a new code must revoke the old one first. An unused code past
- * `expires_at` still counts as live there; it is refused when consumed.
- * Retention class `transient`: a working row that cleanup removes, and the
- * audit log is the record. No cleanup of setup codes exists yet.
+ * `expires_at` still counts as live there until it is revoked or deleted; it is
+ * refused when consumed. Retention class `transient`: a working row that
+ * cleanup removes, and the audit log is the record. `cleanupSetupCodes`
+ * deletes the codes that were used or revoked, and those past `expires_at`.
  *
  * A security table: only `auth/setup-code.ts` writes it, directly, and each
  * change is audited (CLAUDE.md, Data rules).

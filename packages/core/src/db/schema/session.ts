@@ -46,7 +46,8 @@ export type SessionScope = (typeof SESSION_SCOPES)[number];
  * A login session. Only the SHA-256 hash of the session token is stored; the
  * raw token goes to the client once and is never kept or logged (SC-10).
  * Retention class `transient`: a working row that cleanup removes, and the
- * audit log is the record. No cleanup of sessions exists yet.
+ * audit log is the record. `cleanupEndedSessions` deletes a session once it has
+ * ended, by revocation or by going idle, for `SESSION_DEFAULTS.endedKeepMs`.
  *
  * A security table: only `auth/sessions.ts` writes it, directly, and each
  * security-relevant change is audited, not change-logged (CLAUDE.md, Data

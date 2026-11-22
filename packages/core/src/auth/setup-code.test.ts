@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Database } from '../db/client.js';
-import { installation, setupCode } from '../db/schema/index.js';
+import { auditEvent, installation, setupCode } from '../db/schema/index.js';
 import {
   createMigratedDatabase,
   failureOf,
@@ -9,6 +9,7 @@ import {
   testTargets,
 } from '../db/test-support.js';
 import {
+  cleanupSetupCodes,
   consumeSetupCode,
   isSetupComplete,
   issueSetupCode,
@@ -193,6 +194,63 @@ describe.each(testTargets)('setup codes on $name', (target) => {
       expect(await isSetupComplete(db())).toBe(true);
       await db().delete(installation);
       expect(await isSetupComplete(db())).toBe(false);
+    });
+  });
+
+  describe('cleanupSetupCodes', () => {
+    const events = async () => (await db().select().from(auditEvent)).length;
+
+    it('deletes a used code, and says how many it deleted', async () => {
+      const code = await issueSetupCode(db(), T0);
+      expect(await consumeSetupCode(db(), code, at(HOUR))).toBe(true);
+      expect(await cleanupSetupCodes(db(), at(2 * HOUR))).toBe(1);
+      expect(await stored()).toEqual([]);
+    });
+
+    it('deletes a revoked code and keeps the live code that replaced it', async () => {
+      const first = await issueSetupCode(db(), T0);
+      const second = await issueSetupCode(db(), at(HOUR));
+      expect(await cleanupSetupCodes(db(), at(2 * HOUR))).toBe(1);
+      expect((await stored()).map((row) => row.codeHash)).toEqual([
+        hashHumanCode(second),
+      ]);
+      // No answer changed: the old code is still refused, the live one works.
+      expect(await consumeSetupCode(db(), first, at(3 * HOUR))).toBe(false);
+      expect(await consumeSetupCode(db(), second, at(3 * HOUR))).toBe(true);
+    });
+
+    it('deletes an unused code at the moment it expires, and not before', async () => {
+      await issueSetupCode(db(), T0);
+      expect(await cleanupSetupCodes(db(), at(24 * HOUR - 1))).toBe(0);
+      expect(await stored()).toHaveLength(1);
+      expect(await cleanupSetupCodes(db(), at(24 * HOUR))).toBe(1);
+      expect(await stored()).toEqual([]);
+    });
+
+    it('does not reopen setup: once the first administrator exists, the deleted code gives no entry and no new code', async () => {
+      const code = await issueSetupCode(db(), T0);
+      expect(await consumeSetupCode(db(), code, at(HOUR))).toBe(true);
+      await db()
+        .update(installation)
+        .set({ setupCompletedAt: at(HOUR) });
+      expect(await cleanupSetupCodes(db(), at(2 * HOUR))).toBe(1);
+      expect(await stored()).toEqual([]);
+      expect(await isSetupComplete(db())).toBe(true);
+      expect(await consumeSetupCode(db(), code, at(3 * HOUR))).toBe(false);
+      await expect(issueSetupCode(db(), at(3 * HOUR))).rejects.toMatchObject({
+        reason: 'setup-complete',
+      });
+    });
+
+    it('answers 0 when every code is live, and writes no audit event whatever it deletes', async () => {
+      const code = await issueSetupCode(db(), T0);
+      const issued = await events();
+      expect(await cleanupSetupCodes(db(), at(HOUR))).toBe(0);
+      expect(await events()).toBe(issued);
+      expect(await consumeSetupCode(db(), code, at(2 * HOUR))).toBe(true);
+      const used = await events();
+      expect(await cleanupSetupCodes(db(), at(3 * HOUR))).toBe(1);
+      expect(await events()).toBe(used);
     });
   });
 

@@ -1,11 +1,12 @@
 import { eq, sql } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
 import { auditEvent, session, user } from '../db/schema/index.js';
 import { createMigratedDatabase, testTargets } from '../db/test-support.js';
 import { AuthInputError, AuthStateError } from './errors.js';
 import {
+  cleanupEndedSessions,
   createSession,
   disableUser,
   enableUser,
@@ -779,5 +780,140 @@ describe.each(testTargets)('sessions on $name', (target) => {
     await validateSession(db(), token, at(2 * MINUTE));
     await revokeUserSessions(db(), userId, { reason: 'logout', now: at(HOUR) });
     expect(await everyRowAsText(database)).not.toContain(token);
+  });
+});
+
+describe.each(testTargets)('cleaning up ended sessions on $name', (target) => {
+  let database: Database;
+  let cleanup: () => Promise<void>;
+
+  beforeAll(async () => {
+    ({ database, cleanup } = await createMigratedDatabase(target));
+    await seedInstallation(database);
+  });
+  afterAll(async () => {
+    await cleanup();
+  });
+  // The cleanup deletes across every user, so each test starts with no sessions
+  // and can count exactly.
+  beforeEach(async () => {
+    await database.db.delete(session);
+  });
+
+  const db = () => database.db;
+  const KEEP = SESSION_DEFAULTS.endedKeepMs;
+  const before = (now: Date, ms: number) => new Date(now.getTime() - ms);
+  const open = (userId: string, now: Date) =>
+    createSession(db(), { userId, method: 'password', now });
+  const remaining = async () =>
+    (await db().select({ id: session.id }).from(session)).map((row) => row.id);
+
+  it('keeps an ended session for thirty days', () => {
+    expect(KEEP).toBe(30 * DAY);
+  });
+
+  it('deletes a session revoked more than the keep time ago, and says how many it deleted', async () => {
+    const userId = await seedActiveUser(database);
+    const { session: ended, token } = await open(userId, T0);
+    await revokeSession(db(), ended.id, { reason: 'logout', now: at(HOUR) });
+    const now = at(HOUR + KEEP + 1);
+    expect(await validateSession(db(), token, now)).toBeNull();
+    expect(await cleanupEndedSessions(db(), now)).toBe(1);
+    expect(await remaining()).toEqual([]);
+    // Taking the row away changes no answer: the token was refused before.
+    expect(await validateSession(db(), token, now)).toBeNull();
+  });
+
+  it('deletes a session that expired more than the keep time ago, though it was never revoked', async () => {
+    const userId = await seedActiveUser(database);
+    const { session: ended } = await open(userId, T0);
+    const now = new Date(ended.idleExpiresAt.getTime() + KEEP + 1);
+    expect(await cleanupEndedSessions(db(), now)).toBe(1);
+    expect(await remaining()).toEqual([]);
+  });
+
+  it('keeps a session revoked exactly the keep time ago, and deletes it a moment later', async () => {
+    const userId = await seedActiveUser(database);
+    const { session: ended } = await open(userId, T0);
+    await revokeSession(db(), ended.id, { reason: 'logout', now: at(HOUR) });
+    expect(await cleanupEndedSessions(db(), at(HOUR + KEEP))).toBe(0);
+    expect(await remaining()).toEqual([ended.id]);
+    expect(await cleanupEndedSessions(db(), at(HOUR + KEEP + 1))).toBe(1);
+    expect(await remaining()).toEqual([]);
+  });
+
+  it('keeps a session that expired exactly the keep time ago, and deletes it a moment later', async () => {
+    const userId = await seedActiveUser(database);
+    const { session: ended } = await open(userId, T0);
+    const endsAt = ended.idleExpiresAt.getTime();
+    expect(await cleanupEndedSessions(db(), new Date(endsAt + KEEP))).toBe(0);
+    expect(await remaining()).toEqual([ended.id]);
+    expect(await cleanupEndedSessions(db(), new Date(endsAt + KEEP + 1))).toBe(
+      1,
+    );
+    expect(await remaining()).toEqual([]);
+  });
+
+  it('goes by the earlier of the revocation and the idle end', async () => {
+    const userId = await seedActiveUser(database);
+    const now = at(100 * DAY);
+    // Expired long ago, and only revoked yesterday: it ended long ago.
+    const { session: ended } = await open(userId, T0);
+    await revokeSession(db(), ended.id, {
+      reason: 'admin-action',
+      now: before(now, DAY),
+    });
+    expect(await cleanupEndedSessions(db(), now)).toBe(1);
+    expect(await remaining()).toEqual([]);
+  });
+
+  it('keeps a live session, and sessions that ended less than the keep time ago', async () => {
+    const userId = await seedActiveUser(database);
+    const now = at(100 * DAY);
+    const live = await open(userId, before(now, HOUR));
+    // Revoked a day ago, an hour after it began, so it was live when revoked.
+    const revoked = await open(userId, before(now, DAY + HOUR));
+    await revokeSession(db(), revoked.session.id, {
+      reason: 'logout',
+      now: before(now, DAY),
+    });
+    // Created ten days ago, so it went idle nine and a half days ago.
+    const expired = await open(userId, before(now, 10 * DAY));
+    expect(await cleanupEndedSessions(db(), now)).toBe(0);
+    expect((await remaining()).sort()).toEqual(
+      [live.session.id, revoked.session.id, expired.session.id].sort(),
+    );
+    expect(await validateSession(db(), live.token, now)).not.toBeNull();
+  });
+
+  it('deletes the ended sessions of every user, keeps their live ones, and has nothing left to do', async () => {
+    const first = await seedActiveUser(database);
+    const second = await seedActiveUser(database);
+    const now = at(100 * DAY);
+    await open(first, T0);
+    await open(second, T0);
+    const liveFirst = await open(first, before(now, HOUR));
+    const liveSecond = await open(second, before(now, HOUR));
+    expect(await cleanupEndedSessions(db(), now)).toBe(2);
+    expect((await remaining()).sort()).toEqual(
+      [liveFirst.session.id, liveSecond.session.id].sort(),
+    );
+    expect(await cleanupEndedSessions(db(), now)).toBe(0);
+  });
+
+  it('answers 0 when there are no sessions', async () => {
+    expect(await cleanupEndedSessions(db(), at(100 * DAY))).toBe(0);
+  });
+
+  it('writes no audit event and leaves the user alone', async () => {
+    const userId = await seedActiveUser(database);
+    await open(userId, T0);
+    const events = (await db().select().from(auditEvent)).length;
+    const owner = await db().select().from(user).where(eq(user.id, userId));
+    expect(await cleanupEndedSessions(db(), at(100 * DAY))).toBe(1);
+    expect((await db().select().from(auditEvent)).length).toBe(events);
+    expect(await db().select().from(user).where(eq(user.id, userId))).toEqual(
+      owner,
+    );
   });
 });

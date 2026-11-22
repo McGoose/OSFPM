@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, isNull, lte, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, lt, lte, ne, or, sql } from 'drizzle-orm';
 import {
   SESSION_METHODS,
   SESSION_SCOPES,
@@ -36,12 +36,16 @@ import { generateToken, hashToken } from './tokens.js';
  * Session lifetimes, in one place until organisation settings can change them:
  * a session ends after 12 hours without a request, or 30 days after it began,
  * whichever is first. `slideIntervalMs` is how rarely a busy session writes: at
- * most once a minute.
+ * most once a minute. `endedKeepMs` is how long a session that has ended, by
+ * revocation or by running out, stays in the table before `cleanupEndedSessions`
+ * deletes it: thirty days (maintainer decision, P-03b3a). It is the only place
+ * that number lives.
  */
 export const SESSION_DEFAULTS = {
   idleMs: 12 * 60 * 60 * 1000,
   absoluteMs: 30 * 24 * 60 * 60 * 1000,
   slideIntervalMs: 60 * 1000,
+  endedKeepMs: 30 * 24 * 60 * 60 * 1000,
 } as const;
 
 /**
@@ -496,6 +500,38 @@ export function listUserSessions(
       )
       .orderBy(desc(session.lastSeenAt), desc(session.id)),
   );
+}
+
+/**
+ * Deletes every session that ended more than `SESSION_DEFAULTS.endedKeepMs`
+ * before `now`, of every user, and returns how many it deleted. A session ends
+ * when it is revoked or reaches its idle end, whichever came first, so one that
+ * went idle long ago is deleted although it was revoked only yesterday. The
+ * absolute end is never earlier than the idle end (`session_expiry_order_check`),
+ * so it is not read. A session that ended exactly that long ago stays until a
+ * moment later.
+ *
+ * For the worker, which calls it on a schedule (`TRANSIENT_CLEANUPS`). It is
+ * housekeeping, not a security change, so it writes no audit event: the creation
+ * and the revocation of each session were audited when they happened. It checks
+ * no permission: only the worker calls it. It changes no answer, because
+ * `validateSession` refused an ended session already and refuses an unknown
+ * token the same way. One DELETE, so it is atomic.
+ *
+ * @throws RecordWriteError when the database refuses the delete; it carries the
+ * SQLSTATE and constraint name only.
+ */
+export function cleanupEndedSessions(tx: Tx, now: Date): Promise<number> {
+  const cutoff = new Date(now.getTime() - SESSION_DEFAULTS.endedKeepMs);
+  return guardedAuth('session', 'delete', async () => {
+    const deleted = await tx
+      .delete(session)
+      .where(
+        or(lt(session.revokedAt, cutoff), lt(session.idleExpiresAt, cutoff)),
+      )
+      .returning({ id: session.id });
+    return deleted.length;
+  });
 }
 
 /**
