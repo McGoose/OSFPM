@@ -155,10 +155,67 @@ describe('loadConfig: OSFPM_PUBLIC_URL', () => {
     expect(origin(value)).toBe(expected);
   });
 
-  it('keeps only the origin: no path, query or fragment', () => {
-    expect(origin('https://osfpm.example.test/app/?x=1#top')).toBe(
-      'https://osfpm.example.test',
-    );
+  it.each([
+    ['https', 'https://osfpm.example.test/', 'https://osfpm.example.test'],
+    [
+      'https with a port',
+      'https://osfpm.example.test:8443/',
+      'https://osfpm.example.test:8443',
+    ],
+    ['localhost', 'http://localhost:3000/', 'http://localhost:3000'],
+  ])('accepts a single slash after the host: %s', (_label, value, expected) => {
+    expect(origin(value)).toBe(expected);
+  });
+
+  // A path, a query or a fragment is refused, not dropped: the server is reached
+  // at the root of its host (the session cookie is `__Host-`, which needs
+  // `Path=/`), so an address with a path would be one that cannot work, and
+  // keeping only its origin would hide that from whoever set it.
+  it.each([
+    ['a path', 'https://osfpm.example.test/app'],
+    ['a path with a trailing slash', 'https://osfpm.example.test/app/'],
+    ['two slashes', 'https://osfpm.example.test//'],
+    ['a path on localhost', 'http://localhost:3000/osfpm'],
+    ['a query', 'https://osfpm.example.test/?x=1'],
+    ['a query with no slash before it', 'https://osfpm.example.test?x=1'],
+    ['a question mark and nothing after it', 'https://osfpm.example.test/?'],
+    ['a fragment', 'https://osfpm.example.test/#top'],
+    ['a fragment with no slash before it', 'https://osfpm.example.test#top'],
+    ['a hash sign and nothing after it', 'https://osfpm.example.test#'],
+    ['all three', 'https://osfpm.example.test/app/?x=1#top'],
+  ])(
+    'refuses %s, says what is wrong, and does not echo the value',
+    (_label, value) => {
+      const message = refusal({ ...BASE, OSFPM_PUBLIC_URL: value });
+      expect(message).toContain('OSFPM_PUBLIC_URL');
+      expect(message).toContain('no path, query or fragment');
+      // The fix is in the message: the address alone, such as the one below.
+      expect(message).toContain('https://osfpm.example.org');
+      expect(message).not.toContain(value);
+      expect(message).not.toContain('example.test');
+      expect(message).not.toContain('/app');
+      expect(message).not.toContain('x=1');
+      expect(message).not.toContain('#top');
+    },
+  );
+
+  it('does not add the path message to an address that is refused for another reason: text that is not a URL, and plain http', () => {
+    const notAUrl = refusal({ ...BASE, OSFPM_PUBLIC_URL: 'not a url' });
+    expect(notAUrl).not.toContain('path, query or fragment');
+    const plainHttp = refusal({
+      ...BASE,
+      OSFPM_PUBLIC_URL: 'http://osfpm.example.test',
+    });
+    expect(plainHttp).not.toContain('path, query or fragment');
+  });
+
+  it('says both things when an address has a path and is plain http on a public host', () => {
+    const message = refusal({
+      ...BASE,
+      OSFPM_PUBLIC_URL: 'http://osfpm.example.test/app',
+    });
+    expect(message).toContain('must be an https:// URL');
+    expect(message).toContain('no path, query or fragment');
   });
 
   it('writes the origin the way a browser sends it in the Origin header', () => {

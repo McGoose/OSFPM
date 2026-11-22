@@ -83,7 +83,7 @@ Troubleshooting:
 
 ## Start the API
 
-Set exactly one database setting, and `OSFPM_PUBLIC_URL`, the URL you open the server at. Keep it on your own machine until you have set up and secured it.
+Set exactly one database setting, and `OSFPM_PUBLIC_URL`, the URL you open the server at: the address alone, with no path, query or fragment. Keep it on your own machine until you have set up and secured it.
 
 ```sh
 # Small install: PGlite, stored in a directory
