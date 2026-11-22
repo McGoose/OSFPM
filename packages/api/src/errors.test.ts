@@ -14,6 +14,15 @@ import {
   AccountInputError,
 } from '@osfpm/core/src/accounts/service.js';
 import { AuthInputError, AuthStateError } from '@osfpm/core/src/auth/errors.js';
+import {
+  AccountExistsError,
+  AlreadyMemberError,
+  InviteEmailMismatchError,
+  InviteExceedsOwnAccessError,
+  InviteInvalidError,
+  InvitePasswordRefusedError,
+  InviteRefusedError,
+} from '@osfpm/core/src/auth/invite-errors.js';
 import { describePasswordRefusal } from '@osfpm/core/src/auth/password-policy.js';
 import { ContractInputError } from '@osfpm/core/src/contracts/service.js';
 import { CostLineInputError } from '@osfpm/core/src/costs/service.js';
@@ -125,6 +134,18 @@ const fixtures = new Map<abstract new (...args: never[]) => Error, () => Error>(
     [LastSignInMethodError, () => new LastSignInMethodError()],
     [AuthInputError, () => new AuthInputError('method')],
     [AuthStateError, () => new AuthStateError('user-disabled')],
+    [InviteInvalidError, () => new InviteInvalidError('expired')],
+    [InviteEmailMismatchError, () => new InviteEmailMismatchError()],
+    [AlreadyMemberError, () => new AlreadyMemberError()],
+    [AccountExistsError, () => new AccountExistsError()],
+    [
+      InvitePasswordRefusedError,
+      () => new InvitePasswordRefusedError('too-short'),
+    ],
+    [
+      InviteExceedsOwnAccessError,
+      () => new InviteExceedsOwnAccessError(['accounts:edit']),
+    ],
     [OriginMismatchError, () => new OriginMismatchError()],
     [RateLimitedError, () => new RateLimitedError()],
     [StartingError, () => new StartingError()],
@@ -156,6 +177,7 @@ const internalFixtures = new Map<
       new RecordWriteError('person', 'insert', '23505', `person_${SECRET}_key`),
   ],
   [MissingActingUserError, () => new MissingActingUserError('token')],
+  [InviteRefusedError, () => new InviteRefusedError('unknown', SECRET)],
   [SecurityTableWriteError, () => new SecurityTableWriteError('invite')],
   [PermissionSyncError, () => new PermissionSyncError([])],
   [InstallationMissingError, () => new InstallationMissingError()],

@@ -5,6 +5,7 @@ import {
   orgMembershipRole,
   role,
   rolePermission,
+  type RolePermissionReach,
 } from '../db/schema/index.js';
 
 /**
@@ -71,4 +72,70 @@ export async function hasOrganisationPermission(
     )
     .limit(1);
   return found !== undefined;
+}
+
+/**
+ * The permissions `userId` holds in `organisationId`, each with the widest reach
+ * they hold it at, read the way `hasOrganisationPermission` reads one: an active,
+ * undeleted membership, linked through a live `org_membership_role` to a live
+ * organisation role (`role.project_id` is NULL), holding a live grant with no
+ * department scope. `all-projects` wins over `own-scope` when a user holds both
+ * through different roles. Answers an empty map for a user who is not an active
+ * member. Used to check that an invite gives nothing the person making it lacks.
+ *
+ * Server-side only, like `hasOrganisationPermission`. It reads without a lock.
+ */
+export async function organisationPermissionReaches(
+  tx: Tx,
+  userId: string,
+  organisationId: string,
+): Promise<ReadonlyMap<string, RolePermissionReach>> {
+  const found = await tx
+    .select({
+      key: rolePermission.permissionKey,
+      reach: rolePermission.reach,
+    })
+    .from(orgMembership)
+    .innerJoin(
+      orgMembershipRole,
+      and(
+        eq(orgMembershipRole.organisationId, orgMembership.organisationId),
+        eq(orgMembershipRole.membershipId, orgMembership.id),
+        isNull(orgMembershipRole.deletedAt),
+      ),
+    )
+    .innerJoin(
+      role,
+      and(
+        eq(role.organisationId, orgMembershipRole.organisationId),
+        eq(role.id, orgMembershipRole.roleId),
+        isNull(role.projectId),
+        isNull(role.deletedAt),
+      ),
+    )
+    .innerJoin(
+      rolePermission,
+      and(
+        eq(rolePermission.organisationId, role.organisationId),
+        eq(rolePermission.roleId, role.id),
+        isNull(rolePermission.departmentId),
+        isNull(rolePermission.deletedAt),
+      ),
+    )
+    .where(
+      and(
+        eq(orgMembership.userId, userId),
+        eq(orgMembership.organisationId, organisationId),
+        eq(orgMembership.status, 'active'),
+        isNull(orgMembership.deletedAt),
+      ),
+    );
+  // A Map, because the keys come from the catalogue and a plain object would
+  // take `__proto__` as one (CLAUDE.md, Data rules).
+  const reaches = new Map<string, RolePermissionReach>();
+  for (const row of found) {
+    if (reaches.get(row.key) !== 'all-projects')
+      reaches.set(row.key, row.reach);
+  }
+  return reaches;
 }

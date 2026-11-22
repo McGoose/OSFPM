@@ -1,12 +1,22 @@
 import { and, eq, isNull } from 'drizzle-orm';
+import { AccessDeniedError } from '../access/access-denied-error.js';
 import type { ActorType } from '../db/columns.js';
 import { user, type UserStatus } from '../db/schema/index.js';
-import { RecordWriteError, recordAudit, type Tx } from '../db/write.js';
+import {
+  RecordNotFoundError,
+  RecordWriteError,
+  recordAudit,
+  type Tx,
+} from '../db/write.js';
 import {
   getServerId,
   InstallationMissingError,
 } from '../installation/server-id.js';
 import { AuthInputError, AuthStateError } from './errors.js';
+import {
+  InviteExceedsOwnAccessError,
+  InviteRefusedError,
+} from './invite-errors.js';
 
 /**
  * Pieces the auth services share. Only the auth services use them; the
@@ -63,6 +73,11 @@ export const AUTH_AUDIT = {
    * is not under `auth.`: the event is about a role (SC-10, decision D-56).
    */
   grantReachReduced: 'role.grant-reach-reduced',
+  inviteCreated: 'auth.invite-created',
+  inviteInspectFailed: 'auth.invite-inspect-failed',
+  inviteAccepted: 'auth.invite-accepted',
+  inviteAcceptRefused: 'auth.invite-accept-refused',
+  inviteRevoked: 'auth.invite-revoked',
 } as const;
 
 /** Details of an auth audit event: scalar values only, so nothing nested can hide a secret. */
@@ -185,7 +200,12 @@ export async function guardedAuth<R>(
     if (
       error instanceof AuthInputError ||
       error instanceof AuthStateError ||
-      error instanceof RecordWriteError
+      error instanceof RecordWriteError ||
+      // What the invite services throw themselves: they carry no value.
+      error instanceof AccessDeniedError ||
+      error instanceof RecordNotFoundError ||
+      error instanceof InviteRefusedError ||
+      error instanceof InviteExceedsOwnAccessError
     ) {
       throw error;
     }

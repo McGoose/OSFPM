@@ -5,7 +5,7 @@ import { syncPermissions } from '../access/permission-sync.js';
 import { tenantTableNames } from '../db/columns.js';
 import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
-import { auditEvent, SECURITY_TABLES } from '../db/schema/index.js';
+import { auditEvent, role, SECURITY_TABLES } from '../db/schema/index.js';
 import { getTableName } from 'drizzle-orm';
 import { createMigratedDatabase, testTargets } from '../db/test-support.js';
 import {
@@ -13,6 +13,16 @@ import {
   topUpAdministratorRoles,
 } from './administrator-role.js';
 import { ensureInstallation } from './ensure-installation.js';
+import {
+  InviteInvalidError,
+  InviteEmailMismatchError,
+} from './invite-errors.js';
+import {
+  acceptInvite,
+  createInvite,
+  inspectInvite,
+  revokeInvite,
+} from './invites.js';
 import { completeFirstRunSetup } from './first-run-setup.js';
 import {
   consumeLoginChallenge,
@@ -74,6 +84,9 @@ const LATER_PERMISSIONS = [
   },
 ];
 const LATER_LISTS = [...PERMISSION_LISTS, LATER_PERMISSIONS];
+/** The invented address an administrator invites; no event may ever hold it. */
+const INVITED_EMAIL = 'sam.demo@demopictures.example';
+
 /** The release after that flags the same permission sensitive. */
 const LATER_SENSITIVE_LISTS = [
   ...PERMISSION_LISTS,
@@ -113,6 +126,8 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
 
   /** Everything every flow below made secret: the raw values, and the hashes of them. */
   const secrets: string[] = [];
+  /** Addresses the flows below use, which no audit event may hold. */
+  const addresses: string[] = [];
   /**
    * What the passkey flow stores on purpose, in `passkey_credential`, and so what
    * only the audit trail must not hold: credential ids, public keys, names.
@@ -128,6 +143,9 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
   let firstPasskeyId: string;
   let revokedPasskeyId: string;
   let setupOrganisationId: string;
+  let setupAdminId: string;
+  let inviteId: string;
+  let inviteeId: string;
 
   beforeAll(async () => {
     userId = await seedActiveUser(database);
@@ -388,6 +406,7 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
     );
     if (!setup.ok) throw new Error('the setup was refused');
     setupOrganisationId = setup.organisation.id;
+    setupAdminId = setup.user.id;
     // Then the server starts again with a release that declares one more
     // permission, and gives it to the Administrator role.
     await syncPermissions(db(), LATER_PERMISSIONS);
@@ -401,12 +420,84 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
       now: at(40 * MINUTE),
       lists: LATER_SENSITIVE_LISTS,
     });
+    // The administrator then invites people: one invite is inspected, refused
+    // once for the wrong address and accepted by a new account; another is revoked.
+    const [administratorRole] = await db().select().from(role);
+    const inviter = { userId: setup.user.id };
+    const made = await createInvite(
+      db(),
+      inviter,
+      setupOrganisationId,
+      {
+        email: INVITED_EMAIL,
+        tier: 'member',
+        roleIds: [administratorRole!.id],
+        expiresInDays: 3,
+      },
+      at(41 * MINUTE),
+    );
+    inviteId = made.invite.id;
+    await expect(
+      inspectInvite(db(), 'not-a-token-anyone-made', at(42 * MINUTE)),
+    ).rejects.toBeInstanceOf(InviteInvalidError);
+    await inspectInvite(db(), made.token, at(43 * MINUTE));
+    await expect(
+      acceptInvite(
+        db(),
+        made.token,
+        {
+          kind: 'new-account',
+          account: {
+            email: 'someone.else@demopictures.example',
+            displayName: 'Someone Else',
+          },
+        },
+        at(44 * MINUTE),
+      ),
+    ).rejects.toBeInstanceOf(InviteEmailMismatchError);
+    const accepted = await acceptInvite(
+      db(),
+      made.token,
+      {
+        kind: 'new-account',
+        account: {
+          email: INVITED_EMAIL,
+          displayName: 'Sam Demo',
+          password: DEMO_ADMIN_PASSWORD,
+        },
+      },
+      at(45 * MINUTE),
+    );
+    inviteeId = accepted.user.id;
+    const secondInvite = await createInvite(
+      db(),
+      inviter,
+      setupOrganisationId,
+      { tier: 'guest', roleIds: [] },
+      at(46 * MINUTE),
+    );
+    await revokeInvite(
+      db(),
+      inviter,
+      setupOrganisationId,
+      secondInvite.invite.id,
+      at(47 * MINUTE),
+    );
     secrets.push(
       firstRunCode,
       normaliseHumanCode(firstRunCode)!,
       hashHumanCode(firstRunCode)!,
       DEMO_ADMIN_PASSWORD,
+      made.token,
+      hashToken(made.token),
+      secondInvite.token,
+      hashToken(secondInvite.token),
+      'not-a-token-anyone-made',
+      hashToken('not-a-token-anyone-made'),
     );
+    // Addresses are stored on the user and the invite on purpose; only the audit
+    // trail must not hold them.
+    addresses.push(INVITED_EMAIL, 'someone.else@demopictures.example');
   });
 
   it('records every kind of action the services take', async () => {
@@ -561,9 +652,15 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
       targetId: null,
       details: { purpose: 'check' },
     });
+    // Two users were made: the first administrator, and the person an invite
+    // brought in later (see the invite flow in the set-up above).
+    expect(
+      (await byCategory(AUTH_AUDIT.userCreated)).map((event) => event.targetId),
+      AUTH_AUDIT.userCreated,
+    ).toEqual(expect.arrayContaining([setupAdminId, inviteeId]));
+    expect(await byCategory(AUTH_AUDIT.userCreated)).toHaveLength(2);
     for (const category of [
       AUTH_AUDIT.installationCreated,
-      AUTH_AUDIT.userCreated,
       AUTH_AUDIT.organisationCreated,
       AUTH_AUDIT.roleCreated,
       AUTH_AUDIT.membershipCreated,
@@ -620,6 +717,64 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
     const [created] = await byCategory(AUTH_AUDIT.roleCreated);
     expect(events[0]!.targetId).toBe(created!.targetId);
     expect(events[0]!.details).toMatchObject({ roleId: created!.targetId });
+  });
+
+  it('records an invite made, refused, accepted, inspected in vain and revoked, with ids and reason codes and never an address or a token', async () => {
+    const [created] = (await byCategory(AUTH_AUDIT.inviteCreated)).filter(
+      (event) => event.targetId === inviteId,
+    );
+    expect(created).toMatchObject({
+      action: 'create',
+      actorType: 'user',
+      targetType: 'invite',
+      organisationId: setupOrganisationId,
+      details: { tier: 'member', hasEmail: true },
+    });
+    const [administratorRole] = await db().select().from(role);
+    expect(created!.details).toMatchObject({
+      roleIds: administratorRole!.id,
+    });
+    expect((created!.details as { expiresAt: string }).expiresAt).toBe(
+      at(41 * MINUTE + 3 * 24 * 60 * MINUTE).toISOString(),
+    );
+
+    const [failedInspect] = await byCategory(AUTH_AUDIT.inviteInspectFailed);
+    expect(failedInspect).toMatchObject({
+      action: 'inspect',
+      actorType: 'system',
+      actorId: null,
+      targetType: null,
+      targetId: null,
+      details: { reason: 'unknown' },
+    });
+
+    const [refused] = await byCategory(AUTH_AUDIT.inviteAcceptRefused);
+    expect(refused).toMatchObject({
+      action: 'accept',
+      actorType: 'system',
+      targetId: inviteId,
+      organisationId: setupOrganisationId,
+      details: { reason: 'email-mismatch' },
+    });
+
+    const [accepted] = await byCategory(AUTH_AUDIT.inviteAccepted);
+    expect(accepted).toMatchObject({
+      action: 'accept',
+      actorType: 'user',
+      actorId: inviteeId,
+      targetId: inviteId,
+      organisationId: setupOrganisationId,
+      details: { userId: inviteeId, newUser: true },
+    });
+
+    const revoked = await byCategory(AUTH_AUDIT.inviteRevoked);
+    expect(revoked).toHaveLength(1);
+    expect(revoked[0]).toMatchObject({
+      action: 'revoke',
+      actorType: 'user',
+      organisationId: setupOrganisationId,
+    });
+    expect(revoked[0]!.targetId).not.toBe(inviteId);
   });
 
   it('records each passkey registration started and finished, for its user, with the passkey as the target of the second', async () => {
@@ -740,6 +895,17 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
     for (const secret of secrets) {
       expect(text, secret.slice(0, 4)).not.toContain(secret);
     }
+  });
+
+  it('holds no address an invite carried in any audit event, though the invite and the user hold it', async () => {
+    expect(addresses.length).toBeGreaterThan(1);
+    const text = JSON.stringify(await db().select().from(auditEvent));
+    for (const address of addresses) {
+      expect(text, address.slice(0, 4)).not.toContain(address);
+    }
+    // ... which are stored where they belong.
+    const stored = await everyRowAsText(database);
+    expect(stored).toContain(INVITED_EMAIL);
   });
 
   it('holds no raw token, code or password in any table, only hashes', async () => {
