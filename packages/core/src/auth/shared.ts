@@ -41,6 +41,7 @@ export const AUTH_AUDIT = {
   loginStepPassed: 'auth.login-step-passed',
   loginStepFailed: 'auth.login-step-failed',
   passwordSet: 'auth.password-set',
+  passwordRehashed: 'auth.password-rehashed',
   totpEnrolled: 'auth.totp-enrolled',
   totpConfirmed: 'auth.totp-confirmed',
   totpRemoved: 'auth.totp-removed',

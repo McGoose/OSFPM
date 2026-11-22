@@ -87,6 +87,13 @@ export type PasswordLoginResult =
  * if it is right (`isThrottled`). The user row is locked while the attempt is
  * judged, so two guesses at once cannot both get past the count.
  *
+ * A right password whose stored hash was made with other Argon2 parameters than
+ * the current ones (`verifyPassword` says `needsRehash`) is stored again with
+ * the current ones, which costs that sign-in a second derivation, and audited as
+ * `auth.password-rehashed`, from the system and with no hash. It changes no
+ * password: `changed_at` and `must_change` stay. A wrong password, a disabled
+ * account and a closed one are never rehashed.
+ *
  * Audited either way: a pass as `auth.login-step-passed` (with whether a second
  * step follows), a failure as `auth.login-step-failed` with a reason class and
  * never the typed address or password. An unknown address is audited with no
@@ -160,6 +167,30 @@ export async function verifyPasswordLogin(
           now,
         });
         return { ok: false };
+      }
+      // The password is right and in hand, and the stored hash was made with
+      // other parameters than the current ones (`PASSWORD_HASH_PARAMS` was
+      // raised, or an older server stored it): the only moment it can be stored
+      // again with the current ones. Under the user row lock, so two sign-ins at
+      // once rehash once. Not a change of password, so `changed_at` stays.
+      if (checked.needsRehash) {
+        await inner
+          .update(passwordCredential)
+          .set({
+            hash: await hashPassword(password),
+            version: sql`${passwordCredential.version} + 1`,
+            updatedAt: now,
+          })
+          .where(eq(passwordCredential.userId, found.id));
+        await recordAuthAudit(inner, {
+          category: AUTH_AUDIT.passwordRehashed,
+          action: 'rehash',
+          actor: { type: 'system', id: null },
+          targetType: 'user',
+          targetId: found.id,
+          details: { trigger: 'login' },
+          occurredAt: now,
+        });
       }
       const [totp] = await inner
         .select({ id: totpCredential.id })

@@ -25,9 +25,11 @@ import { AUTH_AUDIT } from './shared.js';
 import {
   emailOf,
   everyRowAsText,
+  passwordHashWith,
   rowsOf,
   seedActiveUser,
   seedInstallation,
+  seedPassword,
   totpCodeAt,
 } from './test-support.js';
 import { confirmTotp, enrolTotp, removeTotp } from './totp.js';
@@ -214,6 +216,24 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
       recovery.token,
       hashToken(recovery.token),
     );
+
+    // A password stored with older Argon2 parameters is stored again with the
+    // current ones at its next sign-in.
+    const legacyId = await seedActiveUser(database);
+    const legacyPassword = 'ironwork-seagull-tidal-ember';
+    await seedPassword(database, legacyId, legacyPassword, {
+      hash: passwordHashWith(legacyPassword, {
+        memoryKiB: 8192,
+        passes: 1,
+        parallelism: 1,
+      }),
+    });
+    await verifyPasswordLogin(db(), {
+      email: await emailOf(database, legacyId),
+      password: legacyPassword,
+      now: at(29 * MINUTE),
+    });
+    secrets.push(legacyPassword);
 
     // A password hash for the same sweep for secrets.
     const password = 'correct-horse-battery-harbour';

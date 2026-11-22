@@ -1,3 +1,4 @@
+import { argon2Sync, randomBytes } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { Secret, TOTP } from 'otpauth';
 import { ORIGIN, seedUser } from '../access/test-fixtures.js';
@@ -9,7 +10,7 @@ import {
   totpCredential,
   user,
 } from '../db/schema/index.js';
-import { hashPassword } from './password.js';
+import { hashPassword, PASSWORD_HASH_PARAMS } from './password.js';
 import { normalisePassword } from './password-policy.js';
 
 /**
@@ -103,13 +104,15 @@ const hashesByPassword = new Map<string, Promise<string>>();
 /**
  * Gives a user a password: inserts the `password_credential` row directly, as
  * fixtures do. The password is normalised first, as the services do, and hashed
- * once per distinct password. Invented passwords only.
+ * once per distinct password. `hash` stores that PHC string instead, for a test
+ * that needs a hash made with other parameters (see `passwordHashWith`).
+ * Invented passwords only.
  */
 export async function seedPassword(
   database: Database,
   userId: string,
   password: string,
-  options: { mustChange?: boolean; now?: Date } = {},
+  options: { mustChange?: boolean; now?: Date; hash?: string } = {},
 ): Promise<void> {
   const normalised = normalisePassword(password);
   let hash = hashesByPassword.get(normalised);
@@ -120,7 +123,7 @@ export async function seedPassword(
   await database.db.insert(passwordCredential).values({
     originServer: ORIGIN,
     userId,
-    hash: await hash,
+    hash: options.hash ?? (await hash),
     changedAt: options.now ?? new Date(),
     mustChange: options.mustChange ?? false,
   });
@@ -201,4 +204,35 @@ export function fullWidth(text: string): string {
       ? String.fromCodePoint(code + 0xfee0)
       : character;
   }).join('');
+}
+
+/**
+ * The Argon2id PHC string of `password` made with settings other than the
+ * current ones, as an older version of the server, with other parameters, would
+ * have stored it. The password is normalised first, as the services do. Pass it
+ * to `seedPassword` as `hash`. Only tests import this file.
+ */
+export function passwordHashWith(
+  password: string,
+  settings: {
+    memoryKiB: number;
+    passes: number;
+    parallelism: number;
+    saltBytes?: number;
+    hashBytes?: number;
+  },
+): string {
+  const salt = randomBytes(
+    settings.saltBytes ?? PASSWORD_HASH_PARAMS.saltBytes,
+  );
+  const hash = argon2Sync('argon2id', {
+    message: normalisePassword(password),
+    nonce: salt,
+    memory: settings.memoryKiB,
+    passes: settings.passes,
+    parallelism: settings.parallelism,
+    tagLength: settings.hashBytes ?? PASSWORD_HASH_PARAMS.hashBytes,
+  });
+  const encode = (bytes: Buffer) => bytes.toString('base64').replace(/=+$/, '');
+  return `$argon2id$v=${PASSWORD_HASH_PARAMS.version}$m=${settings.memoryKiB},t=${settings.passes},p=${settings.parallelism}$${encode(salt)}$${encode(hash)}`;
 }

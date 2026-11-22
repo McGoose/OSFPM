@@ -10,7 +10,11 @@ import {
 } from '../db/schema/index.js';
 import { createMigratedDatabase, testTargets } from '../db/test-support.js';
 import { AuthStateError } from './errors.js';
-import { hashPassword, verifyPassword } from './password.js';
+import {
+  hashPassword,
+  PASSWORD_HASH_PARAMS,
+  verifyPassword,
+} from './password.js';
 import {
   checkCurrentPassword,
   setPassword,
@@ -24,6 +28,7 @@ import {
   emailOf,
   everyRowAsText,
   fullWidth,
+  passwordHashWith,
   seedActiveUser,
   seedInstallation,
   seedPassword,
@@ -345,6 +350,209 @@ describe.each(testTargets)('password services on $name', (target) => {
       expect(await everyRowAsText(database)).not.toContain(
         'ironwork-seagull-tidal-ember',
       );
+    });
+  });
+
+  describe('rehashing a right password', () => {
+    // An older server, with other parameters, stored the hash.
+    const OLDER = { memoryKiB: 8192, passes: 1, parallelism: 1 } as const;
+
+    /** The memory, passes and parallelism a PHC string says it was made with. */
+    const parametersOf = (hash: string) => {
+      const found = /^\$argon2id\$v=\d+\$m=(\d+),t=(\d+),p=(\d+)\$/.exec(hash);
+      return {
+        memoryKiB: Number(found![1]),
+        passes: Number(found![2]),
+        parallelism: Number(found![3]),
+      };
+    };
+    const CURRENT = {
+      memoryKiB: PASSWORD_HASH_PARAMS.memoryKiB,
+      passes: PASSWORD_HASH_PARAMS.passes,
+      parallelism: PASSWORD_HASH_PARAMS.parallelism,
+    };
+
+    /** An active user whose password was stored with `settings`. */
+    async function withOlderHash(
+      settings: Parameters<typeof passwordHashWith>[1] = OLDER,
+    ) {
+      const userId = await seedActiveUser(database);
+      const older = passwordHashWith(PASSWORD, settings);
+      await seedPassword(database, userId, PASSWORD, { hash: older, now: T0 });
+      return { userId, older, email: await emailOf(database, userId) };
+    }
+
+    const rehashes = async (userId: string) =>
+      eventsAbout(userId, AUTH_AUDIT.passwordRehashed);
+
+    it('stores the password again with the current parameters, and changes nothing else about it', async () => {
+      const { userId, older, email } = await withOlderHash();
+      expect(parametersOf(older)).toEqual(OLDER);
+      const before = await credentialOf(userId);
+      const result = await verifyPasswordLogin(db(), {
+        email,
+        password: PASSWORD,
+        now: at(MINUTE),
+      });
+      expect(result).toMatchObject({ ok: true, user: { id: userId } });
+      const after = await credentialOf(userId);
+      expect(after!.hash).not.toBe(older);
+      expect(parametersOf(after!.hash)).toEqual(CURRENT);
+      // It is the same password, and now nothing asks for another rehash.
+      expect(await verifyPassword(PASSWORD, after!.hash)).toEqual({
+        ok: true,
+        needsRehash: false,
+      });
+      // Not a change of password: when it was set, and the flag, stay.
+      expect(after!.changedAt).toEqual(before!.changedAt);
+      expect(after!.mustChange).toBe(before!.mustChange);
+      expect(after!.version).toBe(before!.version + 1);
+      expect(after!.updatedAt).toEqual(at(MINUTE));
+    });
+
+    it.each([
+      ['less memory', { ...CURRENT, memoryKiB: 8192 }],
+      ['more passes', { ...CURRENT, passes: CURRENT.passes + 1 }],
+      ['more parallelism', { ...CURRENT, parallelism: 2 }],
+      ['a shorter salt', { ...CURRENT, saltBytes: 8 }],
+      ['a longer hash', { ...CURRENT, hashBytes: 48 }],
+    ])('does it for a hash made with %s', async (_name, settings) => {
+      const { userId, older, email } = await withOlderHash(settings);
+      await verifyPasswordLogin(db(), {
+        email,
+        password: PASSWORD,
+        now: at(MINUTE),
+      });
+      const after = await credentialOf(userId);
+      expect(after!.hash).not.toBe(older);
+      expect(parametersOf(after!.hash)).toEqual(CURRENT);
+      expect(await rehashes(userId)).toHaveLength(1);
+    });
+
+    it('audits it as the system, about the user, and never with a hash', async () => {
+      const { userId, older, email } = await withOlderHash();
+      await verifyPasswordLogin(db(), {
+        email,
+        password: PASSWORD,
+        now: at(MINUTE),
+      });
+      const after = await credentialOf(userId);
+      const [event] = await rehashes(userId);
+      expect(event).toMatchObject({
+        action: 'rehash',
+        actorType: 'system',
+        actorId: null,
+        targetType: 'user',
+        details: { trigger: 'login' },
+        occurredAt: at(MINUTE),
+      });
+      const text = JSON.stringify(await db().select().from(auditEvent));
+      expect(text).not.toContain(older);
+      expect(text).not.toContain(after!.hash);
+      expect(text).not.toContain(PASSWORD);
+    });
+
+    it('costs the person who gave the right password a second derivation, once', async () => {
+      const { email } = await withOlderHash();
+      resetCosts();
+      await verifyPasswordLogin(db(), {
+        email,
+        password: PASSWORD,
+        now: at(MINUTE),
+      });
+      // One to check the old hash, one to make the new.
+      expect(derivations()).toBe(2);
+      resetCosts();
+      await verifyPasswordLogin(db(), {
+        email,
+        password: PASSWORD,
+        now: at(2 * MINUTE),
+      });
+      expect(derivations()).toBe(1);
+    });
+
+    it('does it once: a second sign-in finds the current parameters and writes nothing', async () => {
+      const { userId, email } = await withOlderHash();
+      await verifyPasswordLogin(db(), {
+        email,
+        password: PASSWORD,
+        now: at(MINUTE),
+      });
+      const rehashed = await credentialOf(userId);
+      await verifyPasswordLogin(db(), {
+        email,
+        password: PASSWORD,
+        now: at(2 * MINUTE),
+      });
+      expect(await credentialOf(userId)).toEqual(rehashed);
+      expect(await rehashes(userId)).toHaveLength(1);
+    });
+
+    it('does it once when two sign-ins arrive together', async () => {
+      const { userId, email } = await withOlderHash();
+      const before = await credentialOf(userId);
+      const results = await Promise.all([
+        verifyPasswordLogin(db(), {
+          email,
+          password: PASSWORD,
+          now: at(MINUTE),
+        }),
+        verifyPasswordLogin(db(), {
+          email,
+          password: PASSWORD,
+          now: at(MINUTE),
+        }),
+      ]);
+      expect(results.every((result) => result.ok)).toBe(true);
+      expect(await rehashes(userId)).toHaveLength(1);
+      expect((await credentialOf(userId))!.version).toBe(before!.version + 1);
+    });
+
+    it('leaves the old hash alone for a wrong password, a disabled account and a closed one', async () => {
+      const wrong = await withOlderHash();
+      await verifyPasswordLogin(db(), {
+        email: wrong.email,
+        password: 'not-the-password-x',
+        now: at(MINUTE),
+      });
+      const disabled = await withOlderHash();
+      await setUserStatus(database, disabled.userId, 'disabled');
+      await verifyPasswordLogin(db(), {
+        email: disabled.email,
+        password: PASSWORD,
+        now: at(MINUTE),
+      });
+      const closed = await withOlderHash();
+      for (let i = 0; i < LOGIN_THROTTLE.maxFailures; i += 1) {
+        await recordLoginFailure(db(), {
+          method: 'password',
+          reason: 'wrong-secret',
+          userId: closed.userId,
+          now: at(i * SECOND),
+        });
+      }
+      await verifyPasswordLogin(db(), {
+        email: closed.email,
+        password: PASSWORD,
+        now: at(10 * SECOND),
+      });
+      for (const { userId, older } of [wrong, disabled, closed]) {
+        expect((await credentialOf(userId))!.hash).toBe(older);
+        expect(await rehashes(userId)).toEqual([]);
+      }
+    });
+
+    it('does not change the sign-in: the same answer, with or without the second step', async () => {
+      const { userId, email } = await withOlderHash();
+      await seedTotp(database, userId);
+      expect(
+        await verifyPasswordLogin(db(), {
+          email,
+          password: PASSWORD,
+          now: at(MINUTE),
+        }),
+      ).toMatchObject({ ok: true, totpRequired: true });
+      expect(parametersOf((await credentialOf(userId))!.hash)).toEqual(CURRENT);
     });
   });
 
