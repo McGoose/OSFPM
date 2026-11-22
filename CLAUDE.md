@@ -45,6 +45,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Organisation role grants reach projects only with `reach = 'all-projects'`, never for sensitive permissions.
 - Every permission-protected endpoint gets a test proving 403 without access and no sensitive fields without `sensitive:read`.
 - A self-service endpoint (it acts only on the signed-in user's own account, so there is no permission to lack) gets tests proving 401 without a session, 403 for a foreign `Origin` on a request that changes data, and 403 `account-recovery-required` for a recovery-scope session unless the route says `allowedInRecovery`.
+- Public endpoints (`auth: 'none'`) test identical failure answers and their rate limit.
 - A string from a caller never indexes a plain object and never goes through `in`. Use Object.hasOwn, a Map, or check it against the constant list first.
 - A guard that checks for live rows pointing at a record locks them (FOR UPDATE on the record, FOR SHARE on the reference) so a concurrent write can't slip past it.
 - Lock order: take the project's change counter (lockProjectChanges) before any row lock. Every writer follows this order, or concurrent writes can deadlock.
