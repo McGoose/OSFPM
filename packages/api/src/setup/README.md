@@ -1,0 +1,26 @@
+# setup (API)
+
+First-run setup over HTTP (spec card SC-10, decision D-56, Q1): how a fresh install gets its first organisation and administrator, and how the API stays closed until it does. The service that does the work is in the core (`packages/core/src/auth/first-run-setup.ts`; see `packages/core/src/auth/README.md`); this folder is the start-up step that issues the setup code, the gate, and the two routes. The full description, with the printed block and a `curl` example, is under "First run" in `packages/api/README.md`.
+
+**Entry points**
+
+- `first-run.ts`: `issueFirstRunCode(app)`, which start-up calls after the migrations and the permission sync. In one transaction it makes the `installation` row if it is missing and, unless setup is complete, issues a setup code and answers it. `setupCodeBlock(code, url)` is the text that is printed. `runStartup` (`src/startup.ts`) writes it to standard error once, after that transaction has committed.
+- `gate.ts`: `registerSetupGate(app)`, which `buildApp` calls. It puts `app.setup` (`isComplete`, `markComplete`) on the app and closes every route that does not say `config.availableBeforeSetup` with a 503 `setup-required` until setup is complete. A route that says `config.closedAfterSetup` is a 404, as a path that is no route is, once it is.
+- `routes.ts`: `setupRoutes`, `POST /setup/check` and `POST /setup`.
+
+**How it works**
+
+- **The code is printed, not logged.** It is written by hand to standard error in `runStartup`, so it never passes through the logger, whose masking is left as it is. `StartOptions.stderr` and `StartupControl.stderr` exist so a test can read it or keep it off the test output. The one log line says only that a code was written to standard error.
+- **The step is optional in `StartupSteps`** (`issueSetupCode`). A test that swaps `migrate` and `syncPermissions` gets only those two and needs no installation; the real steps have it.
+- **The gate is a hook that runs before the auth plugin.** `buildApp` registers it right after the check that start-up has finished, so a caller with a cookie, a foreign `Origin` or none gets the same 503, the session is not looked at and no cookie is cleared. A route that is open both before and after setup costs no query. The app asks the database until it sees setup complete, then remembers it: setup never goes back. `createTestApp` tells a test app setup is complete, as the setup route does after its transaction commits.
+- **`POST /setup` is one transaction** for the core's `completeFirstRunSetup` and the session (`createSession`, method `setup`, scope `recovery` without a password). A refusal is returned by the core, so the transaction commits and the audit event of a bad code is kept; the route throws after it. A failure at any step, the session's included, undoes the whole setup, and the code stays usable. Only after the commit does the route call `app.setup.markComplete()` and set the cookie.
+- **One answer for a code that does not work.** Unknown, expired, replaced, used, not shaped like a code, and the loser of two requests at once (setup completed a moment before it got the lock) are all the same 401 `setup-code-invalid`. After setup is complete the routes are a 404. A refused password is a 400 `password-refused` with the reason (the person is setting it); the account routes answer 422 for the same refusal because the user is signed in there.
+- **The `Origin` check is the route's own.** `auth: 'none'` ignores cookies, so the auth plugin's check, which is for requests that carry a session, does not apply. A `POST` whose `Origin` is not the public origin is a 403 `origin-mismatch`; no `Origin` is allowed, because a script sends none and a browser always does.
+
+**Rules you must not break**
+
+- The setup code is the only secret OSFPM prints. It goes to standard error, outside the logger. The code, a password and a session token are never logged, never in an error body or an audit event, and never in a change event; the token goes only into the cookie.
+- A new route that must answer before setup says `config.availableBeforeSetup: true`. A route that says nothing is closed until setup is complete.
+- Every setup route is `auth: 'none'` with `authRateLimit`, and is a 404 once setup is complete (`closedAfterSetup`).
+
+**Tests:** `pnpm test packages/api/src/setup`. `first-run-startup.test.ts` (the installation row, the printed block, a restart, no code once setup is complete), `gate.test.ts` (every route of the OpenAPI document, before and after), `setup-routes.test.ts` (the two routes: success with and without a password, every refusal, the rate limit, rollback when a step fails), `setup-secrets.test.ts` (no code, password or token in a log, an event, an error body or a table) and `setup-race.test.ts`, which runs only on PostgreSQL: two requests held on the installation row lock until the database shows both waiting. They run on PGlite, and on PostgreSQL too when `DATABASE_URL` is set.

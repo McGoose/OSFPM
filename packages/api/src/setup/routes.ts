@@ -20,7 +20,7 @@ import {
 import { meSchema } from '../routes/auth.js';
 
 const setupCodeInvalid = problemResponse(
-  'The setup code was not accepted. The answer is the same whether the code is unknown, expired, replaced by a newer one, already used or not shaped like a code, or setup is already complete.',
+  'The setup code was not accepted. The answer is the same whether the code is unknown, expired, replaced by a newer one, already used or not shaped like a code, or setup completed a moment before this request.',
 );
 const badRequest = problemResponse(
   'The request is not shaped as this endpoint accepts. The failing fields are listed, never their values.',
@@ -210,7 +210,7 @@ export const setupRoutes: FastifyPluginAsyncZod<SetupRoutesOptions> = (
       schema: {
         summary: 'Complete first-run setup',
         description:
-          'With the setup code, creates the first organisation, its Administrator role, the first administrator and their owner membership, marks setup complete and signs the administrator in (session method `setup`, cookie set), all in one transaction: a failure at any step leaves nothing, and the code stays usable. The Administrator role holds every permission in the organisation and, for every permission that is not sensitive, in every production of it; sensitive crew data, contract and cost amounts still need membership of the production. With no `admin.password` the session has the recovery scope: the answer says `mustSecureAccount: true`, and any route but `me`, `logout`, `PUT /auth/password` and the passkey registration answers 403 `account-recovery-required` until the administrator sets a password or adds a passkey. A password the policy refuses is a 400 `password-refused` with the reason. A code that does not work is the same 401 `setup-code-invalid` for every cause, and so is a second request with the same code. After setup is complete the route is a 404.',
+          'With the setup code, creates the first organisation, its Administrator role, the first administrator and their owner membership, marks setup complete and signs the administrator in (session method `setup`, cookie set), all in one transaction: a failure at any step leaves nothing, and the code stays usable. The Administrator role holds every permission in the organisation and, for every permission that is not sensitive, in every production of it; sensitive crew data, contract and cost amounts still need membership of the production. With no `admin.password` the session has the recovery scope: the answer says `mustSecureAccount: true`, and any route but `me`, `logout`, `PUT /auth/password` and the passkey registration answers 403 `account-recovery-required` until the administrator sets a password or adds a passkey. A password the policy refuses is a 400 `password-refused` with the reason. A code that does not work is the same 401 `setup-code-invalid` for every cause, and so is the loser of two requests at once with the same code. After setup is complete the route is a 404.',
         body: z.object({
           code: setupCode,
           organisation: organisationInput,

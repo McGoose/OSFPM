@@ -9,6 +9,7 @@ Permission checks and the error a denied call throws. They run on the server onl
 - `PERMISSION_LISTS` (`permission-lists.ts`) is the one registry of every permission list a module declares. A module that adds a `*_PERMISSIONS` list adds it there; `permission-lists.test.ts` scans the core and fails when one is missing.
 - `syncPermissions` and `PermissionDefinition` fill the `permission` catalogue from the keys a module declares. The API server calls it for every list in `PERMISSION_LISTS` when it starts (`packages/api/src/startup.ts`). It throws `PermissionSyncError` when a key is flagged sensitive while organisation roles hold `all-projects` grants of it (see below).
 - `test-fixtures.ts` seeds organisations, users and grants for tests, using invented people from _The Last Withdrawal_.
+- First-run setup makes the Administrator role (`createAdministratorRole`, `src/auth/administrator-role.ts`): every permission in `PERMISSION_LISTS`, a sensitive one in its own scope and every other to all projects, so the administrator is the one organisation role that reaches every project for ordinary data and still needs membership for sensitive data.
 
 **Organisation roles in projects**
 

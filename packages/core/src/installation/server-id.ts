@@ -3,8 +3,8 @@ import type { Tx } from '../db/write.js';
 
 /**
  * There is no `installation` row yet, so this server has no id. It is only
- * possible before first-run setup has created the row. The message carries no
- * id and no value.
+ * possible before the server has made the row (`ensureInstallation`, at
+ * start-up). The message carries no id and no value.
  */
 export class InstallationMissingError extends Error {
   constructor() {
