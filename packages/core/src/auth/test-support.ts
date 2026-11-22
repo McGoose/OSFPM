@@ -41,6 +41,18 @@ export async function seedInstallation(database: Database): Promise<string> {
   return id;
 }
 
+/**
+ * Marks first-run setup complete directly, with no administrator, for a test that
+ * is not about setup but needs the server open (`installation.setup_completed_at`
+ * is what the setup gate reads). The installation row must exist.
+ */
+export async function markSetupComplete(
+  database: Database,
+  at: Date = new Date(),
+): Promise<void> {
+  await database.db.update(installation).set({ setupCompletedAt: at });
+}
+
 /** An active user with an invented address. */
 export const seedActiveUser = seedUser;
 

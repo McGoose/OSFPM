@@ -56,6 +56,20 @@ export class StartingError extends Error {
 }
 
 /**
+ * First-run setup is not complete: the first administrator does not exist yet,
+ * so every route but the health routes, `/meta`, the OpenAPI document and the
+ * setup routes is closed (SC-10, decision D-56, Q1). Maps to a 503 problem
+ * `setup-required`. The message and the response say only that setup is needed:
+ * they carry no value.
+ */
+export class SetupRequiredError extends Error {
+  constructor() {
+    super('First-run setup is not complete');
+    this.name = 'SetupRequiredError';
+  }
+}
+
+/**
  * The route needs a signed-in user and the request has none. Maps to a 401.
  * The message is the same whatever the reason (no cookie, an unknown token, an
  * expired or revoked session, a disabled user), so a caller learns nothing
@@ -456,6 +470,14 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
     code: 'starting',
     title: 'Starting',
     detail: 'The server is starting. Try again shortly.',
+  },
+  {
+    errorClass: SetupRequiredError,
+    status: 503,
+    code: 'setup-required',
+    title: 'Setup required',
+    detail:
+      'This server has not been set up yet. Enter the setup code to create the first administrator.',
   },
   {
     errorClass: ServiceUnavailableError,

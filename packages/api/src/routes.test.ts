@@ -228,7 +228,7 @@ describe.each(testTargets)('the routes on $name', (target) => {
   });
 
   describe('GET /api/v1/meta', () => {
-    it('names the product and the package, the version, the API version and the database kind, and nothing else', async () => {
+    it('names the product and the package, the version, the API version, the database kind and whether setup is still to do, and nothing else', async () => {
       const response = await get('/meta');
       expect(response.statusCode).toBe(200);
       expect(response.headers['x-request-id']).toMatch(UUID_V7);
@@ -238,6 +238,7 @@ describe.each(testTargets)('the routes on $name', (target) => {
         version: packageJson.version,
         apiVersion: 'v1',
         database: target.name === 'pglite' ? 'pglite' : 'postgresql',
+        setupRequired: false,
       });
     });
 

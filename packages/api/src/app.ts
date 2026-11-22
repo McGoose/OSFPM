@@ -27,6 +27,7 @@ import {
   type LoggerSettings,
 } from './logging.js';
 import { PACKAGE_VERSION } from './package-info.js';
+import { registerSetupGate } from './setup/gate.js';
 import { safeValidatorCompiler } from './validation.js';
 import { authRoutes } from './routes/auth.js';
 import { healthRoutes } from './routes/health.js';
@@ -110,6 +111,9 @@ export type BuildAppOptions = {
  * The app starts not ready: it does not migrate or sync anything itself (see
  * `runStartup`). Until that has run, `/health/ready` answers 503 and every
  * route but `/health` and `/health/ready` answers a 503 problem `starting`.
+ * Once it is ready, and until first-run setup is complete, every route that does
+ * not say `config.availableBeforeSetup` answers a 503 problem `setup-required`
+ * (see `registerSetupGate`).
  *
  * Every request gets a UUIDv7 from the core's generator. A request ID sent by
  * the caller is ignored, so a caller cannot choose what appears in the logs.
@@ -178,6 +182,12 @@ export function buildApp(options: BuildAppOptions) {
     }
     done(new StartingError());
   });
+
+  // After the check above, because it asks the database, which must be migrated
+  // by now, and before the auth plugin: until the first administrator exists,
+  // every route that does not say `availableBeforeSetup` answers 503
+  // `setup-required`, with or without a cookie. It also puts `app.setup` on the app.
+  registerSetupGate(app);
 
   // The cookie parser and the rate limiter first, then the auth plugin that
   // uses both. They register on the whole app, before any route. The limiter

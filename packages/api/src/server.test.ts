@@ -7,7 +7,10 @@ import {
   syncPermissions,
 } from '@osfpm/core/src/access/permission-sync.js';
 import { createSession } from '@osfpm/core/src/auth/sessions.js';
-import { seedActiveUser } from '@osfpm/core/src/auth/test-support.js';
+import {
+  markSetupComplete,
+  seedActiveUser,
+} from '@osfpm/core/src/auth/test-support.js';
 import type { Database } from '@osfpm/core/src/db/client.js';
 import { migrate } from '@osfpm/core/src/db/migrate.js';
 import { permission } from '@osfpm/core/src/db/schema/index.js';
@@ -195,7 +198,9 @@ describe('startServer', () => {
     });
     try {
       await server.ready;
-      // The installation row is there already: start-up made it.
+      // The installation row is there already: start-up made it. Setup is not
+      // complete, which would close every route but the open few.
+      await markSetupComplete(server.database);
       const userId = await seedActiveUser(server.database);
       const { token } = await createSession(server.database.db, {
         userId,
@@ -249,7 +254,7 @@ describe('startServer', () => {
       }
     });
 
-    it('listens first: /health answers while start-up is held, every other route is a 503 problem "starting", and all of them open when it is done', async () => {
+    it('listens first: /health answers while start-up is held, every other route is a 503 problem "starting", and they open when it is done (those that need setup wait for it)', async () => {
       const release = deferred();
       const server = await startServer(config, {
         signals: new EventEmitter(),
@@ -280,7 +285,13 @@ describe('startServer', () => {
         await server.ready;
         expect((await fetch(`${api}/health/ready`)).status).toBe(200);
         expect((await fetch(`${api}/meta`)).status).toBe(200);
-        expect((await fetch(`${api}/auth/me`)).status).toBe(401);
+        // Start-up is over, but these steps made no installation, so setup is
+        // still to do and the routes that need a session answer for that.
+        const closed = await fetch(`${api}/auth/me`);
+        expect(closed.status).toBe(503);
+        expect(((await closed.json()) as { code: string }).code).toBe(
+          'setup-required',
+        );
       } finally {
         await server.stop();
       }
@@ -318,9 +329,11 @@ describe('startServer', () => {
           // A millisecond or two between attempts: only the order matters here.
           startupRetry: { initialMs: 1, maxMs: 2 },
           startupSteps: {
-            migrate: async () => {
+            // Really migrated in the end, because `/meta` reads the database.
+            migrate: async (database) => {
               if (failures-- > 0) throw refused();
               await answers.promise;
+              await migrate(database);
             },
             syncPermissions: () => Promise.resolve(),
           },

@@ -44,6 +44,7 @@ import {
   RateLimitedError,
   RecoveryRequiredError,
   ServiceUnavailableError,
+  SetupRequiredError,
   SignInFailedError,
   StartingError,
   TotpAlreadyEnrolledError,
@@ -121,6 +122,7 @@ const fixtures = new Map<abstract new (...args: never[]) => Error, () => Error>(
     [OriginMismatchError, () => new OriginMismatchError()],
     [RateLimitedError, () => new RateLimitedError()],
     [StartingError, () => new StartingError()],
+    [SetupRequiredError, () => new SetupRequiredError()],
     [
       SensitivePayloadInvalidError,
       () =>
