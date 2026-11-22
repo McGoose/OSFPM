@@ -1,18 +1,26 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { withManagedRoleMaintenance } from '@osfpm/core/src/access/managed-role.js';
+import { PERMISSION_LISTS } from '@osfpm/core/src/access/permission-lists.js';
+import { completeFirstRunSetup } from '@osfpm/core/src/auth/first-run-setup.js';
 import { AUTH_AUDIT } from '@osfpm/core/src/auth/shared.js';
 import { consumeSetupCode } from '@osfpm/core/src/auth/setup-code.js';
-import { markSetupComplete } from '@osfpm/core/src/auth/test-support.js';
+import {
+  demoSetupInput,
+  markSetupComplete,
+} from '@osfpm/core/src/auth/test-support.js';
 import { normaliseHumanCode } from '@osfpm/core/src/auth/tokens.js';
 import {
   auditEvent,
   installation,
+  rolePermission,
   setupCode,
 } from '@osfpm/core/src/db/schema/index.js';
 import {
   testTargets,
   type TestTarget,
 } from '@osfpm/core/src/db/test-support.js';
+import { API_PREFIX } from '../api-version.js';
 import { buildApp, type App } from '../app.js';
 import type { Config } from '../config.js';
 import { startServer } from '../server.js';
@@ -184,6 +192,32 @@ describe.each(testTargets)('first-run start-up on $name', (target) => {
     expect(written).toEqual([]);
   });
 
+  it('prints nothing when the top-up fails after the code was saved: start-up failed, so no route opens on it', async () => {
+    const steps: StartupSteps = {
+      migrate: () => Promise.resolve(),
+      syncPermissions: () => Promise.resolve(),
+      issueSetupCode: issueFirstRunCode,
+      topUpAdministrator: () => Promise.reject(new Error('the top-up failed')),
+    };
+    const written: string[] = [];
+    const app = buildApp({
+      db: created.database,
+      publicOrigin: TEST_PUBLIC_ORIGIN,
+    });
+    apps.push(app);
+    await start(); // migrates the database
+    await expect(
+      runStartup(app, { autoMigrate: false }, steps, {
+        stderr: { write: (text) => void written.push(text) },
+      }),
+    ).rejects.toThrow('the top-up failed');
+    expect(written).toEqual([]);
+    expect(
+      (await app.inject({ method: 'GET', url: `${API_PREFIX}/health/ready` }))
+        .statusCode,
+    ).toBe(503);
+  });
+
   it('prints once when the first attempt cannot reach the database and the next can', async () => {
     let attempts = 0;
     const steps: StartupSteps = {
@@ -205,6 +239,78 @@ describe.each(testTargets)('first-run start-up on $name', (target) => {
     const { stderr } = await start(steps);
     expect(attempts).toBe(2);
     expect(stderr.match(/Setup code:/g)).toHaveLength(1);
+  });
+
+  describe('the Administrator role', () => {
+    /** Every permission key the core declares. */
+    const declared = PERMISSION_LISTS.flatMap((list) =>
+      list.map((entry) => entry.key),
+    );
+
+    /** A server that was set up, from its first start's code, as a person would. */
+    async function installed() {
+      const first = await start();
+      const done = await completeFirstRunSetup(
+        created.database.db,
+        demoSetupInput(first.code!),
+        new Date(),
+      );
+      if (!done.ok) throw new Error('the setup was refused');
+    }
+
+    const toppedUp = async () =>
+      (await created.database.db.select().from(auditEvent)).filter(
+        (event) => event.category === AUTH_AUDIT.administratorRoleToppedUp,
+      );
+
+    it('is given the permissions it lacks when the server starts, and the log and the audit trail say how many and no more', async () => {
+      await installed();
+      // As if a release declared these two after the role was made. The role is
+      // managed, so the test switches the guard off to remove them, as the server
+      // does to add them.
+      const missing = declared.slice(0, 2);
+      await withManagedRoleMaintenance(created.database.db, (tx) =>
+        tx.execute(
+          `delete from role_permission where permission_key in (${missing
+            .map((key) => `'${key}'`)
+            .join(', ')})`,
+        ),
+      );
+      const { lines, stderr } = await start();
+      expect(stderr).toBe('');
+      expect(lines).toContain(
+        'the Administrator role was given the permissions added since it was made',
+      );
+      expect(lines).toContain('"added":2');
+      const grants = await created.database.db.select().from(rolePermission);
+      expect(grants.map((grant) => grant.permissionKey).sort()).toEqual(
+        [...declared].sort(),
+      );
+      const events = await toppedUp();
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        action: 'top-up',
+        actorType: 'system',
+        details: { added: 2 },
+      });
+      for (const key of missing) {
+        expect(lines).not.toContain(key);
+        expect(JSON.stringify(events)).not.toContain(key);
+      }
+    });
+
+    it('is left alone, with nothing logged and no event, when it already holds every permission', async () => {
+      await installed();
+      const { lines } = await start();
+      expect(lines).not.toContain('given the permissions added');
+      expect(await toppedUp()).toEqual([]);
+    });
+
+    it('is not looked for before the setup: a fresh install starts with no role to top up', async () => {
+      const { lines } = await start();
+      expect(lines).not.toContain('given the permissions added');
+      expect(await toppedUp()).toEqual([]);
+    });
   });
 });
 

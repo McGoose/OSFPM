@@ -8,6 +8,7 @@ import { migrate } from '@osfpm/core/src/db/migrate.js';
 import type { Tx } from '@osfpm/core/src/db/write.js';
 import type { App } from './app.js';
 import { errorClassName } from './logging.js';
+import { topUpAdministrator } from './setup/administrator.js';
 import { issueFirstRunCode, setupCodeBlock } from './setup/first-run.js';
 
 /** What start-up does to the database. Tests swap the steps to watch the order. */
@@ -26,12 +27,20 @@ export type StartupSteps = {
    * `syncPermissions` gets only those two, so it needs no installation.
    */
   readonly issueSetupCode?: (app: App) => Promise<string | null>;
+  /**
+   * Gives every organisation's Administrator role the permissions added since it
+   * was made, and answers how many grants it made (`topUpAdministrator`). Runs
+   * after `issueSetupCode`, which makes the `installation` row it needs. Left out,
+   * nothing is done, for the reason `issueSetupCode` gives.
+   */
+  readonly topUpAdministrator?: (app: App) => Promise<number>;
 };
 
 const REAL_STEPS: StartupSteps = {
   migrate,
   syncPermissions,
   issueSetupCode: issueFirstRunCode,
+  topUpAdministrator,
 };
 
 /**
@@ -182,14 +191,17 @@ export type StartupControl = {
  * What the server does to its database once it is listening, in this order:
  * apply pending migrations (unless `autoMigrate` is false), then sync every
  * list in the core's `PERMISSION_LISTS`, then make sure the `installation` row
- * exists and, until first-run setup is complete, issue a setup code, then mark
- * the app ready so `/health/ready` stops answering 503 and the other routes stop
- * answering a 503 problem `starting`.
+ * exists and, until first-run setup is complete, issue a setup code, then give the
+ * Administrator role of every organisation the permissions added since it was
+ * made, then mark the app ready so `/health/ready` stops answering 503 and the
+ * other routes stop answering a 503 problem `starting`.
  *
  * The lists are synced in one transaction: all of them or none, so a refused
  * list does not leave the catalogue half updated. Migrations run first because
  * the catalogue table is one of the things they create. With `autoMigrate` off
- * the database must already be migrated, or the sync fails.
+ * the database must already be migrated, or the sync fails. The Administrator
+ * role is topped up after the sync, which makes the catalogue rows its grants
+ * point to, and after the `installation` row exists, which the top-up locks.
  *
  * **The setup code is printed here, once, to standard error** (`control.stderr`),
  * in a marked block (`setupCodeBlock`), and only after the transaction that saved
@@ -292,6 +304,14 @@ async function attemptOnce(
   if (setupCode !== null) {
     app.log.info(
       'first-run setup is not complete: a setup code was written to standard error',
+    );
+  }
+  const added = (await steps.topUpAdministrator?.(app)) ?? 0;
+  // A count only, as the audit event has: each grant itself is in the change log.
+  if (added > 0) {
+    app.log.info(
+      { added },
+      'the Administrator role was given the permissions added since it was made',
     );
   }
   return setupCode;

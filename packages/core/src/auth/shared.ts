@@ -56,6 +56,7 @@ export const AUTH_AUDIT = {
   organisationCreated: 'auth.organisation-created',
   roleCreated: 'auth.role-created',
   membershipCreated: 'auth.membership-created',
+  administratorRoleToppedUp: 'auth.administrator-role-topped-up',
 } as const;
 
 /** Details of an auth audit event: scalar values only, so nothing nested can hide a secret. */

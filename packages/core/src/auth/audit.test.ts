@@ -8,6 +8,7 @@ import { newId } from '../db/ids.js';
 import { auditEvent, SECURITY_TABLES } from '../db/schema/index.js';
 import { getTableName } from 'drizzle-orm';
 import { createMigratedDatabase, testTargets } from '../db/test-support.js';
+import { topUpAdministratorRoles } from './administrator-role.js';
 import { ensureInstallation } from './ensure-installation.js';
 import { completeFirstRunSetup } from './first-run-setup.js';
 import {
@@ -60,6 +61,16 @@ import { hashHumanCode, hashToken, normaliseHumanCode } from './tokens.js';
 const T0 = new Date('2026-03-02T09:00:00.000Z');
 const MINUTE = 60 * 1000;
 const at = (ms: number) => new Date(T0.getTime() + ms);
+
+/** A permission a later release adds, which the Administrator role is then topped up with. */
+const LATER_PERMISSIONS = [
+  {
+    key: 'later:read',
+    module: 'later',
+    description: 'Read what a later release adds',
+  },
+];
+const LATER_LISTS = [...PERMISSION_LISTS, LATER_PERMISSIONS];
 
 describe.each(testTargets)('auth audit events on $name', (target) => {
   let database: Database;
@@ -360,6 +371,13 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
     );
     if (!setup.ok) throw new Error('the setup was refused');
     setupOrganisationId = setup.organisation.id;
+    // Then the server starts again with a release that declares one more
+    // permission, and gives it to the Administrator role.
+    await syncPermissions(db(), LATER_PERMISSIONS);
+    await topUpAdministratorRoles(db(), {
+      now: at(39 * MINUTE),
+      lists: LATER_LISTS,
+    });
     secrets.push(
       firstRunCode,
       normaliseHumanCode(firstRunCode)!,
@@ -541,6 +559,24 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
     );
   });
 
+  it('records the Administrator role topped up, from the system, for its organisation, with the count and no permission', async () => {
+    const events = await byCategory(AUTH_AUDIT.administratorRoleToppedUp);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      action: 'top-up',
+      actorType: 'system',
+      actorId: null,
+      targetType: 'role',
+      organisationId: setupOrganisationId,
+      details: { added: 1 },
+    });
+    expect(events[0]!.occurredAt).toEqual(at(39 * MINUTE));
+    // The role it names is the one setup made.
+    const [created] = await byCategory(AUTH_AUDIT.roleCreated);
+    expect(events[0]!.targetId).toBe(created!.targetId);
+    expect(JSON.stringify(events)).not.toContain('later:');
+  });
+
   it('records each passkey registration started and finished, for its user, with the passkey as the target of the second', async () => {
     const started = (
       await byCategory(AUTH_AUDIT.passkeyRegistrationStarted)
@@ -635,6 +671,11 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
       now: at(20 * MINUTE),
     });
     await consumeSetupCode(db(), 'AAAA-AAAA-AAAA-AAAA', at(20 * MINUTE));
+    // An Administrator role that holds every permission already.
+    await topUpAdministratorRoles(db(), {
+      now: at(20 * MINUTE),
+      lists: LATER_LISTS,
+    });
     expect((await authEvents()).length).toBe(before);
   });
 

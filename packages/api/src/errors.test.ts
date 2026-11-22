@@ -6,6 +6,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { AccessDeniedError } from '@osfpm/core/src/access/access-denied-error.js';
+import { ManagedRoleError } from '@osfpm/core/src/access/managed-role.js';
 import { PermissionSyncError } from '@osfpm/core/src/access/permission-sync.js';
 import {
   AccountHasChildrenError,
@@ -87,6 +88,7 @@ const fixtures = new Map<abstract new (...args: never[]) => Error, () => Error>(
     [RecordNotFoundError, () => new RecordNotFoundError('project', ID)],
     [VersionConflictError, () => new VersionConflictError('project', ID, 1, 2)],
     [RecordStateError, () => new RecordStateError('project', ID, 'delete')],
+    [ManagedRoleError, () => new ManagedRoleError()],
     [
       ContractInputError,
       () => new ContractInputError('A party needs a person or a company'),

@@ -2,6 +2,7 @@ import type { FastifyError, FastifyReply, FastifyRequest } from 'fastify';
 import { hasZodFastifySchemaValidationErrors } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { AccessDeniedError } from '@osfpm/core/src/access/access-denied-error.js';
+import { ManagedRoleError } from '@osfpm/core/src/access/managed-role.js';
 import { PermissionSyncError } from '@osfpm/core/src/access/permission-sync.js';
 import { AccountInputError } from '@osfpm/core/src/accounts/service.js';
 import { AuthInputError, AuthStateError } from '@osfpm/core/src/auth/errors.js';
@@ -502,6 +503,17 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
     code: 'record-state',
     title: 'Record in the wrong state',
     detail: 'The record is in the wrong state for this operation.',
+  },
+  {
+    // The Administrator role is the server's own: nobody edits or deletes it or
+    // its permissions, whatever they hold, so the answer is about the role and not
+    // about the caller (not a 403). Fixed text, so it names no role.
+    errorClass: ManagedRoleError,
+    status: 409,
+    code: 'role-managed',
+    title: 'Role is managed',
+    detail:
+      'This role is kept by the server. It and its permissions cannot be edited or deleted.',
   },
   // The three input errors below document that they carry no ids and no
   // values, so their own message is safe to show. A test checks that every row
