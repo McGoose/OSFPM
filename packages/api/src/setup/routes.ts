@@ -11,8 +11,8 @@ import { checkSetupCode } from '@osfpm/core/src/auth/setup-code.js';
 import { isEmailShaped } from '@osfpm/core/src/auth/users.js';
 import { setSessionCookie } from '../auth/cookie.js';
 import { deviceOf } from '../auth/login-routes.js';
+import { assertOriginRequired } from '../auth/plugin.js';
 import {
-  OriginMismatchError,
   problemResponse,
   SetupCodeInvalidError,
   SetupPasswordRefusedError,
@@ -26,7 +26,7 @@ const badRequest = problemResponse(
   'The request is not shaped as this endpoint accepts. The failing fields are listed, never their values.',
 );
 const wrongOrigin = problemResponse(
-  'The request has an `Origin` that is not this server’s own origin.',
+  'The request has no `Origin` header, or one that is not this server’s own origin. A browser always sends it; a script must send it, with the origin of the address people open.',
 );
 const gone = problemResponse(
   'Setup is complete, so this route no longer exists: the answer is the one for a path that is no route.',
@@ -39,11 +39,15 @@ const tooManyRequests = problemResponse(
  * What both setup routes say about themselves. `auth: 'none'`: nobody can be
  * signed in before the first administrator exists. They count against the strict
  * limit per address, because a caller may be guessing the code. They answer
- * before setup is complete and are a 404 after (see `registerSetupGate`).
+ * before setup is complete and are a 404 after (see `registerSetupGate`). They
+ * say `requireOrigin`: setup makes a session, and the check route is its first
+ * step, so a request from another site, or with no `Origin` at all, is refused
+ * whether or not it carries a cookie (see `FastifyContextConfig.requireOrigin`).
  */
 const setupConfig = {
   auth: 'none',
   authRateLimit: true,
+  requireOrigin: true,
   availableBeforeSetup: true,
   closedAfterSetup: true,
 } as const;
@@ -125,15 +129,6 @@ const organisationView = z.object({
   timeZone: z.string(),
 });
 
-/** What `setupRoutes` is registered with. */
-export type SetupRoutesOptions = {
-  /**
-   * The origin of `OSFPM_PUBLIC_URL`, written as a browser writes it (see
-   * `Config.publicOrigin`). A `POST` whose `Origin` is another is refused.
-   */
-  readonly publicOrigin: string;
-};
-
 /**
  * The first-run setup routes, `POST /api/v1/setup/check` and
  * `POST /api/v1/setup` (SC-10, decision D-56, Q1). They are how a fresh install
@@ -143,36 +138,19 @@ export type SetupRoutesOptions = {
  * against the strict limit per address (`AUTH_RATE_LIMIT`), and both are a 404
  * once setup is complete (`closedAfterSetup`, see `registerSetupGate`).
  *
- * A `POST` with an `Origin` that is not the public origin is a 403
- * `origin-mismatch`. These routes read no cookie, so the plugin's check, which is
- * for requests that carry a session, does not apply; this is the same defence
- * against a page on another site posting to the server, for a route that makes a
- * session. A request with no `Origin`, which a browser never sends for a `POST`,
- * is not refused: a script or a command line has none.
+ * A `POST` with no `Origin`, or one that is not the public origin, is a 403
+ * `origin-mismatch`, with a cookie or without one: both routes say
+ * `config.requireOrigin`, and the auth plugin checks it right after the strict
+ * limit (see there). These routes read no cookie, so this is the defence against a
+ * page on another site posting to the server for a route that makes a session. A
+ * browser always sends the header; a script or a command line must.
  *
  * Every refusal of the code is the same 401 `setup-code-invalid`, with one body
  * for every cause. The code, the password and the session token are never logged,
  * never in an error body and never in an audit event; the token goes only into
  * the cookie. These routes check no permission: nobody holds one yet.
  */
-export const setupRoutes: FastifyPluginAsyncZod<SetupRoutesOptions> = (
-  app,
-  options,
-) => {
-  // After the global hooks, so the limits count a request first.
-  app.addHook('onRequest', (request, _reply, done) => {
-    const { origin } = request.headers;
-    if (
-      request.method === 'POST' &&
-      origin !== undefined &&
-      origin !== options.publicOrigin
-    ) {
-      done(new OriginMismatchError());
-      return;
-    }
-    done();
-  });
-
+export const setupRoutes: FastifyPluginAsyncZod = (app) => {
   app.post(
     '/setup/check',
     {
@@ -238,6 +216,8 @@ export const setupRoutes: FastifyPluginAsyncZod<SetupRoutesOptions> = (
       },
     },
     async (request, reply) => {
+      // This route makes a session, so it must say so (`requireOrigin`).
+      assertOriginRequired(request);
       const now = new Date();
       const { code, organisation, admin } = request.body;
       // One transaction for the whole setup and the session: the user row lock

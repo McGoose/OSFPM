@@ -73,6 +73,11 @@ describe.each(testTargets)(
       });
       await migrate(ctx.database);
       const code = await seedFirstRun(ctx.database);
+      /**
+       * A request to the app. A `POST` comes from the site itself unless `origin`
+       * says otherwise (`null` sends none): a browser always sends an `Origin`,
+       * and both setup routes refuse a request without the right one.
+       */
       const call = (
         method: 'GET' | 'POST' | 'PUT',
         path: string,
@@ -80,17 +85,24 @@ describe.each(testTargets)(
           payload?: unknown;
           headers?: Record<string, string>;
           remoteAddress?: string;
+          origin?: string | null;
         } = {},
-      ) =>
-        ctx.app.inject({
+      ) => {
+        const origin =
+          options.origin === undefined ? TEST_PUBLIC_ORIGIN : options.origin;
+        return ctx.app.inject({
           method,
           url: `${API_PREFIX}${path}`,
-          headers: options.headers ?? {},
+          headers: {
+            ...(origin === null || method !== 'POST' ? {} : { origin }),
+            ...options.headers,
+          },
           remoteAddress: options.remoteAddress ?? freshAddress(),
           ...(options.payload === undefined
             ? {}
             : { payload: options.payload as Record<string, unknown> }),
         });
+      };
       const post = (
         path: string,
         payload: unknown,
@@ -291,7 +303,7 @@ describe.each(testTargets)(
         ).not.toContain('xxxxx');
       });
 
-      it('refuses a foreign Origin with a 403, and lets one with no Origin or the right one through', async () => {
+      it('refuses a foreign Origin and no Origin with a 403, and lets the right one through', async () => {
         const foreign = await install.post(
           '/setup/check',
           { code: live },
@@ -299,6 +311,12 @@ describe.each(testTargets)(
         );
         expect(foreign.statusCode).toBe(403);
         expect(foreign.json()).toMatchObject({ code: 'origin-mismatch' });
+        const none = await install.call('POST', '/setup/check', {
+          payload: { code: live },
+          origin: null,
+        });
+        expect(none.statusCode).toBe(403);
+        expect(none.json()).toMatchObject({ code: 'origin-mismatch' });
         expect(
           (
             await install.post(
@@ -307,9 +325,6 @@ describe.each(testTargets)(
               { origin: TEST_PUBLIC_ORIGIN },
             )
           ).statusCode,
-        ).toBe(204);
-        expect(
-          (await install.post('/setup/check', { code: live })).statusCode,
         ).toBe(204);
       });
 
@@ -735,15 +750,21 @@ describe.each(testTargets)(
         await expectNothingMade();
       });
 
-      it('a foreign Origin is a 403, and nothing is made or spent', async () => {
-        const response = await install.post(
+      it('a foreign Origin, or none, is a 403, and nothing is made or spent', async () => {
+        const foreign = await install.post(
           '/setup',
           demoSetupInput(install.code),
           { origin: FOREIGN_ORIGIN },
         );
-        expect(response.statusCode).toBe(403);
-        expect(response.json()).toMatchObject({ code: 'origin-mismatch' });
-        expect(setCookies(response.headers)).toEqual([]);
+        const none = await install.call('POST', '/setup', {
+          payload: demoSetupInput(install.code),
+          origin: null,
+        });
+        for (const response of [foreign, none]) {
+          expect(response.statusCode).toBe(403);
+          expect(response.json()).toMatchObject({ code: 'origin-mismatch' });
+          expect(setCookies(response.headers)).toEqual([]);
+        }
         await expectNothingMade();
       });
 

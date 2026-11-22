@@ -25,7 +25,7 @@ import {
   SESSION_COOKIE,
   setSessionCookie,
 } from './cookie.js';
-import { requireAuthenticated } from './plugin.js';
+import { assertOriginRequired, requireAuthenticated } from './plugin.js';
 
 const HOUR = 60 * 60 * 1000;
 
@@ -76,6 +76,39 @@ const testRoutes: FastifyPluginAsync = (app) => {
   );
   app.post('/test/changes-none', { config: { auth: 'none' } }, (request) =>
     describeRequest(request),
+  );
+  // Routes that say `requireOrigin`, as the ones that make a session do.
+  app.post(
+    '/test/needs-origin',
+    { config: { auth: 'none', requireOrigin: true } },
+    (request) => describeRequest(request),
+  );
+  app.get(
+    '/test/needs-origin',
+    { config: { auth: 'none', requireOrigin: true } },
+    (request) => describeRequest(request),
+  );
+  app.post(
+    '/test/needs-origin-optional',
+    { config: { auth: 'optional', requireOrigin: true } },
+    (request) => describeRequest(request),
+  );
+  // What a route that makes a session does first: it says so by asking.
+  app.post(
+    '/test/makes-session',
+    { config: { auth: 'none', requireOrigin: true } },
+    (request) => {
+      assertOriginRequired(request);
+      return { made: true };
+    },
+  );
+  app.post(
+    '/test/makes-session-unchecked',
+    { config: { auth: 'none' } },
+    (request) => {
+      assertOriginRequired(request);
+      return { made: true };
+    },
   );
   app.get(
     '/test/set-cookie',
@@ -555,6 +588,125 @@ describe.each(testTargets)('the auth plugin on $name', (target: TestTarget) => {
         cookie: 'theme=dark',
       });
       expect(response.statusCode).toBe(200);
+    });
+  });
+
+  describe('a route that requires an Origin (config.requireOrigin)', () => {
+    // The routes that make a session: a page on another site must not be able to
+    // sign a visitor in as someone else, so the Origin is checked with a cookie
+    // or without one, and even where the route does not use the session at all.
+    const REFUSED = [
+      ['no Origin', undefined],
+      ['another site', 'https://attacker.example.test'],
+      ['the same host on another port', 'https://osfpm.example.test:8443'],
+      ['the same host over http', 'http://osfpm.example.test'],
+      ['the origin with a path', `${TEST_PUBLIC_ORIGIN}/`],
+      ['an opaque origin', 'null'],
+      ['an empty Origin', ''],
+    ] as const;
+
+    it.each(REFUSED)(
+      'a POST with %s is a 403 origin-mismatch, with no cookie at all',
+      async (_label, origin) => {
+        const response = await call(
+          'POST',
+          '/test/needs-origin',
+          origin === undefined ? {} : { origin },
+        );
+        expect(response.statusCode).toBe(403);
+        expect(response.json()).toMatchObject({
+          type: '/problems/origin-mismatch',
+          code: 'origin-mismatch',
+          instance: `${API_PREFIX}/test/needs-origin`,
+        });
+        expect(setCookies(response.headers)).toEqual([]);
+      },
+    );
+
+    it('lets the right Origin through, with no cookie and with a junk one that an auth: none route ignores', async () => {
+      const bare = await call('POST', '/test/needs-origin', {
+        origin: TEST_PUBLIC_ORIGIN,
+      });
+      expect(bare.statusCode).toBe(200);
+      expect(bare.json()).toEqual({ signedIn: false });
+      const withCookie = await call('POST', '/test/needs-origin', {
+        origin: TEST_PUBLIC_ORIGIN,
+        cookie: cookieOf('junk'),
+      });
+      expect(withCookie.statusCode).toBe(200);
+      // Ignored, so not looked up and not cleared.
+      expect(setCookies(withCookie.headers)).toEqual([]);
+    });
+
+    it('refuses a foreign Origin whatever the cookie, and says the same thing', async () => {
+      const { token } = await login();
+      const answers = new Set<string>();
+      const attacker = 'https://attacker.example.test';
+      const attempts: Record<string, string>[] = [
+        { origin: attacker },
+        { origin: attacker, cookie: cookieOf(token) },
+        { origin: attacker, cookie: cookieOf('junk') },
+      ];
+      for (const headers of attempts) {
+        const response = await call('POST', '/test/needs-origin', headers);
+        expect(response.statusCode).toBe(403);
+        answers.add(
+          JSON.stringify({ ...response.json<object>(), requestId: 0 }),
+        );
+      }
+      expect(answers.size).toBe(1);
+    });
+
+    it('applies to an optional route with no cookie too, which the cookie check alone would let through', async () => {
+      expect(
+        (await call('POST', '/test/needs-origin-optional')).statusCode,
+      ).toBe(403);
+      expect(
+        (
+          await call('POST', '/test/needs-origin-optional', {
+            origin: TEST_PUBLIC_ORIGIN,
+          })
+        ).statusCode,
+      ).toBe(200);
+    });
+
+    it('does not apply to a method that does not change data', async () => {
+      for (const method of ['GET', 'HEAD'] as const) {
+        expect(
+          (await call(method, '/test/needs-origin')).statusCode,
+          method,
+        ).toBe(200);
+      }
+    });
+
+    it('leaves a route that does not say it as it was: an auth: none route with no cookie takes any Origin', async () => {
+      for (const origin of [undefined, 'https://attacker.example.test']) {
+        const response = await call(
+          'POST',
+          '/test/changes-none',
+          origin === undefined ? {} : { origin },
+        );
+        expect(response.statusCode).toBe(200);
+      }
+    });
+
+    describe('assertOriginRequired, which a route that makes a session calls first', () => {
+      it('lets a route that says requireOrigin go on', async () => {
+        const response = await call('POST', '/test/makes-session', {
+          origin: TEST_PUBLIC_ORIGIN,
+        });
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toEqual({ made: true });
+      });
+
+      it('stops a route that does not: a generic 500, because a route that makes a session without the check is a bug in the server', async () => {
+        const response = await call('POST', '/test/makes-session-unchecked', {
+          origin: TEST_PUBLIC_ORIGIN,
+        });
+        expect(response.statusCode).toBe(500);
+        expect(response.json<{ code: string }>().code).toBe('internal-error');
+        expect(response.body).not.toContain('requireOrigin');
+      });
     });
   });
 

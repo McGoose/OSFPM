@@ -77,7 +77,8 @@ export type BuildAppOptions = {
   readonly db: Database;
   /**
    * The origin of `OSFPM_PUBLIC_URL` (`Config.publicOrigin`): the only `Origin`
-   * a request that changes data and carries a session cookie may have.
+   * a request that changes data may have when it carries a session cookie or
+   * when it is to a route that makes a session.
    */
   readonly publicOrigin: string;
   /**
@@ -225,10 +226,7 @@ export function buildApp(options: BuildAppOptions) {
   void app.register(healthRoutes, { prefix: API_PREFIX });
   void app.register(metaRoutes, { prefix: API_PREFIX });
   void app.register(openapiRoutes, { prefix: API_PREFIX });
-  void app.register(setupRoutes, {
-    prefix: API_PREFIX,
-    publicOrigin: options.publicOrigin,
-  });
+  void app.register(setupRoutes, { prefix: API_PREFIX });
   void app.register(authRoutes, { prefix: `${API_PREFIX}/auth` });
   void app.register(loginRoutes, {
     prefix: `${API_PREFIX}/auth`,

@@ -31,7 +31,9 @@ import {
  *   a 401.
  * - `optional`: a valid session is used if there is one; none is not an error.
  * - `none`: the route does not use the session at all. Cookies are ignored: no
- *   lookup, no clearing, no origin check. Health, meta and the OpenAPI document.
+ *   lookup, no clearing, no origin check of the cookie. Health, meta and the
+ *   OpenAPI document, and the routes that make a session, which are `none`
+ *   because nobody is signed in yet and which say `requireOrigin` instead.
  */
 export const AUTH_MODES = ['required', 'optional', 'none'] as const;
 
@@ -88,6 +90,19 @@ declare module 'fastify' {
      * signs out say so.
      */
     allowedInRecovery?: boolean;
+    /**
+     * A request that changes data must carry an `Origin` equal to the public
+     * origin, whether or not it has a session cookie, or it is a 403
+     * `origin-mismatch`. For the routes that make a session (a sign-in step,
+     * first-run setup): a forged request from a page on another site has no cookie
+     * to borrow, but it could still sign the visitor in as someone else, and a
+     * browser always sends the `Origin` of the page, so the check costs a browser
+     * nothing. A script has to send the header itself. Counted against the strict
+     * limit first, like every route with `authRateLimit`, and checked before the
+     * body is read. A route that makes a session calls `assertOriginRequired`, so
+     * it cannot forget to say so.
+     */
+    requireOrigin?: boolean;
   }
   interface FastifyRequest {
     /**
@@ -102,8 +117,8 @@ declare module 'fastify' {
 export type AuthPluginOptions = {
   /**
    * The origin of `OSFPM_PUBLIC_URL`, written as a browser writes it (see
-   * `Config.publicOrigin`). The only `Origin` a request that changes data and
-   * carries a session cookie may have.
+   * `Config.publicOrigin`). The only `Origin` a request that changes data may
+   * have when it carries a session cookie, or when its route says `requireOrigin`.
    */
   readonly publicOrigin: string;
   /** The coarse limit per address. Defaults to `ADDRESS_RATE_LIMIT`; tests raise it. */
@@ -203,6 +218,18 @@ const implementation: FastifyPluginAsync<AuthPluginOptions> = (
       await enforce(authLimit, request, reply);
     }
 
+    // A route that makes a session needs the Origin with a cookie or without
+    // one, and whether or not it uses the session, so this comes before the mode.
+    // After the strict limit, so a flood of forged requests costs a count and
+    // nothing more; before the body is read, so a refused request spends no code.
+    if (
+      request.routeOptions.config.requireOrigin === true &&
+      ORIGIN_CHECKED_METHODS.has(request.method) &&
+      request.headers.origin !== publicOrigin
+    ) {
+      throw new OriginMismatchError();
+    }
+
     // Anything but the two looser modes is `required`, including a value this
     // plugin does not know: a typo in a cast must not open a route.
     const configured: unknown = request.routeOptions.config.auth;
@@ -299,7 +326,12 @@ const implementation: FastifyPluginAsync<AuthPluginOptions> = (
  * cookie must carry an `Origin` equal to `publicOrigin`, or it is a 403
  * `origin-mismatch`. That is the defence against cross-site requests, and it
  * runs before the session is looked up. A request with no session cookie is not
- * checked: API tokens, which come later, authenticate it another way.
+ * checked: API tokens, which come later, authenticate it another way. The
+ * exception is a route that says `config.requireOrigin`, which every route that
+ * makes a session does: its request must carry the right `Origin` whether or not
+ * it has a cookie, whatever the route's `auth` mode, because a page on another
+ * site could otherwise sign the visitor in as someone else. That check comes
+ * right after the strict limit and before anything else about the request.
  *
  * It runs as an `onRequest` hook, so before the body is read or validated. A
  * route declares its mode in `config.auth` (see `AUTH_MODES`); a value the
@@ -320,6 +352,25 @@ export const authPlugin: FastifyPluginAsync<AuthPluginOptions> = Object.assign(
     [Symbol.for('fastify.display-name')]: 'osfpm-auth',
   },
 );
+
+/**
+ * Refuses to go on when the route of `request` has not said `config.requireOrigin`.
+ * A route that makes a session calls it before it does, so a new sign-in route
+ * cannot forget the `Origin` check: the plugin enforces `requireOrigin`, and this
+ * makes sure the route declares it. It checks the route's declaration, not the
+ * request, because the plugin has already refused a request with the wrong
+ * `Origin`.
+ *
+ * @throws Error when the route does not say it. That is a bug in the server, not
+ * in the request, so it becomes a generic 500.
+ */
+export function assertOriginRequired(request: FastifyRequest): void {
+  if (request.routeOptions.config.requireOrigin !== true) {
+    throw new Error(
+      'A route that makes a session must say config.requireOrigin',
+    );
+  }
+}
 
 /**
  * The signed-in user of `request`. For a handler of a `required` route, where

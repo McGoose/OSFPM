@@ -98,7 +98,11 @@ describe.each(testTargets)('the setup gate on $name', (target) => {
 
     it('answers the two setup routes, which are how setup is done: a 400 for a body that is not shaped right, not a 503', async () => {
       for (const path of ['/setup', '/setup/check']) {
-        const response = await call('POST', `${API_PREFIX}${path}`);
+        // From the site itself: both routes refuse a request with no Origin, and
+        // this test is about the gate, which has let the request through.
+        const response = await call('POST', `${API_PREFIX}${path}`, {
+          origin: TEST_PUBLIC_ORIGIN,
+        });
         expect(response.statusCode, path).toBe(400);
         expect(response.json<{ code: string }>().code, path).toBe(
           'validation-failed',

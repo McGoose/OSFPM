@@ -128,9 +128,11 @@ export class AuthenticationRequiredError extends Error {
 }
 
 /**
- * A request that changes data, with a session cookie, did not come from this
- * server's own origin (cross-site request forgery defence). Maps to a 403. The
- * message names neither the expected origin nor the one that was sent.
+ * A request that changes data did not come from this server's own origin
+ * (cross-site request forgery defence): it has a session cookie, or is to a route
+ * that makes a session (`config.requireOrigin`), and its `Origin` is missing or
+ * is another. Maps to a 403. The message names neither the expected origin nor
+ * the one that was sent.
  */
 export class OriginMismatchError extends Error {
   constructor() {

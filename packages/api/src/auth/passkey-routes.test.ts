@@ -759,6 +759,32 @@ describe.each(testTargets)(
         );
       });
 
+      it('is a 403 origin-mismatch with no Origin or a wrong one, whatever the cookie, and leaves the challenge unspent', async () => {
+        const { authenticator, userId } = await userWithPasskey();
+        const { challenge, options } = await startSignIn();
+        const payload = {
+          challenge,
+          response: authenticator.authenticate(options),
+        };
+        for (const origin of [null, 'https://attacker.example.test', 'null']) {
+          const response = await send('POST', '/login/passkey/verify', {
+            payload,
+            origin,
+          });
+          expect(response.statusCode, String(origin)).toBe(403);
+          expect(response.json<{ code: string }>().code).toBe(
+            'origin-mismatch',
+          );
+          expect(setCookies(response.headers)).toEqual([]);
+        }
+        const before = (await db().select().from(session)).filter(
+          (row) => row.userId === userId && row.method === 'passkey',
+        );
+        expect(before).toHaveLength(0);
+        // Not used up, and nothing was made: the same answer from the site itself signs in.
+        expect((await verifySignIn(payload)).statusCode).toBe(200);
+      });
+
       it('takes a device that never counts, again and again, and a count that goes up', async () => {
         const counting = await userWithPasskey();
         const never = await account();
