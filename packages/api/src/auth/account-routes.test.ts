@@ -106,6 +106,46 @@ describe.each(testTargets)(
         remoteAddress: freshAddress(),
       });
 
+    /**
+     * What a client can see of a response, with the parts that differ between
+     * two requests taken out: the request ID and the date.
+     */
+    const visible = (response: Awaited<ReturnType<typeof send>>) => ({
+      status: response.statusCode,
+      headers: Object.fromEntries(
+        Object.entries(response.headers).filter(
+          ([name]) => name !== 'x-request-id' && name !== 'date',
+        ),
+      ),
+      body: {
+        ...response.json<Record<string, unknown>>(),
+        requestId: undefined,
+      },
+    });
+
+    /** `visible` without the path of the request, which names the route, and the length that follows from it. */
+    const withoutPath = (seen: ReturnType<typeof visible>) => ({
+      ...seen,
+      // The length follows from the path, so it goes too.
+      headers: Object.fromEntries(
+        Object.entries(seen.headers).filter(
+          ([name]) => name !== 'content-length',
+        ),
+      ),
+      body: { ...seen.body, instance: undefined },
+    });
+
+    /** The reason class of every failed step audited for the user, in order of the reasons' names. */
+    const failureReasons = async (userId: string) =>
+      (await db().select().from(auditEvent))
+        .filter(
+          (event) =>
+            event.category === AUTH_AUDIT.loginStepFailed &&
+            event.targetId === userId,
+        )
+        .map((event) => (event.details as { reason: string }).reason)
+        .sort();
+
     const stillValid = async (token: string) =>
       (await validateSession(db(), token, new Date())) !== null;
 
@@ -178,7 +218,7 @@ describe.each(testTargets)(
         expect(await eventsOf(AUTH_AUDIT.passwordSet, userId)).toHaveLength(1);
       });
 
-      it('needs the current password, and answers the same 403 whether it is missing, wrong or the account is closed', async () => {
+      it('needs the current password, and answers the same 403 whether it is missing or wrong', async () => {
         const { userId } = await account();
         const { token } = await sessionOf(userId);
         const bodies = new Set<string>();
@@ -223,6 +263,44 @@ describe.each(testTargets)(
         });
         expect(response.statusCode).toBe(403);
         expect(await stillValid(token)).toBe(true);
+      });
+
+      it('answers a wrong current password and a closed account with the identical 403: one body, the same headers', async () => {
+        const { userId } = await account();
+        const { token } = await sessionOf(userId);
+        const attempt = (currentPassword: string) =>
+          send('PUT', '/password', {
+            token,
+            payload: { currentPassword, newPassword: NEW_PASSWORD },
+          });
+        const wrong = await attempt(WRONG_PASSWORD);
+        for (let i = 1; i < LOGIN_THROTTLE.maxFailures; i += 1) {
+          await attempt(WRONG_PASSWORD);
+        }
+        // Five wrong guesses: the account is closed, and the right password is
+        // not even checked.
+        const closed = await attempt(PASSWORD);
+        const missing = await send('PUT', '/password', {
+          token,
+          payload: { newPassword: NEW_PASSWORD },
+        });
+        for (const response of [wrong, closed, missing]) {
+          expect(response.statusCode).toBe(403);
+          expect(response.json<{ code: string }>().code).toBe(
+            'current-password-incorrect',
+          );
+        }
+        expect(visible(closed)).toEqual(visible(wrong));
+        expect(visible(missing)).toEqual(visible(wrong));
+        // It was the throttle that refused the right password, not a wrong one.
+        expect(await failureReasons(userId)).toEqual([
+          'throttled',
+          'wrong-secret',
+          'wrong-secret',
+          'wrong-secret',
+          'wrong-secret',
+          'wrong-secret',
+        ]);
       });
 
       it('sets a first password with no current one', async () => {
@@ -490,6 +568,53 @@ describe.each(testTargets)(
         );
         const rows = await db().select().from(totpCredential);
         expect(rows.some((row) => row.userId === userId)).toBe(true);
+      });
+
+      it('answers a wrong password and a closed account with the identical 403, and the same one as PUT /password gives', async () => {
+        const { userId } = await account();
+        await seedTotp(ctx.database, userId);
+        const { token } = await sessionOf(userId);
+        const attempt = (password: string) =>
+          send('DELETE', '/totp', { token, payload: { password } });
+        const wrong = await attempt(WRONG_PASSWORD);
+        for (let i = 1; i < LOGIN_THROTTLE.maxFailures; i += 1) {
+          await attempt(WRONG_PASSWORD);
+        }
+        const closed = await attempt(PASSWORD);
+        expect(closed.statusCode).toBe(403);
+        expect(visible(closed)).toEqual(visible(wrong));
+        expect(await failureReasons(userId)).toEqual([
+          'throttled',
+          'wrong-secret',
+          'wrong-secret',
+          'wrong-secret',
+          'wrong-secret',
+          'wrong-secret',
+        ]);
+        // The authenticator is still there: the refusal removed nothing.
+        const rows = await db().select().from(totpCredential);
+        expect(rows.some((row) => row.userId === userId)).toBe(true);
+
+        // The same problem as a closed account gets on the other route, apart
+        // from the path it came from.
+        const other = await account();
+        const otherToken = (await sessionOf(other.userId)).token;
+        for (let i = 0; i < LOGIN_THROTTLE.maxFailures; i += 1) {
+          await send('PUT', '/password', {
+            token: otherToken,
+            payload: {
+              currentPassword: WRONG_PASSWORD,
+              newPassword: NEW_PASSWORD,
+            },
+          });
+        }
+        const otherClosed = await send('PUT', '/password', {
+          token: otherToken,
+          payload: { currentPassword: PASSWORD, newPassword: NEW_PASSWORD },
+        });
+        expect(withoutPath(visible(otherClosed))).toEqual(
+          withoutPath(visible(closed)),
+        );
       });
 
       it('removes it with the right password, ends the other sessions, and the sign-in stops asking for a code', async () => {
