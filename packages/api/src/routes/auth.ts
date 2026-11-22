@@ -57,8 +57,11 @@ const sessionSchema = z.object({
  * The routes under `/api/v1/auth` that a signed-in user uses: who am I, where am
  * I signed in, end a session, sign out. Every route needs a session and counts
  * against the limit per session (`SESSION_RATE_LIMIT`); `POST` and `DELETE` also
- * need the right `Origin`
- * (see `authPlugin`). Login itself (passkeys, passwords, TOTP) comes later.
+ * need the right `Origin` (see `authPlugin`). `me` and `logout` are also open to a
+ * session a recovery code opened (`allowedInRecovery`); the session list is not.
+ * Signing in is in `auth/login-routes.ts` (password, authenticator code and
+ * recovery code), and securing the account in `auth/account-routes.ts`. Passkeys
+ * come later.
  *
  * These are self-service routes: every one acts on the signed-in user's own
  * account and sessions, so there is no permission to lack. Without a session the
@@ -73,7 +76,7 @@ export const authRoutes: FastifyPluginAsyncZod = (app) => {
   app.get(
     '/me',
     {
-      config: { sessionRateLimit: true },
+      config: { sessionRateLimit: true, allowedInRecovery: true },
       schema: {
         summary: 'The signed-in user',
         description: 'The acting user of the session in the cookie.',
@@ -166,7 +169,7 @@ export const authRoutes: FastifyPluginAsyncZod = (app) => {
   app.post(
     '/logout',
     {
-      config: { sessionRateLimit: true },
+      config: { sessionRateLimit: true, allowedInRecovery: true },
       schema: {
         summary: 'Sign out',
         description:

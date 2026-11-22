@@ -15,6 +15,7 @@ import {
   AuthenticationRequiredError,
   OriginMismatchError,
   RateLimitedError,
+  RecoveryRequiredError,
 } from '../errors.js';
 import { clearSessionCookie, SESSION_COOKIE } from './cookie.js';
 import {
@@ -78,6 +79,15 @@ declare module 'fastify' {
      * request with no valid session is not counted.
      */
     sessionRateLimit?: boolean;
+    /**
+     * A session opened by a recovery code (scope `recovery`) may call the
+     * route. Without it a recovery session gets a 403
+     * `account-recovery-required`, whatever the route's `auth` mode, so a new
+     * route is closed to such a session unless it says otherwise. Only the
+     * routes by which a user sets a new way to sign in, reads who they are or
+     * signs out say so.
+     */
+    allowedInRecovery?: boolean;
   }
   interface FastifyRequest {
     /**
@@ -244,6 +254,17 @@ const implementation: FastifyPluginAsync<AuthPluginOptions> = (
     if (request.routeOptions.config.sessionRateLimit === true) {
       await enforce(sessionLimit, request, reply);
     }
+
+    // A session a recovery code opened may do only what lets its user secure the
+    // account (SC-10). Closed unless the route says otherwise, so a new route
+    // cannot be open to it by accident, and checked on `optional` routes too,
+    // which also use the session.
+    if (
+      found.session.scope === 'recovery' &&
+      request.routeOptions.config.allowedInRecovery !== true
+    ) {
+      throw new RecoveryRequiredError();
+    }
   });
 
   return Promise.resolve();
@@ -268,6 +289,11 @@ const implementation: FastifyPluginAsync<AuthPluginOptions> = (
  * against `SESSION_RATE_LIMIT`, per session, once the session is known; a
  * request with no valid session is not counted. Past either limit it is a 429
  * `rate-limited` with `Retry-After`.
+ *
+ * A session with the `recovery` scope, which a recovery code opens, may only
+ * call a route that says `config.allowedInRecovery`; any other route is a 403
+ * `account-recovery-required`, whatever its `auth` mode but `none`. The check
+ * comes after the origin check and the limit per session.
  *
  * A request that changes data (`POST`, `PUT`, `PATCH`, `DELETE`) with a session
  * cookie must carry an `Origin` equal to `publicOrigin`, or it is a 403
