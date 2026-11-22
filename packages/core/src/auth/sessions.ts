@@ -1,9 +1,11 @@
 import { and, desc, eq, gt, isNull, lte, ne, sql } from 'drizzle-orm';
 import {
   SESSION_METHODS,
+  SESSION_SCOPES,
   session,
   user,
   type SessionMethod,
+  type SessionScope,
   type UserStatus,
 } from '../db/schema/index.js';
 import type { Tx } from '../db/write.js';
@@ -55,6 +57,7 @@ export const SESSION_REVOKE_REASONS = [
   'user-revoked',
   'user-disabled',
   'password-changed',
+  'totp-removed',
   'recovery-used',
   'admin-action',
 ] as const;
@@ -66,6 +69,8 @@ export type SessionView = {
   readonly id: string;
   readonly userId: string;
   readonly method: SessionMethod;
+  /** What the session may do: `recovery` until the user sets a new way to sign in (see `SESSION_SCOPES`). */
+  readonly scope: SessionScope;
   readonly createdAt: Date;
   readonly lastSeenAt: Date;
   readonly idleExpiresAt: Date;
@@ -83,11 +88,26 @@ export type SessionUser = {
   readonly status: UserStatus;
 };
 
+/**
+ * The columns of a `SessionUser`, for the services that return the user a
+ * sign-in is for (`validateSession`, and the login services). One list, so the
+ * type and what is selected cannot drift apart.
+ */
+export const SESSION_USER_COLUMNS = {
+  id: user.id,
+  email: user.email,
+  displayName: user.displayName,
+  locale: user.locale,
+  timezone: user.timezone,
+  status: user.status,
+};
+
 /** The columns of a `SessionView`: every column but the token hash and the revoke fields. */
 const viewColumns = {
   id: session.id,
   userId: session.userId,
   method: session.method,
+  scope: session.scope,
   createdAt: session.createdAt,
   lastSeenAt: session.lastSeenAt,
   idleExpiresAt: session.idleExpiresAt,
@@ -126,7 +146,13 @@ function checkedReason(reason: unknown): SessionRevokeReason {
  * request and `absoluteMs` in all. Audited as `auth.session-created` with the
  * method.
  *
- * @throws AuthInputError `method` when the method is not in `SESSION_METHODS`.
+ * `scope` is `full` unless said otherwise, and always `recovery` for the
+ * `recovery` method: a session opened by a recovery code can only be made full
+ * by `promoteSession`, never at creation (SC-10).
+ *
+ * @throws AuthInputError `method` when the method is not in `SESSION_METHODS`,
+ * `scope` when the scope is not in `SESSION_SCOPES` or is `full` for a
+ * `recovery` session.
  * @throws AuthStateError `user-not-found` for an unknown or deleted user,
  * `user-disabled` for a disabled one, `installation-missing` before the
  * installation row exists.
@@ -138,12 +164,21 @@ export async function createSession(
   input: {
     userId: string;
     method: SessionMethod;
+    scope?: SessionScope;
     userAgentSummary?: string | null;
     now: Date;
   },
 ): Promise<{ session: SessionView; token: string }> {
   if (!isOneOf(SESSION_METHODS, input.method)) {
     throw new AuthInputError('method');
+  }
+  const scope =
+    input.scope ?? (input.method === 'recovery' ? 'recovery' : 'full');
+  if (
+    !isOneOf(SESSION_SCOPES, scope) ||
+    (input.method === 'recovery' && scope !== 'recovery')
+  ) {
+    throw new AuthInputError('scope');
   }
   const { now } = input;
   const summary =
@@ -170,6 +205,7 @@ export async function createSession(
           userId: input.userId,
           tokenHash: hashToken(token),
           method: input.method,
+          scope,
           createdAt: now,
           updatedAt: now,
           lastSeenAt: now,
@@ -229,14 +265,7 @@ export async function validateSession(
       .select({
         session: viewColumns,
         revokedAt: session.revokedAt,
-        user: {
-          id: user.id,
-          email: user.email,
-          displayName: user.displayName,
-          locale: user.locale,
-          timezone: user.timezone,
-          status: user.status,
-        },
+        user: SESSION_USER_COLUMNS,
         userDeletedAt: user.deletedAt,
       })
       .from(session)
@@ -373,6 +402,69 @@ export async function revokeUserSessions(
         occurredAt: now,
       });
       return revoked.length;
+    }),
+  );
+}
+
+/**
+ * What made a recovery session full, recorded in the audit event. A fixed list,
+ * so a caller cannot put free text into the trail. The passkey registration of
+ * P-03b3b adds its own value.
+ */
+export const SESSION_PROMOTION_TRIGGERS = [
+  'password-set',
+  'totp-confirmed',
+] as const;
+/** One value of `SESSION_PROMOTION_TRIGGERS`. */
+export type SessionPromotionTrigger =
+  (typeof SESSION_PROMOTION_TRIGGERS)[number];
+
+/**
+ * Turns a live `recovery` session into a `full` one, because its user has set a
+ * new way to sign in (SC-10). Returns true when it did, and false, writing
+ * nothing, for a session that is already full, revoked or unknown, with one
+ * answer for all. The token and the times do not change. The method stays
+ * `recovery`, which says how the user got in. Audited as
+ * `auth.session-promoted` with the trigger. The route that calls it has
+ * already seen the user do what the trigger names.
+ *
+ * @throws AuthInputError `trigger` when it is not in
+ * `SESSION_PROMOTION_TRIGGERS`.
+ * @throws RecordWriteError when the database refuses a write.
+ */
+export async function promoteSession(
+  tx: Tx,
+  sessionId: string,
+  options: { trigger: SessionPromotionTrigger; now: Date },
+): Promise<boolean> {
+  if (!isOneOf(SESSION_PROMOTION_TRIGGERS, options.trigger)) {
+    throw new AuthInputError('trigger');
+  }
+  const { now, trigger } = options;
+  return guardedAuth('session', 'update', () =>
+    tx.transaction(async (inner) => {
+      const [row] = await inner
+        .update(session)
+        .set({ scope: 'full', updatedAt: now })
+        .where(
+          and(
+            eq(session.id, sessionId),
+            eq(session.scope, 'recovery'),
+            isNull(session.revokedAt),
+          ),
+        )
+        .returning({ id: session.id, userId: session.userId });
+      if (!row) return false;
+      await recordAuthAudit(inner, {
+        category: AUTH_AUDIT.sessionPromoted,
+        action: 'promote',
+        actor: { type: 'user', id: row.userId },
+        targetType: 'session',
+        targetId: row.id,
+        details: { from: 'recovery', to: 'full', trigger },
+        occurredAt: now,
+      });
+      return true;
     }),
   );
 }

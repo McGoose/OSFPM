@@ -1,6 +1,9 @@
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { recoveryCode, user } from '../db/schema/index.js';
 import type { Tx } from '../db/write.js';
+import { AuthStateError } from './errors.js';
+import { findLoginUser } from './login-user.js';
+import type { SessionUser } from './sessions.js';
 import {
   AUTH_AUDIT,
   guardedAuth,
@@ -9,6 +12,11 @@ import {
   serverId,
   type AuthActor,
 } from './shared.js';
+import {
+  isThrottled,
+  recordLoginFailure,
+  type LoginFailureReason,
+} from './throttle.js';
 import { generateHumanCode, hashHumanCode } from './tokens.js';
 
 /**
@@ -86,9 +94,9 @@ export function generateRecoveryCodes(
  * not matter. A disabled or deleted user's code is not used up and does not
  * work. The code is marked used in one conditional UPDATE, so two requests
  * with the same code succeed once. Audited as `auth.recovery-code-used`, with
- * no code. Failed attempts are not audited here yet; they will be, with the
- * method and a failure reason and never the submitted code (see the README,
- * "Decided for the routes").
+ * no code. A failed attempt writes nothing here: `verifyRecoveryLogin`, the
+ * sign-in that calls this, audits it with the method and a reason class and
+ * never the submitted code.
  *
  * @throws RecordWriteError when the database fails; it carries the SQLSTATE
  * only, never the code or its hash.
@@ -131,6 +139,85 @@ export async function consumeRecoveryCode(
         occurredAt: now,
       });
       return true;
+    }),
+  );
+}
+
+/**
+ * The answer of `verifyRecoveryLogin`. A failure is one value whatever the
+ * cause; the reason is for the audit trail alone.
+ */
+export type RecoveryLoginResult =
+  { readonly ok: true; readonly user: SessionUser } | { readonly ok: false };
+
+/**
+ * The recovery step of a sign-in (SC-10): the email address and a recovery code
+ * the person typed. Returns the user when the code is right, and uses it up
+ * (`consumeRecoveryCode`, which audits that as `auth.recovery-code-used`).
+ * Returns `{ ok: false }` for every other case: an address no one has, a wrong,
+ * used, or foreign code, a code not shaped like one, a disabled or deleted
+ * user, and an account the throttle has closed (`isThrottled`), whose code is
+ * not looked at, so it is not used up even if it is right. The user row is
+ * locked while the attempt is judged, so two guesses at once cannot both get
+ * past the count.
+ *
+ * A failure is audited as `auth.login-step-failed` with the method
+ * `recovery` and a reason class, never the typed address or code. An unknown
+ * address is audited with no actor and no target. It is returned, not thrown,
+ * so the caller's transaction commits and the event is kept. A recovery code
+ * can be checked in the time of a database lookup, so, unlike the password
+ * step, it spends no time to hide whether an address has an account.
+ *
+ * It makes no session: the route does, with the `recovery` scope (SC-10), and
+ * then asks the user to secure the account.
+ *
+ * @throws RecordWriteError when the database refuses a write; it carries the
+ * SQLSTATE and constraint name only.
+ */
+export async function verifyRecoveryLogin(
+  tx: Tx,
+  input: { email: string; code: string; now: Date },
+): Promise<RecoveryLoginResult> {
+  const { now } = input;
+  const fail = async (
+    inner: Tx,
+    userId: string | null,
+    reason: LoginFailureReason,
+  ): Promise<RecoveryLoginResult> => {
+    await recordLoginFailure(inner, {
+      method: 'recovery',
+      reason,
+      userId,
+      now,
+    });
+    return { ok: false };
+  };
+
+  const found = await findLoginUser(tx, input.email);
+  if (found === undefined) return fail(tx, null, 'unknown-account');
+
+  return guardedAuth('recovery_code', 'update', () =>
+    tx.transaction(async (inner) => {
+      let locked: { status: string };
+      try {
+        locked = await lockUser(inner, found.id);
+      } catch (error) {
+        // Deleted since it was found: as if the address were not known.
+        if (error instanceof AuthStateError) {
+          return fail(inner, null, 'unknown-account');
+        }
+        throw error;
+      }
+      if (locked.status === 'disabled')
+        return fail(inner, found.id, 'disabled');
+      if (await isThrottled(inner, found.id, now)) {
+        return fail(inner, found.id, 'throttled');
+      }
+      const used = await consumeRecoveryCode(inner, found.id, input.code, {
+        now,
+      });
+      if (!used) return fail(inner, found.id, 'wrong-secret');
+      return { ok: true, user: found };
     }),
   );
 }

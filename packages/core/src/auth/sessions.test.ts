@@ -2,7 +2,7 @@ import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
-import { session, user } from '../db/schema/index.js';
+import { auditEvent, session, user } from '../db/schema/index.js';
 import { createMigratedDatabase, testTargets } from '../db/test-support.js';
 import { AuthInputError, AuthStateError } from './errors.js';
 import {
@@ -10,11 +10,13 @@ import {
   disableUser,
   enableUser,
   listUserSessions,
+  promoteSession,
   revokeSession,
   revokeUserSessions,
   SESSION_DEFAULTS,
   validateSession,
 } from './sessions.js';
+import { AUTH_AUDIT } from './shared.js';
 import {
   everyRowAsText,
   rowsOf,
@@ -66,6 +68,7 @@ describe.each(testTargets)('sessions on $name', (target) => {
         'idleExpiresAt',
         'lastSeenAt',
         'method',
+        'scope',
         'userAgentSummary',
         'userId',
       ]);
@@ -543,6 +546,139 @@ describe.each(testTargets)('sessions on $name', (target) => {
       const userId = await seedActiveUser(database);
       await createSession(db(), { userId, method: 'password', now: T0 });
       expect(await listUserSessions(db(), userId, at(12 * HOUR))).toEqual([]);
+    });
+  });
+
+  describe('session scope', () => {
+    it('is full unless said otherwise, and validateSession returns it', async () => {
+      const userId = await seedActiveUser(database);
+      const { session: created, token } = await createSession(db(), {
+        userId,
+        method: 'password',
+        now: T0,
+      });
+      expect(created.scope).toBe('full');
+      const found = await validateSession(db(), token, at(MINUTE));
+      expect(found!.session.scope).toBe('full');
+    });
+
+    it('is recovery for a recovery session, which can never be made full', async () => {
+      const userId = await seedActiveUser(database);
+      const { session: created, token } = await createSession(db(), {
+        userId,
+        method: 'recovery',
+        now: T0,
+      });
+      expect(created.scope).toBe('recovery');
+      expect(
+        (await validateSession(db(), token, at(MINUTE)))!.session.scope,
+      ).toBe('recovery');
+      await expect(
+        createSession(db(), {
+          userId,
+          method: 'recovery',
+          scope: 'full',
+          now: T0,
+        }),
+      ).rejects.toMatchObject({ field: 'scope' });
+    });
+
+    it('refuses a scope that is not on the list, and writes nothing', async () => {
+      const userId = await seedActiveUser(database);
+      for (const scope of ['admin', '', '__proto__', 'toString']) {
+        await expect(
+          createSession(db(), {
+            userId,
+            method: 'password',
+            scope: scope as never,
+            now: T0,
+          }),
+        ).rejects.toBeInstanceOf(AuthInputError);
+      }
+      expect(await listUserSessions(db(), userId, T0)).toEqual([]);
+    });
+  });
+
+  describe('promoteSession', () => {
+    const promotions = async (sessionId: string) =>
+      (await db().select().from(auditEvent)).filter(
+        (event) =>
+          event.category === AUTH_AUDIT.sessionPromoted &&
+          event.targetId === sessionId,
+      );
+
+    it('turns a recovery session into a full one, keeping its token and its times, and audits it', async () => {
+      const userId = await seedActiveUser(database);
+      const { session: created, token } = await createSession(db(), {
+        userId,
+        method: 'recovery',
+        now: T0,
+      });
+      expect(
+        await promoteSession(db(), created.id, {
+          trigger: 'password-set',
+          now: at(MINUTE),
+        }),
+      ).toBe(true);
+      const stored = await sessionRow(created.id);
+      expect(stored.scope).toBe('full');
+      // How the user got in does not change.
+      expect(stored.method).toBe('recovery');
+      expect(stored.absoluteExpiresAt).toEqual(created.absoluteExpiresAt);
+      const found = await validateSession(db(), token, at(2 * MINUTE));
+      expect(found!.session.scope).toBe('full');
+      const [event] = await promotions(created.id);
+      expect(event).toMatchObject({
+        action: 'promote',
+        actorType: 'user',
+        actorId: userId,
+        targetType: 'session',
+        details: { from: 'recovery', to: 'full', trigger: 'password-set' },
+      });
+    });
+
+    it('answers false and writes nothing for a full, revoked or unknown session', async () => {
+      const userId = await seedActiveUser(database);
+      const full = await createSession(db(), {
+        userId,
+        method: 'password',
+        now: T0,
+      });
+      const revoked = await createSession(db(), {
+        userId,
+        method: 'recovery',
+        now: T0,
+      });
+      await revokeSession(db(), revoked.session.id, {
+        reason: 'logout',
+        now: at(MINUTE),
+      });
+      for (const id of [full.session.id, revoked.session.id, newId()]) {
+        expect(
+          await promoteSession(db(), id, {
+            trigger: 'totp-confirmed',
+            now: at(2 * MINUTE),
+          }),
+        ).toBe(false);
+        expect(await promotions(id)).toEqual([]);
+      }
+      expect((await sessionRow(revoked.session.id)).scope).toBe('recovery');
+    });
+
+    it('refuses a trigger that is not on the list', async () => {
+      const userId = await seedActiveUser(database);
+      const { session: created } = await createSession(db(), {
+        userId,
+        method: 'recovery',
+        now: T0,
+      });
+      await expect(
+        promoteSession(db(), created.id, {
+          trigger: 'because' as never,
+          now: T0,
+        }),
+      ).rejects.toBeInstanceOf(AuthInputError);
+      expect((await sessionRow(created.id)).scope).toBe('recovery');
     });
   });
 

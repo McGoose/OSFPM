@@ -9,11 +9,11 @@ import { promisify } from 'node:util';
  * string, so the parameters travel with it and can be raised later (SC-10).
  *
  * The password policy (length, blocklist, and NFKC normalisation of the
- * password) is not here; it comes with password login in P-03b3. These
- * functions hash exactly the string they are given, so P-03b3 normalises in one
- * place before both setting and checking a password. Passwords and their
- * hashes are never logged, never returned
- * after they are set, and never written to events (CLAUDE.md, Privacy rule).
+ * password) is not here: it is in `password-policy.ts`, and
+ * `password-service.ts` normalises in one place before both setting and
+ * checking a password. These functions hash exactly the string they are given.
+ * Passwords and their hashes are never logged, never returned after they are
+ * set, and never written to events (CLAUDE.md, Privacy rule).
  */
 
 const deriveKey = promisify(argon2);

@@ -183,6 +183,13 @@
       "when": 1795280011520,
       "tag": "0025_user_email_normalised",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1795306758393,
+      "tag": "0026_session_scope_login_challenge",
+      "breakpoints": true
     }
   ]
 }

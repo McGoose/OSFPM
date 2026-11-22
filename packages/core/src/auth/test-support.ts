@@ -1,8 +1,16 @@
-import { sql } from 'drizzle-orm';
-import { seedUser } from '../access/test-fixtures.js';
+import { eq, sql } from 'drizzle-orm';
+import { Secret, TOTP } from 'otpauth';
+import { ORIGIN, seedUser } from '../access/test-fixtures.js';
 import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
-import { installation, user } from '../db/schema/index.js';
+import {
+  installation,
+  passwordCredential,
+  totpCredential,
+  user,
+} from '../db/schema/index.js';
+import { hashPassword } from './password.js';
+import { normalisePassword } from './password-policy.js';
 
 /**
  * Helpers for the auth tests. Fixtures insert straight into the tables, as the
@@ -75,4 +83,77 @@ export async function everyRowAsText(database: Database): Promise<string> {
     parts.push(String(found[0]!.text));
   }
   return parts.join('\n');
+}
+
+/** The stored email address of a user. */
+export async function emailOf(
+  database: Database,
+  userId: string,
+): Promise<string> {
+  const [row] = await database.db
+    .select({ email: user.email })
+    .from(user)
+    .where(eq(user.id, userId));
+  return row!.email;
+}
+
+/** Hashes are slow on purpose, so each distinct password is hashed once per test run. */
+const hashesByPassword = new Map<string, Promise<string>>();
+
+/**
+ * Gives a user a password: inserts the `password_credential` row directly, as
+ * fixtures do. The password is normalised first, as the services do, and hashed
+ * once per distinct password. Invented passwords only.
+ */
+export async function seedPassword(
+  database: Database,
+  userId: string,
+  password: string,
+  options: { mustChange?: boolean; now?: Date } = {},
+): Promise<void> {
+  const normalised = normalisePassword(password);
+  let hash = hashesByPassword.get(normalised);
+  if (hash === undefined) {
+    hash = hashPassword(normalised);
+    hashesByPassword.set(normalised, hash);
+  }
+  await database.db.insert(passwordCredential).values({
+    originServer: ORIGIN,
+    userId,
+    hash: await hash,
+    changedAt: options.now ?? new Date(),
+    mustChange: options.mustChange ?? false,
+  });
+}
+
+/**
+ * Gives a user an authenticator-app secret, confirmed unless `confirmed` is
+ * false, and returns the secret in base32 so a test can make codes with
+ * `totpCodeAt`.
+ */
+export async function seedTotp(
+  database: Database,
+  userId: string,
+  options: { confirmed?: boolean; now?: Date } = {},
+): Promise<string> {
+  const secret = new Secret({ size: 20 }).base32;
+  await database.db.insert(totpCredential).values({
+    originServer: ORIGIN,
+    userId,
+    secret,
+    confirmedAt:
+      options.confirmed === false ? null : (options.now ?? new Date()),
+  });
+  return secret;
+}
+
+/** The authenticator code for `secret` at `time`, as an app would show it. */
+export function totpCodeAt(secret: string, time: Date): string {
+  return TOTP.generate({
+    secret: Secret.fromBase32(secret),
+    algorithm: 'SHA1',
+    digits: 6,
+    period: 30,
+    timestamp: time.getTime(),
+  });
 }

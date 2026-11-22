@@ -5,7 +5,12 @@ import { newId } from '../db/ids.js';
 import { auditEvent, SECURITY_TABLES } from '../db/schema/index.js';
 import { getTableName } from 'drizzle-orm';
 import { createMigratedDatabase, testTargets } from '../db/test-support.js';
+import {
+  consumeLoginChallenge,
+  createLoginChallenge,
+} from './login-challenge.js';
 import { hashPassword } from './password.js';
+import { setPassword, verifyPasswordLogin } from './password-service.js';
 import { consumeRecoveryCode, generateRecoveryCodes } from './recovery.js';
 import {
   createSession,
@@ -18,11 +23,14 @@ import {
 import { consumeSetupCode, issueSetupCode } from './setup-code.js';
 import { AUTH_AUDIT } from './shared.js';
 import {
+  emailOf,
   everyRowAsText,
   rowsOf,
   seedActiveUser,
   seedInstallation,
+  totpCodeAt,
 } from './test-support.js';
+import { confirmTotp, enrolTotp, removeTotp } from './totp.js';
 import { hashHumanCode, hashToken, normaliseHumanCode } from './tokens.js';
 
 const T0 = new Date('2026-03-02T09:00:00.000Z');
@@ -131,6 +139,82 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
     );
     setupCodeId = issued!.targetId!;
 
+    // Passwords, an authenticator, the second step of a sign-in, and a recovery
+    // session made full, all for one more user.
+    const securityId = await seedActiveUser(database);
+    const securityEmail = await emailOf(database, securityId);
+    const firstPassword = 'cobblestone-heron-velvet-tide';
+    const secondPassword = 'lantern-crane-quiet-morning';
+    const typedPassword = 'wrong-password-typed-here';
+    const typedEmail = 'nobody@demopictures.example';
+    await setPassword(db(), {
+      userId: securityId,
+      newPassword: firstPassword,
+      now: at(20 * MINUTE),
+    });
+    await verifyPasswordLogin(db(), {
+      email: typedEmail,
+      password: typedPassword,
+      now: at(21 * MINUTE),
+    });
+    await verifyPasswordLogin(db(), {
+      email: securityEmail,
+      password: typedPassword,
+      now: at(21 * MINUTE),
+    });
+    await verifyPasswordLogin(db(), {
+      email: securityEmail,
+      password: firstPassword,
+      now: at(22 * MINUTE),
+    });
+    const enrolled = await enrolTotp(db(), securityId, {
+      now: at(23 * MINUTE),
+    });
+    if (!enrolled.ok) throw new Error('the authenticator was not set up');
+    await confirmTotp(db(), {
+      userId: securityId,
+      code: totpCodeAt(enrolled.secret, at(24 * MINUTE)),
+      now: at(24 * MINUTE),
+    });
+    const { challenge } = await createLoginChallenge(db(), securityId, {
+      kind: 'totp',
+      now: at(25 * MINUTE),
+    });
+    await consumeLoginChallenge(db(), {
+      challenge,
+      code: totpCodeAt(enrolled.secret, at(25 * MINUTE)),
+      now: at(25 * MINUTE),
+    });
+    const recovery = await createSession(db(), {
+      userId: securityId,
+      method: 'recovery',
+      now: at(26 * MINUTE),
+    });
+    await setPassword(db(), {
+      userId: securityId,
+      newPassword: secondPassword,
+      session: { id: recovery.session.id, scope: 'recovery' },
+      now: at(27 * MINUTE),
+    });
+    // Removed again, so the secret is in no table by the end.
+    await removeTotp(db(), {
+      userId: securityId,
+      password: secondPassword,
+      session: { id: recovery.session.id },
+      now: at(28 * MINUTE),
+    });
+    secrets.push(
+      firstPassword,
+      secondPassword,
+      typedPassword,
+      typedEmail,
+      enrolled.secret,
+      challenge,
+      hashToken(challenge),
+      recovery.token,
+      hashToken(recovery.token),
+    );
+
     // A password hash for the same sweep for secrets.
     const password = 'correct-horse-battery-harbour';
     secrets.push(password, await hashPassword(password));
@@ -143,7 +227,10 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
   });
 
   it('records a session as created, with its method, for its user', async () => {
-    const events = await byCategory(AUTH_AUDIT.sessionCreated);
+    // The four sessions of this user; the one more user below has its own.
+    const events = (await byCategory(AUTH_AUDIT.sessionCreated)).filter(
+      (event) => event.actorId === userId,
+    );
     expect(events).toHaveLength(4);
     const first = events.find((event) => event.targetId === firstSessionId);
     expect(first).toMatchObject({
@@ -172,8 +259,11 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
   });
 
   it('records the revocation of all sessions with the reason, the count and the session kept', async () => {
-    const events = await byCategory(AUTH_AUDIT.sessionsRevoked);
-    // One from the call, one from disabling the user.
+    // One from the call, one from disabling the user. The one more user below
+    // has its own, which are about that user.
+    const events = (await byCategory(AUTH_AUDIT.sessionsRevoked)).filter(
+      (event) => event.targetId === userId,
+    );
     expect(events).toHaveLength(2);
     const byReason = new Map(
       events.map((event) => [
