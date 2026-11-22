@@ -1,4 +1,11 @@
-import { and, eq, getTableColumns, getTableName, sql } from 'drizzle-orm';
+import {
+  and,
+  eq,
+  getTableColumns,
+  getTableName,
+  isNull,
+  sql,
+} from 'drizzle-orm';
 import type { AnyPgColumn, PgTable } from 'drizzle-orm/pg-core';
 import type { ActorType } from './columns.js';
 import type { SchemaDb } from './client.js';
@@ -281,6 +288,31 @@ async function nextSeq(
 }
 
 /**
+ * Takes one change counter row, `projectId` null being the organisation's own,
+ * and keeps it until the transaction ends. The one place the lock is taken, so
+ * the two public functions below cannot drift apart. It numbers nothing: only
+ * `nextSeq` does.
+ */
+async function lockCounter(
+  tx: Tx,
+  organisationId: string,
+  projectId: string | null,
+): Promise<void> {
+  await tx
+    .select({ lastSeq: changeSeq.lastSeq })
+    .from(changeSeq)
+    .where(
+      and(
+        eq(changeSeq.organisationId, organisationId),
+        projectId === null
+          ? isNull(changeSeq.projectId)
+          : eq(changeSeq.projectId, projectId),
+      ),
+    )
+    .for('update');
+}
+
+/**
  * Takes the change counter of a project, and keeps it until the transaction
  * ends. Every write through this helper takes that counter before it locks the
  * record it changes (see the comment in `modifyRecord`), so all writers in a
@@ -290,7 +322,8 @@ async function nextSeq(
  * the other holds. So a service that reads something and then writes on the
  * strength of it, such as a guard that no live cost line points at an account,
  * or a price in the project's currency, calls this first, and takes any record
- * lock (`FOR UPDATE`, `FOR SHARE`) only after it.
+ * lock (`FOR UPDATE`, `FOR SHARE`) only after it. For a record that belongs to
+ * the organisation and not to a project, take `lockOrganisationChanges` instead.
  *
  * Takes the counter row if there is one. A project made through the helper has
  * one from the start; one made by direct inserts, which only tests do, has none
@@ -303,16 +336,33 @@ export async function lockProjectChanges(
   organisationId: string,
   projectId: string,
 ): Promise<void> {
-  await tx
-    .select({ lastSeq: changeSeq.lastSeq })
-    .from(changeSeq)
-    .where(
-      and(
-        eq(changeSeq.organisationId, organisationId),
-        eq(changeSeq.projectId, projectId),
-      ),
-    )
-    .for('update');
+  await lockCounter(tx, organisationId, projectId);
+}
+
+/**
+ * Takes the change counter of an organisation, the one its organisation-level
+ * records are numbered in (`project_id` NULL), and keeps it until the transaction
+ * ends. It is `lockProjectChanges` for a record that belongs to the organisation
+ * and to no project, such as a membership or a role: every write of such a record
+ * through this helper takes that counter before it locks the record, so a service
+ * that must lock a row first and write after calls this first, and takes the row
+ * lock only after it (CLAUDE.md, Data rules: counter before any row lock). It is
+ * a function of its own, not a project id of `null`, because a null that changes
+ * what a call means is easy to pass by mistake.
+ *
+ * The organisation's counter is not a project's: a project's writers do not queue
+ * on it, and it does not queue on theirs. Takes the counter row if there is one.
+ * An organisation made through the helper has one from the start; one made by
+ * direct inserts, which only tests do, has none until its first write, and then
+ * nothing is locked. Numbers nothing and writes nothing. Checks no permission,
+ * and is for services that have already checked it: a caller who holds the
+ * counter holds up every writer of an organisation-level record.
+ */
+export async function lockOrganisationChanges(
+  tx: Tx,
+  organisationId: string,
+): Promise<void> {
+  await lockCounter(tx, organisationId, null);
 }
 
 /**
