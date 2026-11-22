@@ -210,7 +210,7 @@ export const setupRoutes: FastifyPluginAsyncZod<SetupRoutesOptions> = (
       schema: {
         summary: 'Complete first-run setup',
         description:
-          'With the setup code, creates the first organisation, its Administrator role, the first administrator and their owner membership, marks setup complete and signs the administrator in (session method `setup`, cookie set), all in one transaction: a failure at any step leaves nothing, and the code stays usable. The Administrator role holds every permission in the organisation and, for every permission that is not sensitive, in every production of it; sensitive crew data, contract and cost amounts still need membership of the production. With no `admin.password` the session has the recovery scope: the answer says `mustSecureAccount: true`, and any route but `me`, `logout`, `PUT /auth/password` and the passkey registration answers 403 `account-recovery-required` until the administrator sets a password or adds a passkey. A password the policy refuses is a 400 `password-refused` with the reason. A code that does not work is the same 401 `setup-code-invalid` for every cause, and so is the loser of two requests at once with the same code. After setup is complete the route is a 404.',
+          'With the setup code, creates the first organisation, its Administrator role, the first administrator and their owner membership, marks setup complete and signs the administrator in (session method `setup`, cookie set), all in one transaction: a failure at any step leaves nothing, and the code stays usable. The Administrator role holds every permission in the organisation and, for every permission that is not sensitive, in every production of it; sensitive crew data, contract and cost amounts still need membership of the production. With no `admin.password` the session has the recovery scope: the answer says `mustSecureAccount: true`, and any route but `me`, `logout`, `PUT /auth/password` and the passkey registration answers 403 `account-recovery-required` until the administrator sets a password or adds a passkey. A password the policy refuses is a 422 `password-refused` with the reason, as on every route that sets a password. A code that does not work is the same 401 `setup-code-invalid` for every cause, and so is the loser of two requests at once with the same code. After setup is complete the route is a 404.',
         body: z.object({
           code: setupCode,
           organisation: organisationInput,
@@ -226,12 +226,13 @@ export const setupRoutes: FastifyPluginAsyncZod<SetupRoutesOptions> = (
                 'True when no password was given: the session may only set a password or add a passkey first.',
               ),
           }),
-          400: problemResponse(
-            'The request is not shaped as this endpoint accepts (the failing fields are listed, never their values), or the password does not meet the policy (`password-refused`, with the reason in `errors[0].code` and what to do in `detail`).',
-          ),
+          400: badRequest,
           401: setupCodeInvalid,
           403: wrongOrigin,
           404: gone,
+          422: problemResponse(
+            'The password does not meet the password policy. `errors` holds the reason as `code` (`too-short`, `too-long`, `too-common`, `too-predictable`, `contains-email` or `contains-product-name`) at `admin.password`, and `detail` says what to do. Nothing was made, and the code can be used again.',
+          ),
           429: tooManyRequests,
         },
       },

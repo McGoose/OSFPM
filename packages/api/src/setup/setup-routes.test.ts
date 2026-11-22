@@ -647,21 +647,21 @@ describe.each(testTargets)(
         ['contains-email', 'riverside-demopictures-fan-club'],
         ['contains-product-name', 'we love osfpm so very much'],
       ])(
-        'a password that is %s is a 400 with the reason, and leaves nothing behind',
+        'a password that is %s is a 422 with the reason, as on the account routes, and leaves nothing behind',
         async (reason, password) => {
           const response = await install.post(
             '/setup',
             demoSetupInput(install.code, { password }),
             { origin: TEST_PUBLIC_ORIGIN },
           );
-          expect(response.statusCode).toBe(400);
+          expect(response.statusCode).toBe(422);
           expect(response.headers['content-type']).toMatch(
             /^application\/problem\+json/,
           );
           expect(response.json()).toMatchObject({
             type: '/problems/password-refused',
             code: 'password-refused',
-            status: 400,
+            status: 422,
             detail: describePasswordRefusal(reason as 'too-short'),
             errors: [{ in: 'body', path: 'admin.password', code: reason }],
           });

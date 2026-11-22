@@ -87,7 +87,8 @@ export class SetupCodeInvalidError extends Error {
 /**
  * The password given to first-run setup does not meet the password policy (SC-10;
  * NIST SP 800-63B-4, section 3.1.1.2, which requires the reason to be given). Maps
- * to a 400 `password-refused` with the reason as the `errors` entry at
+ * to a 422 `password-refused`, as `PasswordRefusedError` does for every other
+ * password the policy refuses, with the reason as the `errors` entry at
  * `admin.password` and in the `detail`. Its message is fixed text chosen by the
  * reason alone (`describePasswordRefusal`): it carries no part of the password or
  * of the address, never what was typed.
@@ -399,9 +400,10 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
   },
   {
     // The person setting the first password is owed the reason, as at any other
-    // password change; it is a 400 here because setup has no signed-in user.
+    // password change, and gets the same status: the policy answers 422
+    // everywhere. Only the field differs, `admin.password` for the setup body.
     errorClass: SetupPasswordRefusedError,
-    status: 400,
+    status: 422,
     code: 'password-refused',
     title: 'Password refused',
     detail: null,
