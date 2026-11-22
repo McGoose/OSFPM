@@ -12,4 +12,4 @@ The people who belong to an organisation: who may list them and who may invite m
 - A tier (`org_membership.org_role`) grants nothing by itself: what a member may do comes from their roles (decision D-51). Nothing here treats `owner` or `admin` as a permission.
 - No member listing returns anything about how a person signs in, and none returns crew personal data (CLAUDE.md, Privacy rule).
 
-**Tests:** `src/access/permission-lists.test.ts` checks that the list is in the registry, and `src/auth/administrator-members.test.ts` that the start-up top-up gives the Administrator role both permissions.
+**Tests:** `members.test.ts` (only this organisation's members, six fields and no sign-in detail, the same refusal for a stranger, a member without the permission and an organisation that does not exist), `src/access/permission-lists.test.ts` checks that the list is in the registry, and `src/auth/administrator-members.test.ts` that the start-up top-up gives the Administrator role both permissions.
