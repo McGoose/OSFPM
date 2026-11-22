@@ -31,9 +31,10 @@ export type LoginChallengeKind = (typeof LOGIN_CHALLENGE_KINDS)[number];
  * challenge token is stored; the raw token goes to the client once. It is used
  * once, ends after a few minutes, and allows a few code attempts
  * (`attempts`); the limits are in `auth/login-challenge.ts`. Retention class
- * `security-log`. An expired row is of no use: `createLoginChallenge` deletes
- * the user's own when it makes a new one, and `cleanupExpiredChallenges`
- * deletes all of them, for the worker.
+ * `transient`: a working row that cleanup removes, and the audit log is the
+ * record. An expired row is of no use: `createLoginChallenge` deletes the
+ * user's own when it makes a new one, and `cleanupExpiredChallenges` deletes
+ * all of them, for the worker.
  *
  * A security table: only `auth/login-challenge.ts` writes it, directly, and the
  * steps around it are audited, not change-logged (CLAUDE.md, Data rules).
@@ -41,7 +42,7 @@ export type LoginChallengeKind = (typeof LOGIN_CHALLENGE_KINDS)[number];
 export const loginChallenge = securityTable(
   'login_challenge',
   {
-    ...baseColumns(() => user.id, { defaultRetentionClass: 'security-log' }),
+    ...baseColumns(() => user.id, { defaultRetentionClass: 'transient' }),
     userId: uuid('user_id').notNull(),
     kind: text('kind').$type<LoginChallengeKind>().notNull(),
     tokenHash: text('token_hash').notNull(),

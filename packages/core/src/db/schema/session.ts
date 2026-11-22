@@ -45,7 +45,8 @@ export type SessionScope = (typeof SESSION_SCOPES)[number];
 /**
  * A login session. Only the SHA-256 hash of the session token is stored; the
  * raw token goes to the client once and is never kept or logged (SC-10).
- * Retention class `security-log`.
+ * Retention class `transient`: a working row that cleanup removes, and the
+ * audit log is the record. No cleanup of sessions exists yet.
  *
  * A security table: only `auth/sessions.ts` writes it, directly, and each
  * security-relevant change is audited, not change-logged (CLAUDE.md, Data
@@ -54,7 +55,7 @@ export type SessionScope = (typeof SESSION_SCOPES)[number];
 export const session = securityTable(
   'session',
   {
-    ...baseColumns(() => user.id, { defaultRetentionClass: 'security-log' }),
+    ...baseColumns(() => user.id, { defaultRetentionClass: 'transient' }),
     userId: uuid('user_id').notNull(),
     tokenHash: text('token_hash').notNull(),
     method: text('method').$type<SessionMethod>().notNull(),

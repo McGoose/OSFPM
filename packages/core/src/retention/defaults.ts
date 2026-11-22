@@ -1,4 +1,7 @@
-/** Keys of the retention classes seeded by migration `0013_seed_retention_classes`. */
+/**
+ * Keys of the retention classes seeded by migrations `0013_seed_retention_classes`
+ * and `0027_transient_retention_class`.
+ */
 export const RETENTION_CLASS_KEYS = [
   'standard',
   'financial-record',
@@ -7,6 +10,7 @@ export const RETENTION_CLASS_KEYS = [
   'crew-health',
   'minor-record',
   'security-log',
+  'transient',
 ] as const;
 /** One value of `RETENTION_CLASS_KEYS`. */
 export type RetentionClassKey = (typeof RETENTION_CLASS_KEYS)[number];
@@ -28,6 +32,9 @@ export type RetentionDefault = {
  * them later; until then this constant is the only place periods live. This is
  * the exception CLAUDE.md, Data rules allows for shipped defaults marked
  * `verified: false`: never repeat a period elsewhere.
+ *
+ * `transient` has no period on purpose: its rows are working rows that cleanup
+ * removes, and the audit log is the record (maintainer decision, P-03b3a).
  */
 export const SHIPPED_RETENTION_DEFAULTS: Readonly<
   Record<RetentionClassKey, RetentionDefault>
@@ -39,4 +46,5 @@ export const SHIPPED_RETENTION_DEFAULTS: Readonly<
   'crew-health': { periodYears: null, verified: false },
   'minor-record': { periodYears: null, verified: false },
   'security-log': { periodYears: null, verified: false },
+  transient: { periodYears: null, verified: false },
 };

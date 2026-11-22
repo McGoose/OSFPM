@@ -152,10 +152,10 @@ describe.each(testTargets)('login tables on $name', (target) => {
       expect(failure).toEqual(foreignKey('session_user_fk'));
     });
 
-    it('allows several sessions for one user, and defaults to the security-log class', async () => {
+    it('allows several sessions for one user, and defaults to the transient class', async () => {
       await db().insert(session).values(sessionValues());
       await db().insert(session).values(sessionValues());
-      expect(await defaultOf('session')).toBe("'security-log'::text");
+      expect(await defaultOf('session')).toBe("'transient'::text");
     });
 
     it('defaults the scope to full, accepts recovery, and rejects any other scope', async () => {
@@ -190,14 +190,14 @@ describe.each(testTargets)('login tables on $name', (target) => {
       ...overrides,
     });
 
-    it('starts with no attempts and no used time, and defaults to the security-log class', async () => {
+    it('starts with no attempts and no used time, and defaults to the transient class', async () => {
       const [row] = await db()
         .insert(loginChallenge)
         .values(challengeValues())
         .returning();
       expect(row!.attempts).toBe(0);
       expect(row!.usedAt).toBeNull();
-      expect(await defaultOf('login_challenge')).toBe("'security-log'::text");
+      expect(await defaultOf('login_challenge')).toBe("'transient'::text");
     });
 
     it('rejects a kind that is not on the list', async () => {
