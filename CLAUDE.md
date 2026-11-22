@@ -53,6 +53,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Routes validate input with Zod schemas and never return core errors directly; the error table in `packages/api/src/errors.ts` maps them.
 - Every new route declares `auth`; the default is `required`. Cookie requests that change data must pass the Origin check.
 - Status codes: 401 = not signed in; 403 = signed in but not allowed; 404 for by-id lookups where existence must not leak.
+- Login failures always answer the same 401 `sign-in-failed`; never reveal which part failed.
 - Log lines use the logger's known keys (req, res, err) or plain scalar fields; never log whole objects or request data.
 
 ## Comments and docs
