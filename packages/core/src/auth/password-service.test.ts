@@ -19,8 +19,11 @@ import {
 import { createSession, validateSession } from './sessions.js';
 import { AUTH_AUDIT } from './shared.js';
 import {
+  E_ACUTE_COMPOSED,
+  E_ACUTE_DECOMPOSED,
   emailOf,
   everyRowAsText,
+  fullWidth,
   seedActiveUser,
   seedInstallation,
   seedPassword,
@@ -143,21 +146,31 @@ describe.each(testTargets)('password services on $name', (target) => {
       ).toMatchObject({ ok: true, totpRequired: false });
     });
 
-    it('takes the address in any case with spaces round it, and the password in any Unicode form', async () => {
+    it('takes the address in any case with spaces round it, and the password in any Unicode form of the same text', async () => {
       const userId = await seedActiveUser(database);
-      // Stored as full-width letters, typed as plain ones: NFKC makes them one.
+      // Stored with a decomposed accent, typed with a composed one: NFC makes them one.
       await seedPassword(
         database,
         userId,
-        'ｈａｒｂｏｕｒ-ｗａｒｅｈｏｕｓｅ-ｎｉｇｈｔ',
+        `caf${E_ACUTE_DECOMPOSED}-harbour-night-shoot`,
       );
       const email = await emailOf(database, userId);
-      const result = await verifyPasswordLogin(db(), {
-        email: `  ${email.toUpperCase()} `,
-        password: 'harbour-warehouse-night',
-        now: T0,
-      });
-      expect(result).toMatchObject({ ok: true, user: { id: userId } });
+      const typed = (password: string) =>
+        verifyPasswordLogin(db(), {
+          email: `  ${email.toUpperCase()} `,
+          password,
+          now: T0,
+        });
+      expect(
+        await typed(`caf${E_ACUTE_COMPOSED}-harbour-night-shoot`),
+      ).toMatchObject({ ok: true, user: { id: userId } });
+      expect(
+        await typed(`caf${E_ACUTE_DECOMPOSED}-harbour-night-shoot`),
+      ).toMatchObject({ ok: true });
+      // A full-width spelling of the same text is another password.
+      const wide =
+        fullWidth('caf') + E_ACUTE_COMPOSED + fullWidth('-harbour-night-shoot');
+      expect(await typed(wide)).toEqual({ ok: false });
     });
 
     it('gives the same answer for every failure', async () => {
@@ -338,18 +351,20 @@ describe.each(testTargets)('password services on $name', (target) => {
   describe('setPassword', () => {
     it('sets a first password with no current one needed, hashed with Argon2id from the normalised text', async () => {
       const userId = await seedActiveUser(database);
+      const typed = `lantern-crane-quiet-caf${E_ACUTE_DECOMPOSED}`;
+      const normalised = `lantern-crane-quiet-caf${E_ACUTE_COMPOSED}`;
       const result = await setPassword(db(), {
         userId,
-        newPassword: 'ｌａｎｔｅｒｎ-ｃｒａｎｅ-ｑｕｉｅｔ-ｍｏｒｎｉｎｇ',
+        newPassword: typed,
         now: T0,
       });
       expect(result).toEqual({ ok: true });
       const row = await credentialOf(userId);
       expect(row).toMatchObject({ mustChange: false, changedAt: T0 });
       expect(row!.hash).toMatch(/^\$argon2id\$/);
-      expect(
-        (await verifyPassword('lantern-crane-quiet-morning', row!.hash)).ok,
-      ).toBe(true);
+      // The hash is of the normalised text, not of what was typed.
+      expect((await verifyPassword(normalised, row!.hash)).ok).toBe(true);
+      expect((await verifyPassword(typed, row!.hash)).ok).toBe(false);
       const [event] = await eventsAbout(userId, AUTH_AUDIT.passwordSet);
       expect(event).toMatchObject({
         action: 'set',

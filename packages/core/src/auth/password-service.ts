@@ -36,7 +36,7 @@ import {
  * Passwords (SC-10, decision D-56): the password step of a sign-in, and setting
  * a password. `password_credential` is a security table: written here,
  * directly, and every change is audited instead of change-logged (CLAUDE.md,
- * Data rules). A password is normalised with NFKC (`normalisePassword`) in one
+ * Data rules). A password is normalised with NFC (`normalisePassword`) in one
  * place before it is checked or hashed, and is never stored, logged, audited or
  * returned (CLAUDE.md, Privacy rule). These functions check no permission: the
  * route that calls them has already decided who may. Pass the transaction
@@ -73,8 +73,9 @@ export type PasswordLoginResult =
 
 /**
  * The password step of a sign-in. `email` and `password` are what the person
- * typed; the address is normalised and so is the password, so a spelling that
- * NFKC makes the same still works. Returns `{ ok: true }` for the right
+ * typed; the address is normalised and so is the password, so a letter with a
+ * composed accent and the same letter with a combining one are the same
+ * password, while a full-width spelling is another. Returns `{ ok: true }` for the right
  * password of an active user, and `{ ok: false }` for every other case: an
  * address no one has, an account with no password, a wrong password, a disabled
  * or deleted user, and an account the throttle has closed.

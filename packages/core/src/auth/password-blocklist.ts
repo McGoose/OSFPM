@@ -11,8 +11,9 @@
  * another project's list.
  * Licence: AGPL-3.0-only, as the rest of this repository.
  *
- * Entries are stored the way the policy compares them: NFKC-normalised, lower
- * case, with spaces, hyphens, underscores and dots removed, and at least as
+ * Entries are stored the way the policy compares them: folded (NFKC, which
+ * turns full-width and ligature forms into plain ones), lower case, with
+ * spaces, hyphens, underscores and dots removed, and at least as
  * long as the shortest password the policy allows (shorter ones are refused for
  * their length). A test fails on an entry that is not. Plain runs and repeated
  * units are caught by rules in the policy and are not listed here.

@@ -169,3 +169,36 @@ export async function markUserDeleted(
     .set({ deletedAt: at })
     .where(eq(user.id, userId));
 }
+
+/**
+ * "é" as one code point. Strings whose Unicode form matters are built from code
+ * points in the tests, never typed: the composed and the decomposed spelling
+ * look the same on a screen, and an editor or a tool can change which one a
+ * typed string is in.
+ */
+export const E_ACUTE_COMPOSED = String.fromCodePoint(0x00e9);
+
+/** "é" as two code points: the letter, then the combining accent. NFC makes it `E_ACUTE_COMPOSED`. */
+export const E_ACUTE_DECOMPOSED = `e${String.fromCodePoint(0x0301)}`;
+
+/**
+ * One code point that NFC writes as two (Devanagari QA, which is spelled KA and
+ * NUKTA), for tests that count code points after normalisation.
+ */
+export const EXPANDS_UNDER_NFC = String.fromCodePoint(0x0958);
+
+/**
+ * `text` in full-width letters, and full-width spaces for spaces, which only a
+ * compatibility fold (NFKC) turns back into plain ones. NFC leaves them alone,
+ * so to a password they are other characters.
+ */
+export function fullWidth(text: string): string {
+  return Array.from(text, (character) => {
+    if (character === ' ') return String.fromCodePoint(0x3000);
+    const code = character.codePointAt(0)!;
+    // Basic Latin 0x21 to 0x7e sits at 0xff01 to 0xff5e.
+    return code >= 0x21 && code <= 0x7e
+      ? String.fromCodePoint(code + 0xfee0)
+      : character;
+  }).join('');
+}

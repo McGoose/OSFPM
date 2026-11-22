@@ -9,6 +9,12 @@ import {
   PASSWORD_POLICY,
   PASSWORD_REFUSALS,
 } from './password-policy.js';
+import {
+  E_ACUTE_COMPOSED,
+  E_ACUTE_DECOMPOSED,
+  EXPANDS_UNDER_NFC,
+  fullWidth,
+} from './test-support.js';
 
 // Invented person from the demo production; not a real address.
 const CONTEXT = { email: 'dana.whitlock@demopictures.example' };
@@ -36,21 +42,36 @@ describe('PASSWORD_POLICY', () => {
 });
 
 describe('normalisePassword', () => {
-  it('applies Unicode NFKC', () => {
-    // Full-width letters and an ideographic space fold to ASCII under NFKC.
-    expect(normalisePassword('ｈａｒｂｏｕｒ　ｃｒａｎｅ')).toBe(
-      'harbour crane',
-    );
-    // A letter and a combining accent become the one composed letter.
-    expect(normalisePassword('é')).toBe('é');
+  it('applies Unicode NFC: a letter and its combining accent become the one composed letter', () => {
+    expect(codePoints(E_ACUTE_DECOMPOSED)).toBe(2);
+    expect(normalisePassword(E_ACUTE_DECOMPOSED)).toBe(E_ACUTE_COMPOSED);
+    expect(codePoints(normalisePassword(E_ACUTE_DECOMPOSED))).toBe(1);
+    expect(normalisePassword(E_ACUTE_COMPOSED)).toBe(E_ACUTE_COMPOSED);
   });
 
-  it('makes equivalent spellings hash and verify the same', async () => {
-    const typedFullWidth = 'ｈａｒｂｏｕｒ　ｃｒａｎｅ　ｌａｎｔｅｒｎ';
-    const typedPlain = 'harbour crane lantern';
-    const stored = await hashPassword(normalisePassword(typedFullWidth));
-    const result = await verifyPassword(normalisePassword(typedPlain), stored);
-    expect(result.ok).toBe(true);
+  it('leaves a compatibility spelling as it is: a full-width or a ligature spelling is another password', () => {
+    const wide = fullWidth('harbour crane');
+    expect(wide).not.toBe('harbour crane');
+    expect(normalisePassword(wide)).toBe(wide);
+    const ligature = `${String.fromCodePoint(0xfb01)}nance`;
+    expect(normalisePassword(ligature)).toBe(ligature);
+  });
+
+  it('makes the composed and the decomposed spelling hash and verify the same, and no other spelling', async () => {
+    const decomposed = `caf${E_ACUTE_DECOMPOSED} harbour lantern`;
+    const composed = `caf${E_ACUTE_COMPOSED} harbour lantern`;
+    const stored = await hashPassword(normalisePassword(decomposed));
+    const same = await verifyPassword(normalisePassword(composed), stored);
+    expect(same.ok).toBe(true);
+    // Without the normalisation the two are different strings, which is why it
+    // is done in one place before every hash and every check.
+    expect((await verifyPassword(decomposed, stored)).ok).toBe(false);
+    // A full-width spelling of the same text is a different password.
+    const wide =
+      fullWidth('caf') + E_ACUTE_COMPOSED + fullWidth(' harbour lantern');
+    expect((await verifyPassword(normalisePassword(wide), stored)).ok).toBe(
+      false,
+    );
   });
 });
 
@@ -96,7 +117,8 @@ describe('checkPassword: length', () => {
   });
 
   it('counts after normalisation: a composed accent is one code point', () => {
-    const composed14 = 'élève à la crè';
+    // Composed and decomposed forms are made here, whatever form the source is in.
+    const composed14 = 'élève à la crè'.normalize('NFC');
     expect(codePoints(composed14)).toBe(14);
     const decomposed = composed14.normalize('NFD');
     // Longer as typed, but 14 once normalised.
@@ -105,7 +127,7 @@ describe('checkPassword: length', () => {
       ok: false,
       reason: 'too-short',
     });
-    const composed16 = 'élève à la crème';
+    const composed16 = 'élève à la crème'.normalize('NFC');
     const result = checkPassword(composed16.normalize('NFD'), CONTEXT);
     expect(result).toEqual({ ok: true, password: composed16 });
   });
@@ -120,11 +142,23 @@ describe('checkPassword: length', () => {
     });
   });
 
-  it('counts after normalisation at the top too: one character can expand', () => {
-    // U+FDFA is 18 code points under NFKC, so 15 of them are 270.
-    const expanding = 'ﷺ'.repeat(15);
-    expect(codePoints(expanding)).toBe(15);
+  it('counts after normalisation at the top too: one character can be written as two', () => {
+    // NFC writes this one code point as two, so 129 of them are 258.
+    const expanding = EXPANDS_UNDER_NFC.repeat(129);
+    expect(codePoints(expanding)).toBe(129);
+    expect(codePoints(normalisePassword(expanding))).toBe(258);
     expect(checkPassword(expanding, CONTEXT)).toEqual({
+      ok: false,
+      reason: 'too-long',
+    });
+  });
+
+  it('accepts exactly 256 code points after normalisation, though fewer were typed, and refuses one more', () => {
+    const typed = EXPANDS_UNDER_NFC.repeat(64) + unpredictable(128);
+    expect(codePoints(typed)).toBe(192);
+    expect(codePoints(normalisePassword(typed))).toBe(256);
+    expect(checkPassword(typed, CONTEXT)).toMatchObject({ ok: true });
+    expect(checkPassword(`${typed}x`, CONTEXT)).toEqual({
       ok: false,
       reason: 'too-long',
     });
@@ -132,10 +166,22 @@ describe('checkPassword: length', () => {
 
   it('returns the normalised password to hash', () => {
     const result = checkPassword(
-      'ｈａｒｂｏｕｒ　ｃｒａｎｅ　ｌａｎｔｅｒｎ',
+      `caf${E_ACUTE_DECOMPOSED} harbour lantern`,
       CONTEXT,
     );
-    expect(result).toEqual({ ok: true, password: 'harbour crane lantern' });
+    expect(result).toEqual({
+      ok: true,
+      password: `caf${E_ACUTE_COMPOSED} harbour lantern`,
+    });
+  });
+
+  it('takes a full-width passphrase as it is, counting its own code points', () => {
+    const wide = fullWidth(PASSPHRASE.slice(0, 15));
+    expect(checkPassword(wide, CONTEXT)).toEqual({ ok: true, password: wide });
+    expect(checkPassword(fullWidth(PASSPHRASE.slice(0, 14)), CONTEXT)).toEqual({
+      ok: false,
+      reason: 'too-short',
+    });
   });
 });
 
@@ -166,7 +212,7 @@ describe('checkPassword: blocklist', () => {
     }
   });
 
-  it('keeps every entry in the form the policy compares: normalised, lower case, no separators, long enough', () => {
+  it('keeps every entry in the form the policy compares: folded, lower case, no separators, long enough', () => {
     expect(COMMON_PASSWORDS.size).toBeGreaterThan(100);
     for (const entry of COMMON_PASSWORDS) {
       expect(entry, entry).toBe(entry.normalize('NFKC').toLowerCase());
@@ -184,13 +230,22 @@ describe('checkPassword: blocklist', () => {
       'CorrectHorseBatteryStaple',
       'correct horse battery staple',
       'Correct-Horse_Battery.Staple',
-      'ｃｏｒｒｅｃｔｈｏｒｓｅｂａｔｔｅｒｙｓｔａｐｌｅ',
+      fullWidth(entry),
     ]) {
       expect(checkPassword(typed, CONTEXT), typed).toEqual({
         ok: false,
         reason: 'too-common',
       });
     }
+  });
+
+  it('folds compatibility forms for the comparison only: a full-width spelling of a listed password is refused, and the password it would be hashed as is not folded', () => {
+    const wide = fullWidth('correcthorsebatterystaple');
+    expect(checkPassword(wide, CONTEXT)).toEqual({
+      ok: false,
+      reason: 'too-common',
+    });
+    expect(normalisePassword(wide)).toBe(wide);
   });
 
   it('compares the whole password, not a part of it', () => {
@@ -236,7 +291,7 @@ describe('checkPassword: context words', () => {
     ['a label of the domain', 'riverside-DEMOPICTURES-fan-club'],
     [
       'the local part in full-width letters',
-      'ｄａｎａ.ｗｈｉｔｌｏｃｋ and more words',
+      `${fullWidth('dana.whitlock')} and more words`,
     ],
   ])('refuses a password that contains %s', (_name, password) => {
     expect(checkPassword(password, CONTEXT)).toEqual({

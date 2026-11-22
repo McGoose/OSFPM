@@ -12,12 +12,19 @@ import { COMMON_PASSWORDS } from './password-blocklist.js';
  * attempt, and its refusal reasons are for the person setting the password,
  * never for sign-in (the login routes answer every failure alike).
  *
- * Normalisation is NFKC, decided for this project; SP 800-63B-4 itself names
- * NFC, which NFKC extends by also folding compatibility forms such as
- * full-width letters. It happens here, in one place, before both the length
+ * Normalisation is Unicode NFC, which SP 800-63B-4 (section 3.1.1.2) says a
+ * verifier should apply to a password before it hashes it. It makes a letter
+ * and its combining accent one code point, and leaves compatibility forms
+ * alone: a full-width or ligature spelling is a different password, as it is to
+ * the person who typed it. It happens here, in one place, before both the length
  * check and the hash, and again before a password is checked at login, so the
  * set and the check cannot disagree. `hashPassword` and `verifyPassword` hash
  * exactly the string they are given.
+ *
+ * The comparison with the blocklist and with the user's address is looser on
+ * purpose: it also folds compatibility forms (NFKC) and case, so a full-width
+ * spelling of a listed password is still refused. That fold is for the
+ * comparison only; what is hashed is the NFC text.
  */
 
 /**
@@ -78,16 +85,23 @@ const SEPARATORS = /[\s\-_.]+/g;
 
 const codePointLength = (text: string) => Array.from(text).length;
 
-/** The form two passwords are compared in: normalised, then lower case. */
+/**
+ * The form a password is compared with the blocklist and with an address in:
+ * compatibility forms folded (NFKC), then lower case. Looser than what is
+ * hashed (`normalisePassword`), so a spelling that only differs in form from a
+ * listed password is refused too. Never used for what is stored or checked.
+ */
 const fold = (text: string) => text.normalize('NFKC').toLowerCase();
 
 /**
- * The password as it is hashed and checked: Unicode NFKC. Call it on every
- * password, whether it is being set or checked at login, so both sides of the
- * comparison are the same string. Anyone may call it; it reads no database.
+ * The password as it is hashed and checked: Unicode NFC (SP 800-63B-4, section
+ * 3.1.1.2). Call it on every password, whether it is being set or checked at
+ * login, so both sides of the comparison are the same string. Compatibility
+ * forms such as full-width letters are left as they are. Anyone may call it; it
+ * reads no database.
  */
 export function normalisePassword(password: string): string {
-  return password.normalize('NFKC');
+  return password.normalize('NFC');
 }
 
 /** True when the whole password repeats a unit shorter than the minimum length. */
@@ -140,10 +154,11 @@ function emailWords(email: string): string[] {
 
 /**
  * Checks a prospective password against the policy: length in code points
- * after NFKC (15 to 256), then the blocklist of common passwords, then the
+ * after NFC (15 to 256), then the blocklist of common passwords, then the
  * words of the user's own address and the name of this service, then a whole
  * password that is a repeated unit or a run. There are no composition rules.
- * Comparison is case-insensitive and ignores spaces, hyphens, underscores and
+ * Comparison is case-insensitive, folds compatibility forms (see `fold`) and
+ * ignores spaces, hyphens, underscores and
  * dots in the list lookup. A list entry must match the whole password; a
  * context word may sit inside it, because the reason given is "contains your
  * email".

@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
  * `crypto.argon2` no lower stability of its own. The hash is stored as a PHC
  * string, so the parameters travel with it and can be raised later (SC-10).
  *
- * The password policy (length, blocklist, and NFKC normalisation of the
+ * The password policy (length, blocklist, and NFC normalisation of the
  * password) is not here: it is in `password-policy.ts`, and
  * `password-service.ts` normalises in one place before both setting and
  * checking a password. These functions hash exactly the string they are given.
