@@ -183,6 +183,27 @@
       "when": 1795280011520,
       "tag": "0025_user_email_normalised",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1795306758393,
+      "tag": "0026_session_scope_login_challenge",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1795348984103,
+      "tag": "0027_transient_retention_class",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1795350791180,
+      "tag": "0028_setup_code_transient",
+      "breakpoints": true
     }
   ]
 }

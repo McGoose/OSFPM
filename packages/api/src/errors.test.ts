@@ -13,6 +13,7 @@ import {
   AccountInputError,
 } from '@osfpm/core/src/accounts/service.js';
 import { AuthInputError, AuthStateError } from '@osfpm/core/src/auth/errors.js';
+import { describePasswordRefusal } from '@osfpm/core/src/auth/password-policy.js';
 import { ContractInputError } from '@osfpm/core/src/contracts/service.js';
 import { CostLineInputError } from '@osfpm/core/src/costs/service.js';
 import {
@@ -33,12 +34,19 @@ import {
 import { API_PREFIX } from './api-version.js';
 import {
   AuthenticationRequiredError,
+  CurrentPasswordRejectedError,
   INTERNAL_ERRORS,
   OriginMismatchError,
+  PasswordRefusedError,
   PROBLEM_TABLE,
   RateLimitedError,
+  RecoveryRequiredError,
   ServiceUnavailableError,
+  SignInFailedError,
   StartingError,
+  TotpAlreadyEnrolledError,
+  TotpCodeIncorrectError,
+  TotpNotSetUpError,
 } from './errors.js';
 import { createTestApp, UUID_V7 } from './test-support.js';
 
@@ -94,6 +102,13 @@ const fixtures = new Map<abstract new (...args: never[]) => Error, () => Error>(
       () => new ServiceUnavailableError(`the database at db.internal is down`),
     ],
     [AuthenticationRequiredError, () => new AuthenticationRequiredError()],
+    [SignInFailedError, () => new SignInFailedError()],
+    [RecoveryRequiredError, () => new RecoveryRequiredError()],
+    [CurrentPasswordRejectedError, () => new CurrentPasswordRejectedError()],
+    [PasswordRefusedError, () => new PasswordRefusedError('too-short')],
+    [TotpAlreadyEnrolledError, () => new TotpAlreadyEnrolledError()],
+    [TotpNotSetUpError, () => new TotpNotSetUpError()],
+    [TotpCodeIncorrectError, () => new TotpCodeIncorrectError()],
     [AuthInputError, () => new AuthInputError('method')],
     [AuthStateError, () => new AuthStateError('user-disabled')],
     [OriginMismatchError, () => new OriginMismatchError()],
@@ -284,7 +299,14 @@ describe.each(testTargets)('problem responses on $name', (target) => {
     });
 
     it('passes on an error message only for a class whose JSDoc says it carries no ids or values', () => {
-      const sources = readCoreSources();
+      // The classes of the core, and the ones the API defines itself.
+      const sources = [
+        ...readCoreSources(),
+        readFileSync(
+          fileURLToPath(new URL('./errors.ts', import.meta.url)),
+          'utf8',
+        ),
+      ];
       const passThrough = PROBLEM_TABLE.filter((row) => row.detail === null);
       // Guards against checking nothing.
       expect(passThrough.length).toBeGreaterThan(2);
@@ -296,7 +318,10 @@ describe.each(testTargets)('problem responses on $name', (target) => {
         const found = sources
           .map((text) => declaration.exec(text))
           .find((match) => match !== null);
-        expect(found, `${name} has no JSDoc in the core`).toBeDefined();
+        expect(
+          found,
+          `${name} has no JSDoc in the core or in errors.ts`,
+        ).toBeDefined();
         expect(
           found![1],
           `${name} passes its message on, but its JSDoc does not say it carries no ids or values`,
@@ -353,6 +378,26 @@ describe.each(testTargets)('problem responses on $name', (target) => {
         expect(listed).not.toContain(AuthInputError);
         expect(listed).not.toContain(AuthStateError);
       });
+    });
+
+    it('gives the reason a password was refused as a field error and in the detail, and nothing that was typed', async () => {
+      const response = await throwing('PasswordRefusedError');
+      const body = expectProblem(response, {
+        status: 422,
+        code: 'password-refused',
+        instance: `${API_PREFIX}/test/throw/PasswordRefusedError`,
+      });
+      expect(body.errors).toEqual([
+        { in: 'body', path: 'newPassword', code: 'too-short' },
+      ]);
+      expect(body.detail).toBe(describePasswordRefusal('too-short'));
+    });
+
+    it('has no field errors on a row that does not give any', async () => {
+      const body = (await throwing('SignInFailedError')).json<
+        Record<string, unknown>
+      >();
+      expect(body).not.toHaveProperty('errors');
     });
 
     it('maps the subclasses of a row to that row', async () => {

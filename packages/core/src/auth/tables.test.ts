@@ -4,6 +4,7 @@ import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
 import {
   installation,
+  loginChallenge,
   passkeyCredential,
   passwordCredential,
   recoveryCode,
@@ -151,10 +152,93 @@ describe.each(testTargets)('login tables on $name', (target) => {
       expect(failure).toEqual(foreignKey('session_user_fk'));
     });
 
-    it('allows several sessions for one user, and defaults to the security-log class', async () => {
+    it('allows several sessions for one user, and defaults to the transient class', async () => {
       await db().insert(session).values(sessionValues());
       await db().insert(session).values(sessionValues());
-      expect(await defaultOf('session')).toBe("'security-log'::text");
+      expect(await defaultOf('session')).toBe("'transient'::text");
+    });
+
+    it('defaults the scope to full, accepts recovery, and rejects any other scope', async () => {
+      const [plain] = await db()
+        .insert(session)
+        .values(sessionValues())
+        .returning({ scope: session.scope });
+      expect(plain!.scope).toBe('full');
+      const [limited] = await db()
+        .insert(session)
+        .values(sessionValues({ scope: 'recovery' }))
+        .returning({ scope: session.scope });
+      expect(limited!.scope).toBe('recovery');
+      const failure = await failureOf(() =>
+        db()
+          .insert(session)
+          .values(sessionValues({ scope: 'admin' as never })),
+      );
+      expect(failure).toEqual(check('session_scope_check'));
+    });
+  });
+
+  describe('login_challenge', () => {
+    const challengeValues = (
+      overrides: Partial<typeof loginChallenge.$inferInsert> = {},
+    ) => ({
+      originServer: origin,
+      userId,
+      kind: 'totp' as const,
+      tokenHash: `challenge-hash-${next()}`,
+      expiresAt: at(5 * 60 * 1000),
+      ...overrides,
+    });
+
+    it('starts with no attempts and no used time, and defaults to the transient class', async () => {
+      const [row] = await db()
+        .insert(loginChallenge)
+        .values(challengeValues())
+        .returning();
+      expect(row!.attempts).toBe(0);
+      expect(row!.usedAt).toBeNull();
+      expect(await defaultOf('login_challenge')).toBe("'transient'::text");
+    });
+
+    it('rejects a kind that is not on the list', async () => {
+      const failure = await failureOf(() =>
+        db()
+          .insert(loginChallenge)
+          .values(challengeValues({ kind: 'sms' as never })),
+      );
+      expect(failure).toEqual(check('login_challenge_kind_check'));
+    });
+
+    it('rejects a negative attempt count', async () => {
+      const failure = await failureOf(() =>
+        db()
+          .insert(loginChallenge)
+          .values(challengeValues({ attempts: -1 })),
+      );
+      expect(failure).toEqual(check('login_challenge_attempts_check'));
+    });
+
+    it('rejects a duplicate token hash, also across users', async () => {
+      const tokenHash = `challenge-duplicate-${next()}`;
+      await db().insert(loginChallenge).values(challengeValues({ tokenHash }));
+      const other = await seedActiveUser(database);
+      const failure = await failureOf(() =>
+        db()
+          .insert(loginChallenge)
+          .values(challengeValues({ tokenHash, userId: other })),
+      );
+      expect(failure).toEqual(unique('login_challenge_token_hash_unique'));
+    });
+
+    it('rejects an unknown user, and allows several challenges for one user', async () => {
+      const failure = await failureOf(() =>
+        db()
+          .insert(loginChallenge)
+          .values(challengeValues({ userId: newId() })),
+      );
+      expect(failure).toEqual(foreignKey('login_challenge_user_fk'));
+      await db().insert(loginChallenge).values(challengeValues());
+      await db().insert(loginChallenge).values(challengeValues());
     });
   });
 
@@ -219,8 +303,8 @@ describe.each(testTargets)('login tables on $name', (target) => {
       expect(failure).toEqual(unique('setup_code_single_live'));
     });
 
-    it('defaults to the security-log class', async () => {
-      expect(await defaultOf('setup_code')).toBe("'security-log'::text");
+    it('defaults to the transient class', async () => {
+      expect(await defaultOf('setup_code')).toBe("'transient'::text");
     });
   });
 

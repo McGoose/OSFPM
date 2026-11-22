@@ -1,3 +1,4 @@
+import { loginChallenge } from './login-challenge.js';
 import { passkeyCredential } from './passkey-credential.js';
 import { passwordCredential } from './password-credential.js';
 import { recoveryCode } from './recovery-code.js';
@@ -14,6 +15,7 @@ import { totpCredential } from './totp-credential.js';
  * test requires this list to match the tables that were.
  */
 export const SECURITY_TABLES = [
+  loginChallenge,
   passkeyCredential,
   passwordCredential,
   recoveryCode,

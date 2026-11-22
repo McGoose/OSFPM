@@ -25,6 +25,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Fields are tagged `normal` or `sensitive`. Sensitive fields never appear in logs, emails, webhook payloads, exports, error messages or API error responses unless a sensitive scope explicitly allows it.
 - Migrations are forward-only; never edit an applied migration.
 - Migrations may contain hand-written SQL (triggers, functions, reordered statements) that drizzle snapshots don't track. Say so in the commit message. Never edit an applied migration.
+- Migrations may change metadata of existing rows (retention class, defaults) without audit events; they never change security state (revoke, disable, grant).
 - Explicit foreign-key names follow `<table>_<target>_fk`; when a table references itself or the same target twice, use `<table>_<column without _id>_fk`.
 - A unique key that includes a nullable column is NULLS NOT DISTINCT unless several NULLs are meant to be allowed; Drizzle can't express it on indexes, so add it by hand in the migration with a comment.
 - No legal or financial numbers (rates, caps, thresholds, deadlines) in code: they live in rule packs as data.
@@ -43,7 +44,9 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Tenant tables are defined with `tenantTable()`, never bare `pgTable`.
 - Permission checks run only on the server through the policy engine.
 - Organisation role grants reach projects only with `reach = 'all-projects'`, never for sensitive permissions.
-- Every endpoint gets a test proving 403 without access and no sensitive fields without `sensitive:read`.
+- Every permission-protected endpoint gets a test proving 403 without access and no sensitive fields without `sensitive:read`.
+- A self-service endpoint (it acts only on the signed-in user's own account, so there is no permission to lack) gets tests proving 401 without a session, 403 for a foreign `Origin` on a request that changes data, and 403 `account-recovery-required` for a recovery-scope session unless the route says `allowedInRecovery`.
+- Public endpoints (`auth: 'none'`) test identical failure answers and their rate limit.
 - A string from a caller never indexes a plain object and never goes through `in`. Use Object.hasOwn, a Map, or check it against the constant list first.
 - A guard that checks for live rows pointing at a record locks them (FOR UPDATE on the record, FOR SHARE on the reference) so a concurrent write can't slip past it.
 - Lock order: take the project's change counter (lockProjectChanges) before any row lock. Every writer follows this order, or concurrent writes can deadlock.
@@ -53,6 +56,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Routes validate input with Zod schemas and never return core errors directly; the error table in `packages/api/src/errors.ts` maps them.
 - Every new route declares `auth`; the default is `required`. Cookie requests that change data must pass the Origin check.
 - Status codes: 401 = not signed in; 403 = signed in but not allowed; 404 for by-id lookups where existence must not leak.
+- Login failures always answer the same 401 `sign-in-failed`; never reveal which part failed.
 - Log lines use the logger's known keys (req, res, err) or plain scalar fields; never log whole objects or request data.
 
 ## Comments and docs

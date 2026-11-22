@@ -5,14 +5,14 @@ import { user } from './user.js';
 
 /**
  * A user's authenticator-app secret, one row per user. `secret` is marked
- * sensitive: no service returns it, and it never appears in logs, events or
- * errors (CLAUDE.md, Privacy rule). `last_used_step` is the last accepted
+ * sensitive: no service returns it again after `enrolTotp` showed it once when
+ * it was made, and it never appears in logs, events or errors (CLAUDE.md,
+ * Privacy rule). `last_used_step` is the last accepted
  * time step, so a code cannot be used twice. A row with `confirmed_at` NULL is
  * still being set up and does not count at sign-in.
  *
  * A security table: written only by the auth service, directly, and each
- * change is audited (CLAUDE.md, Data rules). No service writes it yet; the
- * TOTP logic comes in a later prompt.
+ * change is audited (CLAUDE.md, Data rules). Only `auth/totp.ts` writes it.
  */
 export const totpCredential = securityTable(
   'totp_credential',

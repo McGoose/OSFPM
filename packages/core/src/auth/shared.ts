@@ -31,12 +31,20 @@ export const AUTH_AUDIT = {
   sessionCreated: 'auth.session-created',
   sessionRevoked: 'auth.session-revoked',
   sessionsRevoked: 'auth.sessions-revoked',
+  sessionPromoted: 'auth.session-promoted',
   userDisabled: 'auth.user-disabled',
   userEnabled: 'auth.user-enabled',
   recoveryCodesGenerated: 'auth.recovery-codes-generated',
   recoveryCodeUsed: 'auth.recovery-code-used',
   setupCodeIssued: 'auth.setup-code-issued',
   setupCodeUsed: 'auth.setup-code-used',
+  loginStepPassed: 'auth.login-step-passed',
+  loginStepFailed: 'auth.login-step-failed',
+  passwordSet: 'auth.password-set',
+  passwordRehashed: 'auth.password-rehashed',
+  totpEnrolled: 'auth.totp-enrolled',
+  totpConfirmed: 'auth.totp-confirmed',
+  totpRemoved: 'auth.totp-removed',
 } as const;
 
 /** Details of an auth audit event: scalar values only, so nothing nested can hide a secret. */
@@ -53,7 +61,7 @@ export function recordAuthAudit(
     category: (typeof AUTH_AUDIT)[keyof typeof AUTH_AUDIT];
     action: string;
     actor: AuthActor;
-    targetType: string;
+    targetType: string | null;
     targetId: string | null;
     details?: AuthAuditDetails;
     occurredAt: Date;

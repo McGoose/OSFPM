@@ -10,6 +10,8 @@ import {
 import type { Database } from '@osfpm/core/src/db/client.js';
 import { newId } from '@osfpm/core/src/db/ids.js';
 import { API_PREFIX } from './api-version.js';
+import { accountRoutes } from './auth/account-routes.js';
+import { loginRoutes } from './auth/login-routes.js';
 import { authPlugin } from './auth/plugin.js';
 import {
   handleFrameworkError,
@@ -200,6 +202,8 @@ export function buildApp(options: BuildAppOptions) {
   void app.register(metaRoutes, { prefix: API_PREFIX });
   void app.register(openapiRoutes, { prefix: API_PREFIX });
   void app.register(authRoutes, { prefix: `${API_PREFIX}/auth` });
+  void app.register(loginRoutes, { prefix: `${API_PREFIX}/auth` });
+  void app.register(accountRoutes, { prefix: `${API_PREFIX}/auth` });
 
   return app;
 }

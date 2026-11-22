@@ -5,11 +5,11 @@ import { user } from './user.js';
 /**
  * A user's password, one row per user. `hash` is an Argon2id hash in PHC string
  * format (see `auth/password.ts`), never the password. `must_change` forces a
- * new password at the next sign-in. The password policy comes with password
- * login (P-03b3).
+ * new password at the next sign-in. The password policy is in
+ * `auth/password-policy.ts`.
  *
- * A security table: written only by the auth service, directly, and each
- * change is audited (CLAUDE.md, Data rules). No service writes it yet.
+ * A security table: only `auth/password-service.ts` writes it, directly, and
+ * each change is audited (CLAUDE.md, Data rules).
  */
 export const passwordCredential = securityTable(
   'password_credential',

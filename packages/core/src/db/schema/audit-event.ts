@@ -58,6 +58,10 @@ export const auditEvent = pgTable(
       t.organisationId,
       t.occurredAt,
     ),
+    // The history of one record, newest first to read. The login throttle counts
+    // the recent failed attempts against one account by it (`auth/throttle.ts`),
+    // so a sign-in does not scan the whole log.
+    index('audit_event_target_occurred_idx').on(t.targetId, t.occurredAt),
     check(
       'audit_event_project_requires_organisation_check',
       sql`${t.projectId} is null or ${t.organisationId} is not null`,

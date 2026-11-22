@@ -31,9 +31,23 @@ export const SESSION_METHODS = [
 export type SessionMethod = (typeof SESSION_METHODS)[number];
 
 /**
+ * Allowed values of `session.scope`: what the session may do. `full` is every
+ * signed-in route. `recovery` is the session a recovery code opens: it may only
+ * read who is signed in, sign out, and set a new way to sign in (a password,
+ * an authenticator app, recovery codes, later a passkey), until the user does
+ * one of those and the session becomes `full` (SC-10). The CHECK is built from
+ * this list, so a new value needs a new migration.
+ */
+export const SESSION_SCOPES = ['full', 'recovery'] as const;
+/** One value of `SESSION_SCOPES`. */
+export type SessionScope = (typeof SESSION_SCOPES)[number];
+
+/**
  * A login session. Only the SHA-256 hash of the session token is stored; the
  * raw token goes to the client once and is never kept or logged (SC-10).
- * Retention class `security-log`.
+ * Retention class `transient`: a working row that cleanup removes, and the
+ * audit log is the record. `cleanupEndedSessions` deletes a session once it has
+ * ended, by revocation or by going idle, for `SESSION_DEFAULTS.endedKeepMs`.
  *
  * A security table: only `auth/sessions.ts` writes it, directly, and each
  * security-relevant change is audited, not change-logged (CLAUDE.md, Data
@@ -42,10 +56,11 @@ export type SessionMethod = (typeof SESSION_METHODS)[number];
 export const session = securityTable(
   'session',
   {
-    ...baseColumns(() => user.id, { defaultRetentionClass: 'security-log' }),
+    ...baseColumns(() => user.id, { defaultRetentionClass: 'transient' }),
     userId: uuid('user_id').notNull(),
     tokenHash: text('token_hash').notNull(),
     method: text('method').$type<SessionMethod>().notNull(),
+    scope: text('scope').$type<SessionScope>().notNull().default('full'),
     lastSeenAt: timestamptz('last_seen_at').notNull(),
     idleExpiresAt: timestamptz('idle_expires_at').notNull(),
     absoluteExpiresAt: timestamptz('absolute_expires_at').notNull(),
@@ -64,6 +79,10 @@ export const session = securityTable(
     check(
       'session_method_check',
       sql`${t.method} in (${sqlList(SESSION_METHODS)})`,
+    ),
+    check(
+      'session_scope_check',
+      sql`${t.scope} in (${sqlList(SESSION_SCOPES)})`,
     ),
     check(
       'session_expiry_order_check',

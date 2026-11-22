@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, isNull, lte, or } from 'drizzle-orm';
 import { installation, setupCode } from '../db/schema/index.js';
 import type { Tx } from '../db/write.js';
 import { AuthStateError } from './errors.js';
@@ -168,4 +168,40 @@ export async function consumeSetupCode(
       return true;
     }),
   );
+}
+
+/**
+ * Deletes every setup code that is of no use, and returns how many it deleted:
+ * a code that was used, a code that was revoked (by a newer one), and a code
+ * that has expired (`expires_at <= now`, as `consumeSetupCode` counts it). The
+ * live code stays: not used, not revoked, with time left.
+ *
+ * Deleting a used code does not reopen setup. Whether the first administrator
+ * exists is `installation.setup_completed_at`, which this does not touch, and
+ * no code is issued or accepted once it is set.
+ *
+ * For the worker, which calls it on a schedule (`TRANSIENT_CLEANUPS`). It is
+ * housekeeping, not a security change, so it writes no audit event: issuing and
+ * using a code were audited when they happened. It checks no permission: only
+ * the worker calls it. It takes no installation lock, because each code it
+ * deletes is one `consumeSetupCode` refuses at `now`. One DELETE, so it is
+ * atomic.
+ *
+ * @throws RecordWriteError when the database refuses the delete; it carries the
+ * SQLSTATE and constraint name only.
+ */
+export function cleanupSetupCodes(tx: Tx, now: Date): Promise<number> {
+  return guardedAuth('setup_code', 'delete', async () => {
+    const deleted = await tx
+      .delete(setupCode)
+      .where(
+        or(
+          isNotNull(setupCode.usedAt),
+          isNotNull(setupCode.revokedAt),
+          lte(setupCode.expiresAt, now),
+        ),
+      )
+      .returning({ id: setupCode.id });
+    return deleted.length;
+  });
 }

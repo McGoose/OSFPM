@@ -1,8 +1,17 @@
-import { sql } from 'drizzle-orm';
-import { seedUser } from '../access/test-fixtures.js';
+import { argon2Sync, randomBytes } from 'node:crypto';
+import { eq, sql } from 'drizzle-orm';
+import { Secret, TOTP } from 'otpauth';
+import { ORIGIN, seedUser } from '../access/test-fixtures.js';
 import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
-import { installation, user } from '../db/schema/index.js';
+import {
+  installation,
+  passwordCredential,
+  totpCredential,
+  user,
+} from '../db/schema/index.js';
+import { hashPassword, PASSWORD_HASH_PARAMS } from './password.js';
+import { normalisePassword } from './password-policy.js';
 
 /**
  * Helpers for the auth tests. Fixtures insert straight into the tables, as the
@@ -75,4 +84,155 @@ export async function everyRowAsText(database: Database): Promise<string> {
     parts.push(String(found[0]!.text));
   }
   return parts.join('\n');
+}
+
+/** The stored email address of a user. */
+export async function emailOf(
+  database: Database,
+  userId: string,
+): Promise<string> {
+  const [row] = await database.db
+    .select({ email: user.email })
+    .from(user)
+    .where(eq(user.id, userId));
+  return row!.email;
+}
+
+/** Hashes are slow on purpose, so each distinct password is hashed once per test run. */
+const hashesByPassword = new Map<string, Promise<string>>();
+
+/**
+ * Gives a user a password: inserts the `password_credential` row directly, as
+ * fixtures do. The password is normalised first, as the services do, and hashed
+ * once per distinct password. `hash` stores that PHC string instead, for a test
+ * that needs a hash made with other parameters (see `passwordHashWith`).
+ * Invented passwords only.
+ */
+export async function seedPassword(
+  database: Database,
+  userId: string,
+  password: string,
+  options: { mustChange?: boolean; now?: Date; hash?: string } = {},
+): Promise<void> {
+  const normalised = normalisePassword(password);
+  let hash = hashesByPassword.get(normalised);
+  if (hash === undefined) {
+    hash = hashPassword(normalised);
+    hashesByPassword.set(normalised, hash);
+  }
+  await database.db.insert(passwordCredential).values({
+    originServer: ORIGIN,
+    userId,
+    hash: options.hash ?? (await hash),
+    changedAt: options.now ?? new Date(),
+    mustChange: options.mustChange ?? false,
+  });
+}
+
+/**
+ * Gives a user an authenticator-app secret, confirmed unless `confirmed` is
+ * false, and returns the secret in base32 so a test can make codes with
+ * `totpCodeAt`.
+ */
+export async function seedTotp(
+  database: Database,
+  userId: string,
+  options: { confirmed?: boolean; now?: Date } = {},
+): Promise<string> {
+  const secret = new Secret({ size: 20 }).base32;
+  await database.db.insert(totpCredential).values({
+    originServer: ORIGIN,
+    userId,
+    secret,
+    confirmedAt:
+      options.confirmed === false ? null : (options.now ?? new Date()),
+  });
+  return secret;
+}
+
+/** The authenticator code for `secret` at `time`, as an app would show it. */
+export function totpCodeAt(secret: string, time: Date): string {
+  return TOTP.generate({
+    secret: Secret.fromBase32(secret),
+    algorithm: 'SHA1',
+    digits: 6,
+    period: 30,
+    timestamp: time.getTime(),
+  });
+}
+
+/** Marks a user deleted directly, bypassing the services, for the cases an active user does not cover. */
+export async function markUserDeleted(
+  database: Database,
+  userId: string,
+  at: Date = new Date(),
+): Promise<void> {
+  await database.db
+    .update(user)
+    .set({ deletedAt: at })
+    .where(eq(user.id, userId));
+}
+
+/**
+ * "é" as one code point. Strings whose Unicode form matters are built from code
+ * points in the tests, never typed: the composed and the decomposed spelling
+ * look the same on a screen, and an editor or a tool can change which one a
+ * typed string is in.
+ */
+export const E_ACUTE_COMPOSED = String.fromCodePoint(0x00e9);
+
+/** "é" as two code points: the letter, then the combining accent. NFC makes it `E_ACUTE_COMPOSED`. */
+export const E_ACUTE_DECOMPOSED = `e${String.fromCodePoint(0x0301)}`;
+
+/**
+ * One code point that NFC writes as two (Devanagari QA, which is spelled KA and
+ * NUKTA), for tests that count code points after normalisation.
+ */
+export const EXPANDS_UNDER_NFC = String.fromCodePoint(0x0958);
+
+/**
+ * `text` in full-width letters, and full-width spaces for spaces, which only a
+ * compatibility fold (NFKC) turns back into plain ones. NFC leaves them alone,
+ * so to a password they are other characters.
+ */
+export function fullWidth(text: string): string {
+  return Array.from(text, (character) => {
+    if (character === ' ') return String.fromCodePoint(0x3000);
+    const code = character.codePointAt(0)!;
+    // Basic Latin 0x21 to 0x7e sits at 0xff01 to 0xff5e.
+    return code >= 0x21 && code <= 0x7e
+      ? String.fromCodePoint(code + 0xfee0)
+      : character;
+  }).join('');
+}
+
+/**
+ * The Argon2id PHC string of `password` made with settings other than the
+ * current ones, as an older version of the server, with other parameters, would
+ * have stored it. The password is normalised first, as the services do. Pass it
+ * to `seedPassword` as `hash`. Only tests import this file.
+ */
+export function passwordHashWith(
+  password: string,
+  settings: {
+    memoryKiB: number;
+    passes: number;
+    parallelism: number;
+    saltBytes?: number;
+    hashBytes?: number;
+  },
+): string {
+  const salt = randomBytes(
+    settings.saltBytes ?? PASSWORD_HASH_PARAMS.saltBytes,
+  );
+  const hash = argon2Sync('argon2id', {
+    message: normalisePassword(password),
+    nonce: salt,
+    memory: settings.memoryKiB,
+    passes: settings.passes,
+    parallelism: settings.parallelism,
+    tagLength: settings.hashBytes ?? PASSWORD_HASH_PARAMS.hashBytes,
+  });
+  const encode = (bytes: Buffer) => bytes.toString('base64').replace(/=+$/, '');
+  return `$argon2id$v=${PASSWORD_HASH_PARAMS.version}$m=${settings.memoryKiB},t=${settings.passes},p=${settings.parallelism}$${encode(salt)}$${encode(hash)}`;
 }

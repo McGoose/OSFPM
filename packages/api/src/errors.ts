@@ -5,6 +5,10 @@ import { AccessDeniedError } from '@osfpm/core/src/access/access-denied-error.js
 import { PermissionSyncError } from '@osfpm/core/src/access/permission-sync.js';
 import { AccountInputError } from '@osfpm/core/src/accounts/service.js';
 import { AuthInputError, AuthStateError } from '@osfpm/core/src/auth/errors.js';
+import {
+  describePasswordRefusal,
+  type PasswordRefusal,
+} from '@osfpm/core/src/auth/password-policy.js';
 import { ContractInputError } from '@osfpm/core/src/contracts/service.js';
 import { CostLineInputError } from '@osfpm/core/src/costs/service.js';
 import {
@@ -89,6 +93,96 @@ export class RateLimitedError extends Error {
 }
 
 /**
+ * A step of signing in failed: an address no one has, an account with no
+ * password, a wrong password, authenticator code or recovery code, a challenge
+ * that is unknown, used or over, a disabled user, or an account the throttle
+ * has closed. Maps to a 401 `sign-in-failed` with one fixed body for every
+ * cause (SC-10), so a response never says which part failed. The message and
+ * the response name no cause; the cause is in the audit trail alone.
+ */
+export class SignInFailedError extends Error {
+  constructor() {
+    super('The sign-in was not accepted');
+    this.name = 'SignInFailedError';
+  }
+}
+
+/**
+ * The session is one a recovery code opened (scope `recovery`), and the route is
+ * not one it may call. Maps to a 403 `account-recovery-required`: the user has
+ * signed in, but must first set a new password or confirm an authenticator app.
+ * The message and the response name no route and no user.
+ */
+export class RecoveryRequiredError extends Error {
+  constructor() {
+    super('The session is a recovery session');
+    this.name = 'RecoveryRequiredError';
+  }
+}
+
+/**
+ * A signed-in user asked for a change that needs their current password, and it
+ * was not given, was wrong, or the account is closed for a while after too many
+ * wrong guesses. Maps to a 403 `current-password-incorrect`. One answer for all
+ * three, so it tells a guesser nothing. Not a sign-in failure: the user is
+ * signed in, so it is not a 401.
+ */
+export class CurrentPasswordRejectedError extends Error {
+  constructor() {
+    super('The current password was not accepted');
+    this.name = 'CurrentPasswordRejectedError';
+  }
+}
+
+/**
+ * The new password does not meet the password policy (SC-10; NIST SP 800-63B-4,
+ * section 3.1.1.2, which requires the reason to be given). Maps to a 422
+ * `password-refused` with the reason as the `errors` entry and in the `detail`.
+ * Its message is fixed text chosen by the reason alone (`describePasswordRefusal`):
+ * it carries no part of the password or of the user's address, never what was typed.
+ */
+export class PasswordRefusedError extends Error {
+  constructor(readonly reason: PasswordRefusal) {
+    super(describePasswordRefusal(reason));
+    this.name = 'PasswordRefusedError';
+  }
+}
+
+/**
+ * The user already has a confirmed authenticator app. Maps to a 409
+ * `totp-already-enrolled`. Setting up another means removing this one first,
+ * which asks for the password.
+ */
+export class TotpAlreadyEnrolledError extends Error {
+  constructor() {
+    super('A confirmed authenticator already exists');
+    this.name = 'TotpAlreadyEnrolledError';
+  }
+}
+
+/**
+ * The user has no authenticator app, or none being set up, to confirm or
+ * remove. Maps to a 409 `totp-not-set-up`.
+ */
+export class TotpNotSetUpError extends Error {
+  constructor() {
+    super('No authenticator app is set up');
+    this.name = 'TotpNotSetUpError';
+  }
+}
+
+/**
+ * The code given to confirm an authenticator app was wrong or not six digits.
+ * Maps to a 422 `totp-code-incorrect`. The code is never in the message.
+ */
+export class TotpCodeIncorrectError extends Error {
+  constructor() {
+    super('The authenticator code was not correct');
+    this.name = 'TotpCodeIncorrectError';
+  }
+}
+
+/**
  * What a client reads when it has no usable session. One text for every cause,
  * so the response never says whether the cookie was missing, unknown, expired,
  * revoked or the user disabled.
@@ -110,6 +204,11 @@ export type ProblemRule = {
    * client reads never depends on what a service put in a message.
    */
   readonly detail: string | null;
+  /**
+   * The `errors` of the response, for a row whose answer says which field was
+   * wrong and why. Field paths and fixed reason codes only, never a value.
+   */
+  readonly errors?: (error: never) => Problem['errors'];
 };
 
 /**
@@ -122,6 +221,14 @@ export type ProblemRule = {
  * record learns nothing from the refusal (see `AccessDeniedError`).
  */
 export const PROBLEM_TABLE: readonly ProblemRule[] = [
+  {
+    // The one answer to every failed sign-in step, whatever failed.
+    errorClass: SignInFailedError,
+    status: 401,
+    code: 'sign-in-failed',
+    title: 'Sign-in failed',
+    detail: 'The sign-in details were not accepted.',
+  },
   {
     errorClass: AuthenticationRequiredError,
     status: 401,
@@ -157,6 +264,55 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
     title: 'Origin mismatch',
     detail:
       'This request did not come from the address this server is used at.',
+  },
+  {
+    errorClass: RecoveryRequiredError,
+    status: 403,
+    code: 'account-recovery-required',
+    title: 'Account recovery required',
+    detail:
+      'This session came from a recovery code. Set a new password or an authenticator app first.',
+  },
+  {
+    errorClass: CurrentPasswordRejectedError,
+    status: 403,
+    code: 'current-password-incorrect',
+    title: 'Current password not accepted',
+    detail: 'The current password is missing or was not accepted.',
+  },
+  {
+    errorClass: PasswordRefusedError,
+    status: 422,
+    code: 'password-refused',
+    title: 'Password refused',
+    // The reason, written for the person setting the password.
+    detail: null,
+    errors: (error: PasswordRefusedError) => [
+      { in: 'body', path: 'newPassword', code: error.reason },
+    ],
+  },
+  {
+    errorClass: TotpAlreadyEnrolledError,
+    status: 409,
+    code: 'totp-already-enrolled',
+    title: 'Authenticator app already set up',
+    detail:
+      'An authenticator app is already set up. Remove it first to set up another.',
+  },
+  {
+    errorClass: TotpNotSetUpError,
+    status: 409,
+    code: 'totp-not-set-up',
+    title: 'No authenticator app set up',
+    detail:
+      'There is no authenticator app, or none being set up, to do this to.',
+  },
+  {
+    errorClass: TotpCodeIncorrectError,
+    status: 422,
+    code: 'totp-code-incorrect',
+    title: 'Authenticator code incorrect',
+    detail: 'The code was not correct. Check the app and try again.',
   },
   {
     errorClass: RateLimitedError,
@@ -441,11 +597,13 @@ function problemFor(error: unknown): ProblemParts {
   }
   for (const rule of PROBLEM_TABLE) {
     if (error instanceof rule.errorClass) {
+      const errors = rule.errors?.(error as never);
       return {
         status: rule.status,
         code: rule.code,
         title: rule.title,
         detail: rule.detail ?? error.message,
+        ...(errors ? { errors } : {}),
       };
     }
   }

@@ -31,6 +31,21 @@ describe('SHIPPED_RETENTION_DEFAULTS', () => {
       expect(SHIPPED_RETENTION_DEFAULTS[key].periodYears, key).toBeNull();
     }
   });
+
+  it('gives the transient class no period: cleanup removes its rows, retention never does', () => {
+    expect(SHIPPED_RETENTION_DEFAULTS.transient).toEqual({
+      periodYears: null,
+      verified: false,
+    });
+    // The anchor date is known and there is still no end date.
+    expect(
+      retentionEndDate({
+        anchor: 'record-created',
+        periodsYears: [SHIPPED_RETENTION_DEFAULTS.transient.periodYears],
+        dates: { ...NO_DATES, recordCreated: '2026-03-05' },
+      }),
+    ).toBeNull();
+  });
 });
 
 describe('retentionEndDate', () => {
