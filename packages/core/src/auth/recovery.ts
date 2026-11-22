@@ -162,10 +162,11 @@ export type RecoveryLoginResult =
  * past the count.
  *
  * A right code also ends every live session of the user, with the reason
- * `recovery-used` and one `auth.sessions-revoked` event (`revokeUserSessions`):
- * the person came in this way because they lost a way to sign in, so a session
- * that is not theirs may be live. It happens before the session the route makes
- * next, so that one is not ended, and a failed attempt ends nothing.
+ * `recovery-used` and, when there was any to end, one `auth.sessions-revoked`
+ * event (`revokeUserSessions`): the person came in this way because they lost a
+ * way to sign in, so a session that is not theirs may be live. It happens before
+ * the session the route makes next, so that one is not ended, and a failed
+ * attempt ends nothing.
  *
  * A failure is audited as `auth.login-step-failed` with the method
  * `recovery` and a reason class, never the typed address or code. An unknown

@@ -671,6 +671,11 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
       now: at(20 * MINUTE),
     });
     await consumeSetupCode(db(), 'AAAA-AAAA-AAAA-AAAA', at(20 * MINUTE));
+    // A user with no live session to revoke.
+    await revokeUserSessions(db(), adminId, {
+      reason: 'logout',
+      now: at(20 * MINUTE),
+    });
     // An Administrator role that holds every permission already.
     await topUpAdministratorRoles(db(), {
       now: at(20 * MINUTE),
