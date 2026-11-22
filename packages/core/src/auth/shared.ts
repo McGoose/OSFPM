@@ -45,6 +45,10 @@ export const AUTH_AUDIT = {
   totpEnrolled: 'auth.totp-enrolled',
   totpConfirmed: 'auth.totp-confirmed',
   totpRemoved: 'auth.totp-removed',
+  passkeyRegistrationStarted: 'auth.passkey-registration-started',
+  passkeyRegistered: 'auth.passkey-registered',
+  passkeyRenamed: 'auth.passkey-renamed',
+  passkeyRevoked: 'auth.passkey-revoked',
 } as const;
 
 /** Details of an auth audit event: scalar values only, so nothing nested can hide a secret. */

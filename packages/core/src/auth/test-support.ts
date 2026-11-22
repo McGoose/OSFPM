@@ -1,6 +1,19 @@
-import { argon2Sync, randomBytes } from 'node:crypto';
+import {
+  argon2Sync,
+  createHash,
+  generateKeyPairSync,
+  randomBytes,
+  sign,
+} from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { Secret, TOTP } from 'otpauth';
+import type {
+  AuthenticationResponseJSON,
+  PublicKeyCredentialCreationOptionsJSON,
+  PublicKeyCredentialRequestOptionsJSON,
+  RegistrationResponseJSON,
+} from '@simplewebauthn/server';
+import { isoCBOR } from '@simplewebauthn/server/helpers';
 import { ORIGIN, seedUser } from '../access/test-fixtures.js';
 import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
@@ -171,6 +184,280 @@ export async function markUserDeleted(
     .update(user)
     .set({ deletedAt: at })
     .where(eq(user.id, userId));
+}
+
+/** What the CBOR helper of the WebAuthn library encodes. */
+type Cbor = Parameters<typeof isoCBOR.encode>[0];
+
+/** The authenticator-data flags the software authenticator sets (WebAuthn, section 6.1). */
+const FLAG_USER_PRESENT = 0x01;
+const FLAG_USER_VERIFIED = 0x04;
+const FLAG_ATTESTED_CREDENTIAL_DATA = 0x40;
+
+/**
+ * The key types the software authenticator can make. ES256 and RS256 are the two
+ * the server accepts; EdDSA is one it does not, for the test that refuses it.
+ */
+export type SoftwareKeyAlgorithm = 'ES256' | 'RS256' | 'EdDSA';
+
+/**
+ * What a test may change about one response to make a server refuse it. Each
+ * leaves everything else as a real authenticator and browser would send it.
+ */
+export type ResponseTweaks = {
+  /** The origin written into the client data, in place of the authenticator's own. */
+  readonly origin?: string;
+  /** The relying party id hashed into the authenticator data, in place of the one in the options. */
+  readonly rpId?: string;
+  /** The challenge written into the client data, in place of the one in the options. */
+  readonly challenge?: string;
+  /** False leaves the user-verified flag out. */
+  readonly userVerified?: boolean;
+  /** False leaves the user-present flag out. */
+  readonly userPresent?: boolean;
+};
+
+/** `ResponseTweaks` for a registration. */
+export type RegistrationTweaks = ResponseTweaks & {
+  /** The transports the browser reports, in place of `['internal']`. */
+  readonly transports?: readonly string[];
+};
+
+/** `ResponseTweaks` for a sign-in. */
+export type AuthenticationTweaks = ResponseTweaks & {
+  /** The signature counter to report, in place of the next one (or 0 for an authenticator that does not count). */
+  readonly signCount?: number;
+  /** True signs something other than what the server will check. */
+  readonly wrongSignature?: boolean;
+  /** The user handle to return, in place of the one stored at registration; `null` leaves it out. */
+  readonly userHandle?: string | null;
+};
+
+/**
+ * A software authenticator: the authenticator and the browser of a passkey
+ * ceremony in one object, for the passkey tests. It holds one credential.
+ */
+export type SoftwareAuthenticator = {
+  /** The credential id as the browser sends it: base64url. */
+  readonly credentialId: string;
+  /** The credential's public key as COSE bytes, which is what the server stores. */
+  readonly publicKey: Uint8Array;
+  /** The key type of the credential. */
+  readonly algorithm: SoftwareKeyAlgorithm;
+  /** The last signature counter reported. Set it to put the authenticator ahead of or behind the server. */
+  counter: number;
+  /**
+   * Answers `navigator.credentials.create()` for these options: the credential
+   * is made on the first call and the same one is made again on later calls, as
+   * an authenticator that ignores `excludeCredentials` would.
+   */
+  register(
+    options: PublicKeyCredentialCreationOptionsJSON,
+    tweaks?: RegistrationTweaks,
+  ): RegistrationResponseJSON;
+  /** Answers `navigator.credentials.get()` for these options, signing with the credential's key. */
+  authenticate(
+    options: PublicKeyCredentialRequestOptionsJSON,
+    tweaks?: AuthenticationTweaks,
+  ): AuthenticationResponseJSON;
+};
+
+/** A new key of `algorithm`: its public half as a COSE key, and a function that signs with the private half. */
+function newKey(algorithm: SoftwareKeyAlgorithm) {
+  const bytes = (value: string | undefined) => Buffer.from(value!, 'base64url');
+  if (algorithm === 'ES256') {
+    const { publicKey, privateKey } = generateKeyPairSync('ec', {
+      namedCurve: 'P-256',
+    });
+    const jwk = publicKey.export({ format: 'jwk' });
+    return {
+      // COSE_Key: kty 2 (EC2), alg -7 (ES256), crv 1 (P-256), x, y. The keys are
+      // in the order CTAP2 writes them: unsigned integers first, then negative.
+      cose: new Map<string | number, Cbor>([
+        [1, 2],
+        [3, -7],
+        [-1, 1],
+        [-2, bytes(jwk.x)],
+        [-3, bytes(jwk.y)],
+      ]),
+      sign: (data: Uint8Array) => sign('sha256', data, privateKey),
+    };
+  }
+  if (algorithm === 'RS256') {
+    const { publicKey, privateKey } = generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+    });
+    const jwk = publicKey.export({ format: 'jwk' });
+    return {
+      // kty 3 (RSA), alg -257 (RS256), n, e.
+      cose: new Map<string | number, Cbor>([
+        [1, 3],
+        [3, -257],
+        [-1, bytes(jwk.n)],
+        [-2, bytes(jwk.e)],
+      ]),
+      sign: (data: Uint8Array) => sign('sha256', data, privateKey),
+    };
+  }
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  const jwk = publicKey.export({ format: 'jwk' });
+  return {
+    // kty 1 (OKP), alg -8 (EdDSA), crv 6 (Ed25519), x.
+    cose: new Map<string | number, Cbor>([
+      [1, 1],
+      [3, -8],
+      [-1, 6],
+      [-2, bytes(jwk.x)],
+    ]),
+    sign: (data: Uint8Array) => sign(null, data, privateKey),
+  };
+}
+
+/**
+ * Makes a software authenticator for the passkey tests. It builds what a real
+ * authenticator and browser send (the client data JSON, the authenticator data,
+ * a CBOR attestation object with `fmt: 'none'` made with the library's own CBOR
+ * helper, and a signature made with Node's `crypto`), so a test runs the real
+ * WebAuthn verification and not a stub. Only tests import this file.
+ *
+ * `counts` is false for a device that always reports a counter of 0, as many
+ * synced passkeys do. `origin` is the site the browser is on. `credentialId`
+ * (base64url) is given to make a second authenticator with the same credential
+ * id, which a real one would never do.
+ */
+export function softwareAuthenticator(
+  settings: {
+    algorithm?: SoftwareKeyAlgorithm;
+    counts?: boolean;
+    origin?: string;
+    credentialId?: string;
+  } = {},
+): SoftwareAuthenticator {
+  const algorithm = settings.algorithm ?? 'ES256';
+  const counts = settings.counts ?? true;
+  const ownOrigin = settings.origin ?? 'https://osfpm.example.test';
+  const key = newKey(algorithm);
+  const publicKey = isoCBOR.encode(key.cose);
+  const credentialId =
+    settings.credentialId ?? randomBytes(32).toString('base64url');
+  let userHandle: string | undefined;
+
+  const authenticatorData = (input: {
+    rpId: string;
+    flags: number;
+    signCount: number;
+    attested: boolean;
+  }) => {
+    const counter = Buffer.alloc(4);
+    counter.writeUInt32BE(input.signCount);
+    const parts: Uint8Array[] = [
+      createHash('sha256').update(input.rpId, 'utf8').digest(),
+      Buffer.from([input.flags]),
+      counter,
+    ];
+    if (input.attested) {
+      const idBytes = Buffer.from(credentialId, 'base64url');
+      const idLength = Buffer.alloc(2);
+      idLength.writeUInt16BE(idBytes.length);
+      // The AAGUID is all zeros, as for an authenticator that does not say what it is.
+      parts.push(Buffer.alloc(16), idLength, idBytes, publicKey);
+    }
+    return Buffer.concat(parts);
+  };
+  const flagsOf = (tweaks: ResponseTweaks, attested: boolean) =>
+    (tweaks.userPresent === false ? 0 : FLAG_USER_PRESENT) |
+    (tweaks.userVerified === false ? 0 : FLAG_USER_VERIFIED) |
+    (attested ? FLAG_ATTESTED_CREDENTIAL_DATA : 0);
+  const clientData = (
+    type: 'webauthn.create' | 'webauthn.get',
+    challenge: string,
+    origin: string,
+  ) =>
+    Buffer.from(
+      JSON.stringify({ type, challenge, origin, crossOrigin: false }),
+      'utf8',
+    );
+
+  const authenticator: SoftwareAuthenticator = {
+    credentialId,
+    publicKey,
+    algorithm,
+    counter: 0,
+    register(options, tweaks = {}) {
+      userHandle = options.user.id;
+      const authData = authenticatorData({
+        rpId: tweaks.rpId ?? options.rp.id ?? '',
+        flags: flagsOf(tweaks, true),
+        signCount: authenticator.counter,
+        attested: true,
+      });
+      const attestationObject = isoCBOR.encode(
+        new Map<string | number, Cbor>([
+          ['fmt', 'none'],
+          ['attStmt', new Map<string | number, Cbor>()],
+          ['authData', authData],
+        ]),
+      );
+      return {
+        id: credentialId,
+        rawId: credentialId,
+        type: 'public-key',
+        authenticatorAttachment: 'platform',
+        clientExtensionResults: {},
+        response: {
+          clientDataJSON: clientData(
+            'webauthn.create',
+            tweaks.challenge ?? options.challenge,
+            tweaks.origin ?? ownOrigin,
+          ).toString('base64url'),
+          attestationObject:
+            Buffer.from(attestationObject).toString('base64url'),
+          transports: [...(tweaks.transports ?? ['internal'])],
+        },
+      };
+    },
+    authenticate(options, tweaks = {}) {
+      if (tweaks.signCount === undefined && counts) authenticator.counter += 1;
+      const signCount =
+        tweaks.signCount ?? (counts ? authenticator.counter : 0);
+      const authData = authenticatorData({
+        rpId: tweaks.rpId ?? options.rpId ?? '',
+        flags: flagsOf(tweaks, false),
+        signCount,
+        attested: false,
+      });
+      const clientDataJSON = clientData(
+        'webauthn.get',
+        tweaks.challenge ?? options.challenge,
+        tweaks.origin ?? ownOrigin,
+      );
+      const signed = Buffer.concat([
+        authData,
+        createHash('sha256').update(clientDataJSON).digest(),
+        // One byte more than the server will check, so the signature is well
+        // formed and still wrong.
+        ...(tweaks.wrongSignature === true ? [Buffer.from([0])] : []),
+      ]);
+      const handle =
+        tweaks.userHandle === undefined ? userHandle : tweaks.userHandle;
+      return {
+        id: credentialId,
+        rawId: credentialId,
+        type: 'public-key',
+        authenticatorAttachment: 'platform',
+        clientExtensionResults: {},
+        response: {
+          clientDataJSON: clientDataJSON.toString('base64url'),
+          authenticatorData: authData.toString('base64url'),
+          signature: key.sign(signed).toString('base64url'),
+          ...(handle === undefined || handle === null
+            ? {}
+            : { userHandle: handle }),
+        },
+      };
+    },
+  };
+  return authenticator;
 }
 
 /**

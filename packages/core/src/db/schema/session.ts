@@ -34,7 +34,7 @@ export type SessionMethod = (typeof SESSION_METHODS)[number];
  * Allowed values of `session.scope`: what the session may do. `full` is every
  * signed-in route. `recovery` is the session a recovery code opens: it may only
  * read who is signed in, sign out, and set a new way to sign in (a password,
- * an authenticator app, recovery codes, later a passkey), until the user does
+ * an authenticator app, recovery codes or a passkey), until the user does
  * one of those and the session becomes `full` (SC-10). The CHECK is built from
  * this list, so a new value needs a new migration.
  */

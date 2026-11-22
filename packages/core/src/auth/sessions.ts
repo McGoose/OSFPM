@@ -412,12 +412,12 @@ export async function revokeUserSessions(
 
 /**
  * What made a recovery session full, recorded in the audit event. A fixed list,
- * so a caller cannot put free text into the trail. The passkey registration of
- * P-03b3b adds its own value.
+ * so a caller cannot put free text into the trail.
  */
 export const SESSION_PROMOTION_TRIGGERS = [
   'password-set',
   'totp-confirmed',
+  'passkey-registered',
 ] as const;
 /** One value of `SESSION_PROMOTION_TRIGGERS`. */
 export type SessionPromotionTrigger =

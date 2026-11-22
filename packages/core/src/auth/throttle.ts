@@ -30,8 +30,17 @@ export const LOGIN_THROTTLE = {
   windowMs: 15 * 60 * 1000,
 } as const;
 
-/** The steps of a sign-in that check a secret, as the audit trail names them. */
-export const LOGIN_METHODS = ['password', 'totp', 'recovery'] as const;
+/**
+ * The steps of a sign-in that check a credential, as the audit trail names them.
+ * A passkey is not a guessable secret, so its failures never count toward the
+ * throttle (see `LOGIN_FAILURE_REASONS`).
+ */
+export const LOGIN_METHODS = [
+  'password',
+  'totp',
+  'recovery',
+  'passkey',
+] as const;
 /** One value of `LOGIN_METHODS`. */
 export type LoginMethod = (typeof LOGIN_METHODS)[number];
 
@@ -39,7 +48,12 @@ export type LoginMethod = (typeof LOGIN_METHODS)[number];
  * Why a sign-in step failed, a fixed list for the audit trail alone: the caller
  * is always told the same thing (`sign-in-failed`). `wrong-secret` is a wrong
  * password, code or recovery code, or an account with no password to check;
- * only that reason counts toward the throttle.
+ * only that reason counts toward the throttle. The last four are for a passkey:
+ * a credential the server does not have, one that was revoked, a response that
+ * does not verify (a wrong signature, origin, relying party or challenge, or no
+ * user verification), and a signature counter that went back, which can mean
+ * the key was cloned (SC-10). None of them is a guess at a secret, so none
+ * counts.
  */
 export const LOGIN_FAILURE_REASONS = [
   'unknown-account',
@@ -47,6 +61,10 @@ export const LOGIN_FAILURE_REASONS = [
   'throttled',
   'disabled',
   'challenge-invalid',
+  'unknown-credential',
+  'revoked',
+  'verification-failed',
+  'counter-regressed',
 ] as const;
 /** One value of `LOGIN_FAILURE_REASONS`. */
 export type LoginFailureReason = (typeof LOGIN_FAILURE_REASONS)[number];
