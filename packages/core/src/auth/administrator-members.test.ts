@@ -18,6 +18,7 @@ import {
   MEMBER_PERMISSIONS,
   MEMBERS_INVITE_PERMISSION,
   MEMBERS_READ_PERMISSION,
+  MEMBERS_RESET_ACCESS_PERMISSION,
 } from '../members/permissions.js';
 import { topUpAdministratorRoles } from './administrator-role.js';
 import { completeFirstRunSetup } from './first-run-setup.js';
@@ -28,7 +29,11 @@ const T0 = new Date('2026-03-02T09:00:00.000Z');
 const MINUTE = 60 * 1000;
 const at = (ms: number) => new Date(T0.getTime() + ms);
 
-const MEMBER_KEYS = [MEMBERS_READ_PERMISSION, MEMBERS_INVITE_PERMISSION];
+const MEMBER_KEYS = [
+  MEMBERS_READ_PERMISSION,
+  MEMBERS_INVITE_PERMISSION,
+  MEMBERS_RESET_ACCESS_PERMISSION,
+];
 
 describe.each(testTargets)(
   'the Administrator role and the members permissions on $name',
@@ -40,7 +45,7 @@ describe.each(testTargets)(
     let userId: string;
     let projectId: string;
 
-    /** The grants of the two members permissions the role holds. */
+    /** The grants of the members permissions the role holds. */
     const memberGrants = () =>
       database.db
         .select()
@@ -62,7 +67,7 @@ describe.each(testTargets)(
       const [administrator] = await database.db.select().from(role);
       administratorId = administrator!.id;
       // A database set up before this release: the Administrator role was made
-      // without the two permissions, which the catalogue did not have either.
+      // without the members permissions, which the catalogue did not have either.
       await withManagedRoleMaintenance(database.db, (tx) =>
         tx
           .delete(rolePermission)
@@ -97,7 +102,7 @@ describe.each(testTargets)(
       }
     });
 
-    it('declares both as ordinary organisation permissions of the members module, and has them in the registry', () => {
+    it('declares all three as ordinary organisation permissions of the members module, and has them in the registry', () => {
       expect(MEMBER_PERMISSIONS.map((entry) => entry.key).sort()).toEqual(
         [...MEMBER_KEYS].sort(),
       );
@@ -108,7 +113,7 @@ describe.each(testTargets)(
       expect(PERMISSION_LISTS).toContain(MEMBER_PERMISSIONS);
     });
 
-    it('gives the Administrator role both, all-projects, when the server starts again', async () => {
+    it('gives the Administrator role all three, all-projects, when the server starts again', async () => {
       // What start-up does: sync the catalogue, then top the role up.
       for (const list of PERMISSION_LISTS) {
         await syncPermissions(database.db, list);
@@ -116,7 +121,7 @@ describe.each(testTargets)(
       const added = await topUpAdministratorRoles(database.db, {
         now: at(MINUTE),
       });
-      expect(added).toBe(2);
+      expect(added).toBe(3);
       const grants = await memberGrants();
       expect(grants.map((grant) => grant.permissionKey).sort()).toEqual(
         [...MEMBER_KEYS].sort(),
@@ -131,7 +136,7 @@ describe.each(testTargets)(
       }
     });
 
-    it('makes the administrator hold both in the organisation, and in a project too', async () => {
+    it('makes the administrator hold all three in the organisation, and in a project too', async () => {
       for (const key of MEMBER_KEYS) {
         expect(
           await hasOrganisationPermission(
@@ -159,7 +164,7 @@ describe.each(testTargets)(
       expect(events[0]).toMatchObject({
         organisationId,
         targetId: administratorId,
-        details: { added: 2 },
+        details: { added: 3 },
       });
       expect(JSON.stringify(events)).not.toContain('members:');
     });
@@ -168,7 +173,7 @@ describe.each(testTargets)(
       expect(
         await topUpAdministratorRoles(database.db, { now: at(2 * MINUTE) }),
       ).toBe(0);
-      expect(await memberGrants()).toHaveLength(2);
+      expect(await memberGrants()).toHaveLength(3);
     });
   },
 );

@@ -12,7 +12,7 @@ The database layer and shared services of OSFPM: schema, write helper, access ch
 | `src/access/`       | Permission checks, `AccessDeniedError` and `PERMISSION_LISTS`, the registry of permissions        |
 | `src/auth/`         | Login building blocks (tokens, passwords, sessions, recovery and setup codes) and first-run setup |
 | `src/installation/` | This server's own id, from the single `installation` row                                          |
-| `src/members/`      | The permissions to list members and to invite people (`members:read`, `members:invite`)           |
+| `src/members/`      | The permissions to list members, invite people and reset locked-out members' access               |
 | `src/sensitive/`    | The one service that reads and writes crew personal data                                          |
 | `src/projects/`     | `createProject`, which also creates the main unit                                                 |
 | `src/retention/`    | Retention classes' shipped periods and the end-date calculation                                   |

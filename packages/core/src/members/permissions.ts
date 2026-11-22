@@ -18,7 +18,18 @@ export const MEMBERS_READ_PERMISSION = 'members:read';
  */
 export const MEMBERS_INVITE_PERMISSION = 'members:invite';
 
-/** Catalogue rows for the members module. Neither permission exposes sensitive data. */
+/**
+ * Permission to help a member who is locked out back in: to make a one-time reset
+ * link for them and to revoke it. Held in the organisation. Using the link signs
+ * the person in with a recovery-scope session and clears their password,
+ * authenticator and recovery codes (and their passkeys, when asked), so the
+ * services refuse to make one for anyone who holds more than the person making it
+ * (`createAccessReset`; SC-10, decision D-57). It does not reach crew personal data
+ * and shows nothing about how a member signs in.
+ */
+export const MEMBERS_RESET_ACCESS_PERMISSION = 'members:reset-access';
+
+/** Catalogue rows for the members module. None of the permissions exposes sensitive data. */
 export const MEMBER_PERMISSIONS: readonly PermissionDefinition[] = [
   {
     key: MEMBERS_READ_PERMISSION,
@@ -30,6 +41,12 @@ export const MEMBER_PERMISSIONS: readonly PermissionDefinition[] = [
     key: MEMBERS_INVITE_PERMISSION,
     module: 'members',
     description: 'Create, list and revoke invite links',
+    grantsSensitive: false,
+  },
+  {
+    key: MEMBERS_RESET_ACCESS_PERMISSION,
+    module: 'members',
+    description: 'Create and revoke reset links for members who are locked out',
     grantsSensitive: false,
   },
 ];
