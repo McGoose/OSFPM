@@ -10,8 +10,10 @@ import {
 import type { Database } from '@osfpm/core/src/db/client.js';
 import { newId } from '@osfpm/core/src/db/ids.js';
 import { API_PREFIX } from './api-version.js';
+import { relyingPartyFor } from '@osfpm/core/src/auth/passkeys.js';
 import { accountRoutes } from './auth/account-routes.js';
 import { loginRoutes } from './auth/login-routes.js';
+import { passkeyRoutes } from './auth/passkey-routes.js';
 import { authPlugin } from './auth/plugin.js';
 import {
   handleFrameworkError,
@@ -197,13 +199,24 @@ export function buildApp(options: BuildAppOptions) {
     done();
   });
 
+  // The site a passkey belongs to: the host name of the public URL is its id, and
+  // its origin is the only origin a passkey ceremony may happen on.
+  const relyingParty = relyingPartyFor(options.publicOrigin);
+
   // One plugin per area. A module adds its own line here.
   void app.register(healthRoutes, { prefix: API_PREFIX });
   void app.register(metaRoutes, { prefix: API_PREFIX });
   void app.register(openapiRoutes, { prefix: API_PREFIX });
   void app.register(authRoutes, { prefix: `${API_PREFIX}/auth` });
-  void app.register(loginRoutes, { prefix: `${API_PREFIX}/auth` });
+  void app.register(loginRoutes, {
+    prefix: `${API_PREFIX}/auth`,
+    relyingParty,
+  });
   void app.register(accountRoutes, { prefix: `${API_PREFIX}/auth` });
+  void app.register(passkeyRoutes, {
+    prefix: `${API_PREFIX}/auth`,
+    relyingParty,
+  });
 
   return app;
 }

@@ -2,8 +2,9 @@
  * How often one address may call a route that checks a secret (a password, a
  * passkey, a code, a token): at most `max` requests in `timeWindowMs`, counted
  * together across every route that sets the `authRateLimit` option. It is meant
- * for guessing: the three login routes (password, authenticator code and
- * recovery code) set it now, and the setup, passkey and invite routes will.
+ * for guessing: the five login routes (password, authenticator code, recovery
+ * code, and the two requests of a passkey sign-in) set it now, and the setup and
+ * invite routes will.
  * Kept here, in one place, until the limits can be changed in the
  * organisation's settings.
  *

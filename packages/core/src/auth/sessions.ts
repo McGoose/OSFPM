@@ -2,6 +2,7 @@ import { and, desc, eq, gt, isNull, lt, lte, ne, or, sql } from 'drizzle-orm';
 import {
   SESSION_METHODS,
   SESSION_SCOPES,
+  passkeyCredential,
   session,
   user,
   type SessionMethod,
@@ -63,6 +64,7 @@ export const SESSION_REVOKE_REASONS = [
   'password-changed',
   'totp-removed',
   'recovery-used',
+  'passkey-revoked',
   'admin-action',
 ] as const;
 /** One value of `SESSION_REVOKE_REASONS`. */
@@ -154,9 +156,15 @@ function checkedReason(reason: unknown): SessionRevokeReason {
  * `recovery` method: a session opened by a recovery code can only be made full
  * by `promoteSession`, never at creation (SC-10).
  *
+ * A `passkey` session names the passkey that opened it in `passkeyCredentialId`,
+ * which must be a live passkey of this user: revoking that passkey then ends the
+ * session (`revokePasskeySessions`). The id is never returned in the view.
+ *
  * @throws AuthInputError `method` when the method is not in `SESSION_METHODS`,
  * `scope` when the scope is not in `SESSION_SCOPES` or is `full` for a
- * `recovery` session.
+ * `recovery` session, `passkeyCredentialId` when it is given for a method other
+ * than `passkey`, or is not a live passkey of the user (another user's, revoked,
+ * or not there).
  * @throws AuthStateError `user-not-found` for an unknown or deleted user,
  * `user-disabled` for a disabled one, `installation-missing` before the
  * installation row exists.
@@ -169,12 +177,18 @@ export async function createSession(
     userId: string;
     method: SessionMethod;
     scope?: SessionScope;
+    /** The passkey that opened the session. Only for the `passkey` method. */
+    passkeyCredentialId?: string | null;
     userAgentSummary?: string | null;
     now: Date;
   },
 ): Promise<{ session: SessionView; token: string }> {
   if (!isOneOf(SESSION_METHODS, input.method)) {
     throw new AuthInputError('method');
+  }
+  const passkeyCredentialId = input.passkeyCredentialId ?? null;
+  if (passkeyCredentialId !== null && input.method !== 'passkey') {
+    throw new AuthInputError('passkeyCredentialId');
   }
   const scope =
     input.scope ?? (input.method === 'recovery' ? 'recovery' : 'full');
@@ -198,6 +212,22 @@ export async function createSession(
       const found = await lockUser(inner, input.userId);
       if (found.status === 'disabled')
         throw new AuthStateError('user-disabled');
+      if (passkeyCredentialId !== null) {
+        // Under the user lock, which a revocation of the passkey also takes, so
+        // the passkey cannot be revoked between this check and the insert.
+        const [live] = await inner
+          .select({ id: passkeyCredential.id })
+          .from(passkeyCredential)
+          .where(
+            and(
+              eq(passkeyCredential.id, passkeyCredentialId),
+              eq(passkeyCredential.userId, input.userId),
+              isNull(passkeyCredential.revokedAt),
+            ),
+          )
+          .limit(1);
+        if (live === undefined) throw new AuthInputError('passkeyCredentialId');
+      }
       const origin = await serverId(inner);
       const token = generateToken();
       const absolute = addMs(now, SESSION_DEFAULTS.absoluteMs);
@@ -216,6 +246,7 @@ export async function createSession(
           idleExpiresAt: idle,
           absoluteExpiresAt: absolute,
           userAgentSummary: summary,
+          passkeyCredentialId,
         })
         .returning(viewColumns);
       // A login is not an edit of the user, so `version` stays as it is.
@@ -411,13 +442,74 @@ export async function revokeUserSessions(
 }
 
 /**
+ * Revokes every live session that one passkey opened (`passkeyCredentialId` on
+ * the session), with the reason `passkey-revoked`: a passkey that is revoked may
+ * be one that was lost or copied, so a session it opened must not outlive it
+ * (SC-10, decision D-56). A session that has already expired or been revoked is
+ * left as it is, and so is every session the passkey did not open: the user's
+ * other sessions, whatever their method, stay. Returns how many were revoked.
+ * Audited as one `auth.sessions-revoked` event with the reason, the count and
+ * the passkey's row id (never its credential id), only when the count is above 0:
+ * the revocation of the passkey is audited by its own event. `userId` is the
+ * passkey's owner, and the event's target; `actor` defaults to that user.
+ *
+ * The caller (`revokePasskey`) holds the user's row lock, so a sign-in with the
+ * passkey cannot make a session between the revocation and this.
+ *
+ * @throws RecordWriteError when the database refuses a write.
+ */
+export function revokePasskeySessions(
+  tx: Tx,
+  passkeyId: string,
+  options: { userId: string; now: Date; actor?: AuthActor },
+): Promise<number> {
+  const { userId, now } = options;
+  return guardedAuth('session', 'update', () =>
+    tx.transaction(async (inner) => {
+      const revoked = await inner
+        .update(session)
+        .set({
+          revokedAt: now,
+          revokedReason: 'passkey-revoked',
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(session.passkeyCredentialId, passkeyId),
+            isNull(session.revokedAt),
+            gt(session.idleExpiresAt, now),
+            gt(session.absoluteExpiresAt, now),
+          ),
+        )
+        .returning({ id: session.id });
+      if (revoked.length > 0) {
+        await recordAuthAudit(inner, {
+          category: AUTH_AUDIT.sessionsRevoked,
+          action: 'revoke-all',
+          actor: options.actor ?? { type: 'user', id: userId },
+          targetType: 'user',
+          targetId: userId,
+          details: {
+            reason: 'passkey-revoked',
+            count: revoked.length,
+            passkeyId,
+          },
+          occurredAt: now,
+        });
+      }
+      return revoked.length;
+    }),
+  );
+}
+
+/**
  * What made a recovery session full, recorded in the audit event. A fixed list,
- * so a caller cannot put free text into the trail. The passkey registration of
- * P-03b3b adds its own value.
+ * so a caller cannot put free text into the trail.
  */
 export const SESSION_PROMOTION_TRIGGERS = [
   'password-set',
   'totp-confirmed',
+  'passkey-registered',
 ] as const;
 /** One value of `SESSION_PROMOTION_TRIGGERS`. */
 export type SessionPromotionTrigger =

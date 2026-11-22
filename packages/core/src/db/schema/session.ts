@@ -13,6 +13,7 @@ import {
   sqlList,
   timestamptz,
 } from '../columns.js';
+import { passkeyCredential } from './passkey-credential.js';
 import { user } from './user.js';
 
 /**
@@ -34,7 +35,7 @@ export type SessionMethod = (typeof SESSION_METHODS)[number];
  * Allowed values of `session.scope`: what the session may do. `full` is every
  * signed-in route. `recovery` is the session a recovery code opens: it may only
  * read who is signed in, sign out, and set a new way to sign in (a password,
- * an authenticator app, recovery codes, later a passkey), until the user does
+ * an authenticator app, recovery codes or a passkey), until the user does
  * one of those and the session becomes `full` (SC-10). The CHECK is built from
  * this list, so a new value needs a new migration.
  */
@@ -48,6 +49,11 @@ export type SessionScope = (typeof SESSION_SCOPES)[number];
  * Retention class `transient`: a working row that cleanup removes, and the
  * audit log is the record. `cleanupEndedSessions` deletes a session once it has
  * ended, by revocation or by going idle, for `SESSION_DEFAULTS.endedKeepMs`.
+ *
+ * `passkey_credential_id` is the passkey that opened the session, set only for a
+ * session of method `passkey` (`session_passkey_credential_check`) and NULL for
+ * every other, so that revoking a passkey can end the sessions it opened
+ * (`revokePasskeySessions`; SC-10, decision D-56).
  *
  * A security table: only `auth/sessions.ts` writes it, directly, and each
  * security-relevant change is audited, not change-logged (CLAUDE.md, Data
@@ -67,6 +73,7 @@ export const session = securityTable(
     revokedAt: timestamptz('revoked_at'),
     revokedReason: text('revoked_reason'),
     userAgentSummary: text('user_agent_summary'),
+    passkeyCredentialId: uuid('passkey_credential_id'),
   },
   (t) => [
     foreignKey({
@@ -74,8 +81,19 @@ export const session = securityTable(
       columns: [t.userId],
       foreignColumns: [user.id],
     }),
+    foreignKey({
+      name: 'session_passkey_credential_fk',
+      columns: [t.passkeyCredentialId],
+      foreignColumns: [passkeyCredential.id],
+    }),
     unique('session_token_hash_unique').on(t.tokenHash),
     index('session_user_idx').on(t.userId),
+    // Revoking a passkey finds the sessions it opened by it.
+    index('session_passkey_credential_idx').on(t.passkeyCredentialId),
+    check(
+      'session_passkey_credential_check',
+      sql`${t.passkeyCredentialId} is null or ${t.method} = 'passkey'`,
+    ),
     check(
       'session_method_check',
       sql`${t.method} in (${sqlList(SESSION_METHODS)})`,

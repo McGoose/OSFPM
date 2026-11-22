@@ -7,7 +7,9 @@ import {
   seedInstallation,
   seedPassword,
   seedTotp,
+  softwareAuthenticator,
   totpCodeAt,
+  type SoftwareAuthenticator,
 } from '@osfpm/core/src/auth/test-support.js';
 import { LOGIN_THROTTLE } from '@osfpm/core/src/auth/throttle.js';
 import { migrate } from '@osfpm/core/src/db/migrate.js';
@@ -75,7 +77,7 @@ describe.each(testTargets)(
 
     /** One request. Notes every session token it sets, and keeps its body for the scans. */
     async function call(
-      method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+      method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
       path: string,
       options: { token?: string; payload?: unknown } = {},
     ) {
@@ -389,6 +391,123 @@ describe.each(testTargets)(
         ).toBe(false);
       }
       expect(everything.split(secretB)).toHaveLength(2);
+    });
+
+    it('keeps challenges, credential ids, public keys and signatures out of logs, events and error bodies, in the passkey flows', async () => {
+      type Creation = Parameters<SoftwareAuthenticator['register']>[0];
+      type Request = Parameters<SoftwareAuthenticator['authenticate']>[0];
+      const user = await seedActiveUser(ctx.database);
+      await seedPassword(ctx.database, user, PASSWORD_A);
+      const email = await emailOf(ctx.database, user);
+      const authenticator = softwareAuthenticator();
+      const publicKey = Buffer.from(authenticator.publicKey);
+      // A credential id is in the options of a later registration, to be excluded,
+      // so it may be in a body; it is in no log line, event or error body. A
+      // public key and a signature are in no response at all.
+      know({
+        label: 'a credential id',
+        value: authenticator.credentialId,
+        shownOnce: true,
+      });
+      know({ label: 'a public key', value: publicKey.toString('base64url') });
+      know({ label: 'a public key', value: publicKey.toString('hex') });
+      const challenges: string[] = [];
+      const knowChallenge = (value: string) => {
+        challenges.push(value);
+        know({ label: 'a challenge', value, shownOnce: true });
+      };
+      await sweep('before the passkey flows');
+
+      // Flow 1: sign in with the password, to have a session.
+      const signedIn = await call('POST', '/login/password', {
+        payload: { email, password: PASSWORD_A },
+      });
+      expect(signedIn.statusCode).toBe(200);
+      const token = (signedIn.headers['set-cookie'] as string)
+        .slice(SESSION_COOKIE.length + 1)
+        .split(';', 1)[0]!;
+
+      // Flow 2: add a passkey, once refused (wrong origin) and once for good.
+      const register = async (tweaks: { origin?: string }) => {
+        const started = await call('POST', '/passkeys/register/options', {
+          token,
+        });
+        const { challenge, options } = body<{
+          challenge: string;
+          options: Creation;
+        }>(started);
+        knowChallenge(challenge);
+        return call('POST', '/passkeys/register/verify', {
+          token,
+          payload: {
+            challenge,
+            response: authenticator.register(options, tweaks),
+            deviceName: 'Production office laptop',
+          },
+        });
+      };
+      expect(
+        (await register({ origin: 'https://evil.example.test' })).statusCode,
+      ).toBe(422);
+      await sweep('a refused passkey registration');
+      const added = await register({});
+      expect(added.statusCode).toBe(201);
+      const { id: passkeyId } = body<{ id: string }>(added);
+      await sweep('adding a passkey');
+
+      // Flow 3: sign in with it, and fail to: a wrong signature, and a counter
+      // that went back.
+      const signIn = async (tweaks: {
+        wrongSignature?: boolean;
+        signCount?: number;
+      }) => {
+        const started = await call('POST', '/login/passkey/options');
+        const { challenge, options } = body<{
+          challenge: string;
+          options: Request;
+        }>(started);
+        knowChallenge(challenge);
+        const response = authenticator.authenticate(options, tweaks);
+        know({ label: 'a signature', value: response.response.signature });
+        return call('POST', '/login/passkey/verify', {
+          payload: { challenge, response },
+        });
+      };
+      expect((await signIn({ wrongSignature: true })).statusCode).toBe(401);
+      await sweep('a passkey sign-in with a wrong signature');
+      const good = await signIn({});
+      expect(good.statusCode).toBe(200);
+      await sweep('a passkey sign-in');
+      expect((await signIn({ signCount: 1 })).statusCode).toBe(401);
+      await sweep('a passkey sign-in with a counter that went back');
+
+      // Flow 4: list, rename, revoke, and ask after one that is not there.
+      expect((await call('GET', '/passkeys', { token })).statusCode).toBe(200);
+      expect(
+        (
+          await call('PATCH', `/passkeys/${passkeyId}`, {
+            token,
+            payload: { deviceName: 'Camera trailer tablet' },
+          })
+        ).statusCode,
+      ).toBe(200);
+      expect(
+        (await call('DELETE', `/passkeys/${passkeyId}`, { token })).statusCode,
+      ).toBe(204);
+      expect(
+        (await call('DELETE', `/passkeys/${passkeyId}`, { token })).statusCode,
+      ).toBe(404);
+      await sweep('listing, renaming and revoking a passkey');
+
+      // At the end, in every table: a challenge is stored only as a hash. The
+      // credential id and the key are stored on purpose, in `passkey_credential`.
+      const everything = await everyRowAsText(ctx.database);
+      expect(challenges.length).toBeGreaterThanOrEqual(5);
+      for (const challenge of challenges) {
+        expect(everything, 'a table holds a challenge').not.toContain(
+          challenge,
+        );
+      }
     });
   },
 );

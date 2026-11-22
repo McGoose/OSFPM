@@ -20,7 +20,12 @@ export type AuthStateReason =
   /** There is no `installation` row yet, so this server has no id to stamp on rows. */
   | 'installation-missing'
   /** Setup is complete, so no setup code can be issued. */
-  | 'setup-complete';
+  | 'setup-complete'
+  /**
+   * The passkey is the user's last way to sign in: they have no password and no
+   * other live passkey, so revoking it would lock them out (SC-10, decision D-56).
+   */
+  | 'last-sign-in-method';
 
 /**
  * The operation cannot run in the current state (see `AuthStateReason`).

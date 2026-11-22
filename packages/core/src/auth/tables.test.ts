@@ -176,6 +176,67 @@ describe.each(testTargets)('login tables on $name', (target) => {
       );
       expect(failure).toEqual(check('session_scope_check'));
     });
+
+    describe('passkey_credential_id', () => {
+      const passkeyOf = async (owner: string) => {
+        const [row] = await db()
+          .insert(passkeyCredential)
+          .values({
+            originServer: origin,
+            userId: owner,
+            credentialId: `session-credential-${next()}`,
+            publicKey: Buffer.from([0x04]),
+          })
+          .returning({ id: passkeyCredential.id });
+        return row!.id;
+      };
+
+      it('is NULL unless set, and is accepted on a passkey session', async () => {
+        const [plain] = await db()
+          .insert(session)
+          .values(sessionValues())
+          .returning();
+        expect(plain!.passkeyCredentialId).toBeNull();
+        const passkeyCredentialId = await passkeyOf(userId);
+        const [tied] = await db()
+          .insert(session)
+          .values(sessionValues({ method: 'passkey', passkeyCredentialId }))
+          .returning();
+        expect(tied!.passkeyCredentialId).toBe(passkeyCredentialId);
+      });
+
+      it('is refused on a session of any other method', async () => {
+        const passkeyCredentialId = await passkeyOf(userId);
+        for (const method of [
+          'password',
+          'password+totp',
+          'recovery',
+          'setup',
+          'invite',
+        ] as const) {
+          const failure = await failureOf(() =>
+            db()
+              .insert(session)
+              .values(sessionValues({ method, passkeyCredentialId })),
+          );
+          expect(failure).toEqual(check('session_passkey_credential_check'));
+        }
+      });
+
+      it('must name a passkey that exists', async () => {
+        const failure = await failureOf(() =>
+          db()
+            .insert(session)
+            .values(
+              sessionValues({
+                method: 'passkey',
+                passkeyCredentialId: newId(),
+              }),
+            ),
+        );
+        expect(failure).toEqual(foreignKey('session_passkey_credential_fk'));
+      });
+    });
   });
 
   describe('login_challenge', () => {
@@ -207,6 +268,45 @@ describe.each(testTargets)('login tables on $name', (target) => {
           .values(challengeValues({ kind: 'sms' as never })),
       );
       expect(failure).toEqual(check('login_challenge_kind_check'));
+    });
+
+    it('accepts every kind on the list, and no user only for a passkey sign-in', async () => {
+      for (const kind of ['totp', 'webauthn-register'] as const) {
+        await db().insert(loginChallenge).values(challengeValues({ kind }));
+      }
+      // A passkey sign-in is not tied to a user until the credential is known.
+      await db()
+        .insert(loginChallenge)
+        .values(challengeValues({ kind: 'webauthn-login', userId: null }));
+      // ... and may be, which the rule does not forbid.
+      await db()
+        .insert(loginChallenge)
+        .values(challengeValues({ kind: 'webauthn-login' }));
+    });
+
+    it('rejects a challenge with no user unless it is a passkey sign-in', async () => {
+      for (const kind of ['totp', 'webauthn-register'] as const) {
+        const failure = await failureOf(() =>
+          db()
+            .insert(loginChallenge)
+            .values(challengeValues({ kind, userId: null })),
+        );
+        expect(failure).toEqual(check('login_challenge_user_check'));
+      }
+    });
+
+    it('rejects removing the user from a challenge that needs one', async () => {
+      const [row] = await db()
+        .insert(loginChallenge)
+        .values(challengeValues({ kind: 'webauthn-register' }))
+        .returning({ id: loginChallenge.id });
+      const failure = await failureOf(() =>
+        db()
+          .update(loginChallenge)
+          .set({ userId: null })
+          .where(eq(loginChallenge.id, row!.id)),
+      );
+      expect(failure).toEqual(check('login_challenge_user_check'));
     });
 
     it('rejects a negative attempt count', async () => {

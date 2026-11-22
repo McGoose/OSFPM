@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@electric-sql/pglite": "0.5.16",
+    "@simplewebauthn/server": "14.1.0",
     "drizzle-orm": "0.45.4",
     "otpauth": "9.6.0",
     "pg": "8.23.1",

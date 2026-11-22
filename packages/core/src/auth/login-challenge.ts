@@ -1,10 +1,5 @@
-import { and, eq, lte, sql } from 'drizzle-orm';
-import {
-  LOGIN_CHALLENGE_KINDS,
-  loginChallenge,
-  user,
-  type LoginChallengeKind,
-} from '../db/schema/index.js';
+import { and, eq, gt, isNull, lte, sql } from 'drizzle-orm';
+import { loginChallenge, user } from '../db/schema/index.js';
 import type { Tx } from '../db/write.js';
 import { AuthInputError, AuthStateError } from './errors.js';
 import { SESSION_USER_COLUMNS, type SessionUser } from './sessions.js';
@@ -25,15 +20,19 @@ import { generateToken, hashToken } from './tokens.js';
 import { verifyTotp } from './totp.js';
 
 /**
- * The half-finished sign-in between the password step and the authenticator
- * code (SC-10). A user who gave the right password and has a confirmed
- * authenticator gets a challenge, not a session; the session is made only when
- * the challenge comes back with a right code. The token is random, shown once,
- * and only its SHA-256 hash is stored, as for a session. `login_challenge` is a
- * security table: written here, directly, and the steps around it are audited
- * instead of change-logged (CLAUDE.md, Data rules). These functions check no
- * permission: the route that calls them has already decided who may. Pass the
- * transaction handle, and the time as `now`.
+ * The one-time challenges of a sign-in (SC-10). The first is the half-finished
+ * sign-in between the password step and the authenticator code: a user who gave
+ * the right password and has a confirmed authenticator gets a challenge, not a
+ * session; the session is made only when the challenge comes back with a right
+ * code. The other two are the challenges a passkey signs, one for adding a
+ * passkey and one for signing in with it (`createPasskeyChallenge` and
+ * `usePasskeyChallenge`, called by `auth/passkeys.ts`). The token is random,
+ * shown once, and only its SHA-256 hash is stored, as for a session.
+ * `login_challenge` is a security table: written here and in `auth/passkeys.ts`,
+ * directly, and the steps around it are audited instead of change-logged
+ * (CLAUDE.md, Data rules). These functions check no permission: the route that
+ * calls them has already decided who may. Pass the transaction handle, and the
+ * time as `now`.
  */
 
 /**
@@ -50,6 +49,15 @@ export const LOGIN_CHALLENGE = {
 const MAX_TOKEN_LENGTH = 256;
 
 /**
+ * The kinds `createLoginChallenge` makes: the step that follows a right
+ * password. The passkey kinds are made by `createPasskeyChallenge`, whose token
+ * is also the value the authenticator signs, and are never the second step of a
+ * password sign-in, so `createLoginChallenge` refuses them and
+ * `consumeLoginChallenge` ignores them.
+ */
+const SECOND_STEP_KINDS = ['totp'] as const;
+
+/**
  * Starts the second step of a sign-in for a user whose password was right:
  * makes a challenge that ends in `LOGIN_CHALLENGE.ttlMs` and returns its raw
  * token once. Only its hash is stored. First it deletes the user's expired
@@ -59,7 +67,8 @@ const MAX_TOKEN_LENGTH = 256;
  * alone: asking for new ones does not give more guesses, because the throttle
  * counts every wrong code of the account, whichever challenge it came with.
  *
- * @throws AuthInputError `kind` when it is not in `LOGIN_CHALLENGE_KINDS`.
+ * @throws AuthInputError `kind` when it is not a second step of a password
+ * sign-in (`totp`): the passkey kinds have their own functions.
  * @throws AuthStateError `user-not-found` for an unknown or deleted user,
  * `user-disabled` for a disabled one, `installation-missing` before the
  * installation row exists.
@@ -69,9 +78,9 @@ const MAX_TOKEN_LENGTH = 256;
 export async function createLoginChallenge(
   tx: Tx,
   userId: string,
-  options: { kind: LoginChallengeKind; now: Date },
+  options: { kind: (typeof SECOND_STEP_KINDS)[number]; now: Date },
 ): Promise<{ challenge: string; expiresAt: Date }> {
-  if (!isOneOf(LOGIN_CHALLENGE_KINDS, options.kind)) {
+  if (!isOneOf(SECOND_STEP_KINDS, options.kind)) {
     throw new AuthInputError('kind');
   }
   const { now } = options;
@@ -104,6 +113,121 @@ export async function createLoginChallenge(
       return { challenge: token, expiresAt };
     }),
   );
+}
+
+/** The kinds of challenge a passkey step makes (see `LOGIN_CHALLENGE_KINDS`). */
+const PASSKEY_KINDS = ['webauthn-register', 'webauthn-login'] as const;
+
+/**
+ * Makes the one-time challenge of a passkey step and returns its raw token once.
+ * The token is 32 random bytes, base64url, and is also the WebAuthn challenge:
+ * the caller gives it to the library as the value the authenticator signs, and
+ * the client sends it back in the signed response. Only its SHA-256 hash is
+ * stored, like any other challenge. It ends in `LOGIN_CHALLENGE.ttlMs` and works
+ * once (`usePasskeyChallenge`).
+ *
+ * A registration challenge (`webauthn-register`) belongs to a signed-in user. A
+ * sign-in challenge (`webauthn-login`) belongs to no one, because the person has
+ * given no address: it is tied to a user only when a credential is found. For a
+ * user's challenge, their expired ones are deleted first, so a user's rows do
+ * not pile up; that is housekeeping and writes no audit event. The expired
+ * sign-in challenges that belong to no one are left to `cleanupExpiredChallenges`,
+ * for the worker. The caller has already judged the user, and calls this inside
+ * the transaction that holds the user's row lock.
+ *
+ * @throws AuthStateError `installation-missing` before the installation row
+ * exists.
+ * @throws RecordWriteError when the database refuses a write; it carries the
+ * SQLSTATE and constraint name only, never the token or its hash.
+ */
+export function createPasskeyChallenge(
+  tx: Tx,
+  input:
+    | { kind: 'webauthn-register'; userId: string; now: Date }
+    | { kind: 'webauthn-login'; userId: null; now: Date },
+): Promise<{ token: string; expiresAt: Date }> {
+  const { now, userId } = input;
+  return guardedAuth('login_challenge', 'insert', async () => {
+    if (userId !== null) {
+      await tx
+        .delete(loginChallenge)
+        .where(
+          and(
+            eq(loginChallenge.userId, userId),
+            lte(loginChallenge.expiresAt, now),
+          ),
+        );
+    }
+    const token = generateToken();
+    const expiresAt = new Date(now.getTime() + LOGIN_CHALLENGE.ttlMs);
+    await tx.insert(loginChallenge).values({
+      originServer: await serverId(tx),
+      userId,
+      kind: input.kind,
+      tokenHash: hashToken(token),
+      expiresAt,
+      createdAt: now,
+      updatedAt: now,
+    });
+    return { token, expiresAt };
+  });
+}
+
+/**
+ * Uses up a passkey challenge. True when `token` is the token of a live
+ * challenge of this `kind` and of this `userId` (`null` for a sign-in, which has
+ * none), and it is now used; false for every other case: a token that is
+ * unknown, already used, past its time (a challenge that ends at `now` is
+ * expired), of another kind or of another user, or not shaped like a token. One
+ * answer for all, so a caller learns nothing about which. A challenge of another
+ * user or kind is not touched.
+ *
+ * It is one conditional UPDATE, so two requests with one token use it once, and
+ * the row stays locked until the caller's transaction ends. The caller counts
+ * any attempt that gets this far as the challenge's one use, whether or not the
+ * response then verifies, and returns the refusal instead of throwing it, so the
+ * transaction commits and the challenge stays used.
+ *
+ * @throws AuthInputError `kind` when it is not a passkey kind.
+ * @throws RecordWriteError when the database fails; it carries the SQLSTATE
+ * only, never the token or its hash.
+ */
+export async function usePasskeyChallenge(
+  tx: Tx,
+  input: {
+    token: string;
+    kind: (typeof PASSKEY_KINDS)[number];
+    userId: string | null;
+    now: Date;
+  },
+): Promise<boolean> {
+  if (!isOneOf(PASSKEY_KINDS, input.kind)) throw new AuthInputError('kind');
+  const { token, now, userId } = input;
+  if (
+    typeof token !== 'string' ||
+    token.length === 0 ||
+    token.length > MAX_TOKEN_LENGTH
+  ) {
+    return false;
+  }
+  return guardedAuth('login_challenge', 'update', async () => {
+    const [used] = await tx
+      .update(loginChallenge)
+      .set({ usedAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(loginChallenge.tokenHash, hashToken(token)),
+          eq(loginChallenge.kind, input.kind),
+          userId === null
+            ? isNull(loginChallenge.userId)
+            : eq(loginChallenge.userId, userId),
+          isNull(loginChallenge.usedAt),
+          gt(loginChallenge.expiresAt, now),
+        ),
+      )
+      .returning({ id: loginChallenge.id });
+    return used !== undefined;
+  });
 }
 
 /**
@@ -188,12 +312,25 @@ export async function consumeLoginChallenge(
   const hash = hashToken(token);
 
   return guardedAuth('login_challenge', 'update', async () => {
-    const [found] = await tx
+    // Only a `totp` challenge: a passkey challenge has its own token and its own
+    // steps, and one of them must never pass for the second step of a password
+    // sign-in, which would let it skip the password.
+    const [first] = await tx
       .select({ userId: loginChallenge.userId })
       .from(loginChallenge)
-      .where(eq(loginChallenge.tokenHash, hash))
+      .where(
+        and(
+          eq(loginChallenge.tokenHash, hash),
+          eq(loginChallenge.kind, 'totp'),
+        ),
+      )
       .limit(1);
-    if (found === undefined) return fail(tx, null, 'challenge-invalid');
+    // A `totp` row always has a user (`login_challenge_user_check`); the test
+    // is for the type, which says the column may be NULL.
+    if (first === undefined || first.userId === null) {
+      return fail(tx, null, 'challenge-invalid');
+    }
+    const found = { userId: first.userId };
 
     return tx.transaction(async (inner) => {
       let locked: { status: string };
@@ -214,7 +351,12 @@ export async function consumeLoginChallenge(
           attempts: loginChallenge.attempts,
         })
         .from(loginChallenge)
-        .where(eq(loginChallenge.tokenHash, hash))
+        .where(
+          and(
+            eq(loginChallenge.tokenHash, hash),
+            eq(loginChallenge.kind, 'totp'),
+          ),
+        )
         .limit(1)
         .for('update');
       if (

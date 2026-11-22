@@ -21,12 +21,16 @@ const bytea = customType<{ data: Buffer; driverData: Uint8Array }>({
 
 /**
  * A WebAuthn passkey of a user. `credential_id` is base64url and unique across
- * the installation. `public_key` is the credential's public key, which is not
- * a secret. `sign_count` is the last counter the authenticator reported.
+ * the installation, revoked ones included. `public_key` is the credential's
+ * public key as the COSE bytes the authenticator made, which is not a secret.
+ * `sign_count` is the last counter the authenticator reported. A revoked passkey
+ * is kept, with `revoked_at` set, so its credential id stays taken and the trail
+ * can still name it.
  *
- * A security table: written only by the auth service, directly, and each
- * change is audited (CLAUDE.md, Data rules). No service writes it yet; WebAuthn
- * comes in a later prompt.
+ * A security table: written only by the auth service (`auth/passkeys.ts`),
+ * directly, and each change is audited (CLAUDE.md, Data rules). Its columns hold
+ * no secret, but the credential id, the key and the sign count are never
+ * returned to a client after registration, logged or put in an audit event.
  */
 export const passkeyCredential = securityTable(
   'passkey_credential',

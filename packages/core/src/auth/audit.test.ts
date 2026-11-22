@@ -9,6 +9,15 @@ import {
   consumeLoginChallenge,
   createLoginChallenge,
 } from './login-challenge.js';
+import {
+  finishPasskeyLogin,
+  finishPasskeyRegistration,
+  relyingPartyFor,
+  renamePasskey,
+  revokePasskey,
+  startPasskeyLogin,
+  startPasskeyRegistration,
+} from './passkeys.js';
 import { hashPassword } from './password.js';
 import { setPassword, verifyPasswordLogin } from './password-service.js';
 import { consumeRecoveryCode, generateRecoveryCodes } from './recovery.js';
@@ -30,7 +39,9 @@ import {
   seedActiveUser,
   seedInstallation,
   seedPassword,
+  softwareAuthenticator,
   totpCodeAt,
+  type SoftwareAuthenticator,
 } from './test-support.js';
 import { confirmTotp, enrolTotp, removeTotp } from './totp.js';
 import { hashHumanCode, hashToken, normaliseHumanCode } from './tokens.js';
@@ -59,12 +70,20 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
 
   /** Everything every flow below made secret: the raw values, and the hashes of them. */
   const secrets: string[] = [];
+  /**
+   * What the passkey flow stores on purpose, in `passkey_credential`, and so what
+   * only the audit trail must not hold: credential ids, public keys, names.
+   */
+  const passkeyMaterial: string[] = [];
 
   let userId: string;
   let adminId: string;
   let firstSessionId: string;
   let keptSessionId: string;
   let setupCodeId: string;
+  let passkeyUserId: string;
+  let firstPasskeyId: string;
+  let revokedPasskeyId: string;
 
   beforeAll(async () => {
     userId = await seedActiveUser(database);
@@ -238,6 +257,80 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
     // A password hash for the same sweep for secrets.
     const password = 'correct-horse-battery-harbour';
     secrets.push(password, await hashPassword(password));
+
+    // Passkeys, for one more user: add two, sign in with one, fail once, name one
+    // anew, and revoke it.
+    passkeyUserId = await seedActiveUser(database);
+    const relyingParty = relyingPartyFor('https://osfpm.example.test');
+    const register = async (
+      authenticator: SoftwareAuthenticator,
+      deviceName: string,
+      now: Date,
+    ) => {
+      const started = await startPasskeyRegistration(db(), {
+        userId: passkeyUserId,
+        relyingParty,
+        now,
+      });
+      const finished = await finishPasskeyRegistration(db(), {
+        userId: passkeyUserId,
+        relyingParty,
+        challenge: started.challenge,
+        response: authenticator.register(started.options),
+        deviceName,
+        now,
+      });
+      if (!finished.ok) throw new Error('the passkey was not registered');
+      secrets.push(started.challenge, hashToken(started.challenge));
+      passkeyMaterial.push(
+        authenticator.credentialId,
+        Buffer.from(authenticator.publicKey).toString('base64url'),
+        Buffer.from(authenticator.publicKey).toString('hex'),
+        deviceName,
+      );
+      return finished.passkey.id;
+    };
+    const laptop = softwareAuthenticator();
+    const tablet = softwareAuthenticator();
+    firstPasskeyId = await register(
+      laptop,
+      'Production office laptop',
+      at(30 * MINUTE),
+    );
+    revokedPasskeyId = await register(
+      tablet,
+      'Camera trailer tablet',
+      at(31 * MINUTE),
+    );
+    const signIn = async (tweaks: { wrongSignature?: boolean }, now: Date) => {
+      const started = await startPasskeyLogin(db(), { relyingParty, now });
+      const response = laptop.authenticate(started.options, tweaks);
+      await finishPasskeyLogin(db(), {
+        relyingParty,
+        challenge: started.challenge,
+        response,
+        now,
+      });
+      secrets.push(
+        started.challenge,
+        hashToken(started.challenge),
+        response.response.signature,
+      );
+    };
+    await signIn({}, at(32 * MINUTE));
+    await signIn({ wrongSignature: true }, at(33 * MINUTE));
+    await renamePasskey(db(), {
+      userId: passkeyUserId,
+      passkeyId: revokedPasskeyId,
+      deviceName: 'Location scout phone',
+      now: at(34 * MINUTE),
+    });
+    passkeyMaterial.push('Location scout phone');
+    await revokePasskey(db(), {
+      userId: passkeyUserId,
+      passkeyId: revokedPasskeyId,
+      now: at(35 * MINUTE),
+    });
   });
 
   it('records every kind of action the services take', async () => {
@@ -374,6 +467,83 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
       targetType: 'setup_code',
       targetId: setupCodeId,
     });
+  });
+
+  it('records each passkey registration started and finished, for its user, with the passkey as the target of the second', async () => {
+    const started = (
+      await byCategory(AUTH_AUDIT.passkeyRegistrationStarted)
+    ).filter((event) => event.targetId === passkeyUserId);
+    expect(started).toHaveLength(2);
+    expect(started[0]).toMatchObject({
+      action: 'start',
+      actorType: 'user',
+      actorId: passkeyUserId,
+      targetType: 'user',
+      details: null,
+    });
+    const registered = (await byCategory(AUTH_AUDIT.passkeyRegistered)).filter(
+      (event) => event.actorId === passkeyUserId,
+    );
+    expect(registered.map((event) => event.targetId).sort()).toEqual(
+      [firstPasskeyId, revokedPasskeyId].sort(),
+    );
+    expect(registered[0]).toMatchObject({
+      action: 'register',
+      actorType: 'user',
+      targetType: 'passkey_credential',
+      details: null,
+    });
+  });
+
+  it('records a passkey sign-in, and a failed one with its reason class only', async () => {
+    const passed = (await byCategory(AUTH_AUDIT.loginStepPassed)).filter(
+      (event) => event.targetId === passkeyUserId,
+    );
+    expect(passed).toHaveLength(1);
+    expect(passed[0]).toMatchObject({
+      action: 'pass',
+      actorId: passkeyUserId,
+      details: { method: 'passkey', next: 'session' },
+    });
+    const failed = (await byCategory(AUTH_AUDIT.loginStepFailed)).filter(
+      (event) => event.targetId === passkeyUserId,
+    );
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({
+      action: 'fail',
+      actorType: 'system',
+      actorId: null,
+      details: { method: 'passkey', reason: 'verification-failed' },
+    });
+  });
+
+  it('records the rename and the revocation of a passkey, with the passkey as the target', async () => {
+    const [renamed] = await byCategory(AUTH_AUDIT.passkeyRenamed);
+    expect(renamed).toMatchObject({
+      action: 'rename',
+      actorId: passkeyUserId,
+      targetType: 'passkey_credential',
+      targetId: revokedPasskeyId,
+      details: null,
+    });
+    const [revoked] = await byCategory(AUTH_AUDIT.passkeyRevoked);
+    expect(revoked).toMatchObject({
+      action: 'revoke',
+      actorId: passkeyUserId,
+      targetType: 'passkey_credential',
+      targetId: revokedPasskeyId,
+      details: null,
+    });
+  });
+
+  it('holds no credential id, public key or passkey name in any event', async () => {
+    // These are stored on purpose, in `passkey_credential`, so only the trail is
+    // searched: the hashes and raw tokens are checked below, in every table.
+    expect(passkeyMaterial.length).toBeGreaterThan(8);
+    const text = JSON.stringify(await db().select().from(auditEvent));
+    for (const material of passkeyMaterial) {
+      expect(text, material.slice(0, 4)).not.toContain(material);
+    }
   });
 
   it('writes no event for an attempt that changed nothing', async () => {
