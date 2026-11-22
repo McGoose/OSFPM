@@ -571,5 +571,30 @@ describe.each(testTargets)(
         }
       });
     });
+
+    describe('the strict limit', () => {
+      it.each(['password', 'totp', 'recovery'])(
+        'counts /login/%s with the other two: eleven requests in a minute from one address are too many',
+        async (route) => {
+          const address = freshAddress();
+          const routes = ['password', 'totp', 'recovery'];
+          // A request that fails validation is counted too: the limit comes first.
+          for (let i = 0; i < AUTH_RATE_LIMIT.max; i += 1) {
+            const response = await post(
+              routes[i % 3]!,
+              {},
+              { remoteAddress: address },
+            );
+            expect(response.statusCode).toBe(400);
+          }
+          const limited = await post(route, {}, { remoteAddress: address });
+          expect(limited.statusCode).toBe(429);
+          expect(limited.json<{ code: string }>().code).toBe('rate-limited');
+          expect(Number(limited.headers['retry-after'])).toBeGreaterThanOrEqual(
+            1,
+          );
+        },
+      );
+    });
   },
 );
