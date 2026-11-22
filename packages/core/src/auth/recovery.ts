@@ -3,7 +3,7 @@ import { recoveryCode, user } from '../db/schema/index.js';
 import type { Tx } from '../db/write.js';
 import { AuthStateError } from './errors.js';
 import { findLoginUser } from './login-user.js';
-import type { SessionUser } from './sessions.js';
+import { revokeUserSessions, type SessionUser } from './sessions.js';
 import {
   AUTH_AUDIT,
   guardedAuth,
@@ -161,6 +161,12 @@ export type RecoveryLoginResult =
  * locked while the attempt is judged, so two guesses at once cannot both get
  * past the count.
  *
+ * A right code also ends every live session of the user, with the reason
+ * `recovery-used` and one `auth.sessions-revoked` event (`revokeUserSessions`):
+ * the person came in this way because they lost a way to sign in, so a session
+ * that is not theirs may be live. It happens before the session the route makes
+ * next, so that one is not ended, and a failed attempt ends nothing.
+ *
  * A failure is audited as `auth.login-step-failed` with the method
  * `recovery` and a reason class, never the typed address or code. An unknown
  * address is audited with no actor and no target. It is returned, not thrown,
@@ -217,6 +223,10 @@ export async function verifyRecoveryLogin(
         now,
       });
       if (!used) return fail(inner, found.id, 'wrong-secret');
+      await revokeUserSessions(inner, found.id, {
+        reason: 'recovery-used',
+        now,
+      });
       return { ok: true, user: found };
     }),
   );

@@ -13,6 +13,7 @@ import {
   createLoginChallenge,
 } from '@osfpm/core/src/auth/login-challenge.js';
 import { generateRecoveryCodes } from '@osfpm/core/src/auth/recovery.js';
+import { createSession } from '@osfpm/core/src/auth/sessions.js';
 import { AUTH_AUDIT } from '@osfpm/core/src/auth/shared.js';
 import {
   emailOf,
@@ -522,6 +523,56 @@ describe.each(testTargets)(
         });
         expect((await post('recovery', { email, code })).statusCode).toBe(200);
         expectSignInFailed(await post('recovery', { email, code }));
+      });
+
+      it('ends the user’s other sessions: only the new recovery session is live, and another user’s sessions stay', async () => {
+        const { userId, email } = await userWithPassword();
+        const [code] = await generateRecoveryCodes(db(), userId, {
+          now: new Date(),
+        });
+        const older = await createSession(db(), {
+          userId,
+          method: 'password',
+          now: new Date(),
+        });
+        const someoneElse = await createSession(db(), {
+          userId: await seedActiveUser(ctx.database),
+          method: 'password',
+          now: new Date(),
+        });
+        expect((await meWith(older.token)).statusCode).toBe(200);
+
+        const response = await post('recovery', { email, code });
+        expect(response.statusCode).toBe(200);
+        expect((await meWith(older.token)).statusCode).toBe(401);
+        expect((await meWith(tokenIn(response)!)).statusCode).toBe(200);
+        expect((await meWith(someoneElse.token)).statusCode).toBe(200);
+        const live = (await sessionsOf(userId)).filter(
+          (row) => row.revokedAt === null,
+        );
+        expect(live).toHaveLength(1);
+        expect(live[0]).toMatchObject({
+          method: 'recovery',
+          scope: 'recovery',
+        });
+        const revoked = (await sessionsOf(userId)).find(
+          (row) => row.id === older.session.id,
+        );
+        expect(revoked!.revokedReason).toBe('recovery-used');
+      });
+
+      it('ends no session when the sign-in fails', async () => {
+        const { userId, email } = await userWithPassword();
+        await generateRecoveryCodes(db(), userId, { now: new Date() });
+        const older = await createSession(db(), {
+          userId,
+          method: 'password',
+          now: new Date(),
+        });
+        expectSignInFailed(
+          await post('recovery', { email, code: 'AAAA-AAAA-AAAA-AAAA' }),
+        );
+        expect((await meWith(older.token)).statusCode).toBe(200);
       });
 
       it('answers every failure with the same 401 body, and sets no cookie', async () => {
