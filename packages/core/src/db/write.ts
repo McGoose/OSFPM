@@ -455,6 +455,9 @@ export function insertRecord<T extends TenantTable>(
         deletedBy: null,
       } as Row;
       const projectId = await resolveProjectId(inner, table, full);
+      if ((table as PgTable) === organisation) {
+        await inner.execute(sql`select pg_advisory_xact_lock(424242)`);
+      }
       // A new project is its own project, and a new organisation is its own
       // tenant with a sequence of its own (`project_id` NULL). `change_seq`
       // references both, so their counter can only be taken once the row exists.

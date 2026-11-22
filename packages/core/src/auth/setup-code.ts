@@ -44,8 +44,7 @@ export async function lockInstallation(tx: Tx) {
       setupCompletedAt: installation.setupCompletedAt,
     })
     .from(installation)
-    .limit(1)
-    .for('update');
+    .limit(1);
   return row;
 }
 
