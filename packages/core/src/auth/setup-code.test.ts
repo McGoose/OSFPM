@@ -9,12 +9,14 @@ import {
   testTargets,
 } from '../db/test-support.js';
 import {
+  checkSetupCode,
   cleanupSetupCodes,
   consumeSetupCode,
   isSetupComplete,
   issueSetupCode,
   SETUP_CODE_LIFETIME_MS,
 } from './setup-code.js';
+import { AUTH_AUDIT } from './shared.js';
 import { everyRowAsText, seedInstallation } from './test-support.js';
 import { hashHumanCode } from './tokens.js';
 
@@ -181,6 +183,104 @@ describe.each(testTargets)('setup codes on $name', (target) => {
       expect(await consumeSetupCode(db(), 'AAAA-AAAA-AAAA-AAAA', T0)).toBe(
         false,
       );
+    });
+  });
+
+  describe('checkSetupCode', () => {
+    const failures = async () =>
+      (await db().select().from(auditEvent)).filter(
+        (event) => event.category === AUTH_AUDIT.setupCheckFailed,
+      );
+
+    /** One refused check: false, and one new event from the system with the purpose and nothing typed. */
+    async function expectRefused(typed: unknown, now: Date) {
+      const before = (await failures()).length;
+      expect(await checkSetupCode(db(), typed as string, now)).toBe(false);
+      const events = await failures();
+      expect(events).toHaveLength(before + 1);
+      const event = events.at(-1)!;
+      expect(event).toMatchObject({
+        action: 'check',
+        actorType: 'system',
+        actorId: null,
+        targetType: null,
+        targetId: null,
+        details: { purpose: 'check' },
+      });
+      expect(event.occurredAt).toEqual(now);
+      if (typeof typed === 'string' && typed.length > 0) {
+        expect(JSON.stringify(event)).not.toContain(typed);
+      }
+    }
+
+    it('says the live code is live, writes no event, and does not spend it', async () => {
+      const code = await issueSetupCode(db(), T0);
+      const before = (await failures()).length;
+      expect(await checkSetupCode(db(), code, at(HOUR))).toBe(true);
+      expect(await checkSetupCode(db(), code, at(HOUR))).toBe(true);
+      expect((await failures()).length).toBe(before);
+      const [row] = await stored();
+      expect(row!.usedAt).toBeNull();
+      // Checking is not using: the code still works.
+      expect(await consumeSetupCode(db(), code, at(2 * HOUR))).toBe(true);
+    });
+
+    it('accepts any spelling of the code', async () => {
+      const code = await issueSetupCode(db(), T0);
+      expect(
+        await checkSetupCode(
+          db(),
+          code.toLowerCase().replaceAll('-', ' '),
+          at(HOUR),
+        ),
+      ).toBe(true);
+    });
+
+    it('works until the expiry, and not at it', async () => {
+      const code = await issueSetupCode(db(), T0);
+      expect(await checkSetupCode(db(), code, at(24 * HOUR - 1))).toBe(true);
+      await expectRefused(code, at(24 * HOUR));
+    });
+
+    it('refuses an unknown code', async () => {
+      await issueSetupCode(db(), T0);
+      await expectRefused('AAAA-AAAA-AAAA-AAAA', at(HOUR));
+    });
+
+    it('refuses anything that is not shaped like a code, each time with one event', async () => {
+      await issueSetupCode(db(), T0);
+      for (const bad of [
+        '',
+        'short',
+        '__proto__',
+        'x'.repeat(5000),
+        null,
+        42,
+        undefined,
+      ]) {
+        await expectRefused(bad, at(HOUR));
+      }
+    });
+
+    it('refuses a code a newer one replaced, and a code that was used', async () => {
+      const first = await issueSetupCode(db(), T0);
+      const second = await issueSetupCode(db(), at(HOUR));
+      await expectRefused(first, at(2 * HOUR));
+      expect(await consumeSetupCode(db(), second, at(2 * HOUR))).toBe(true);
+      await expectRefused(second, at(3 * HOUR));
+    });
+
+    it('refuses once setup is complete, even for a code that is still live', async () => {
+      const code = await issueSetupCode(db(), T0);
+      await db()
+        .update(installation)
+        .set({ setupCompletedAt: at(HOUR) });
+      await expectRefused(code, at(2 * HOUR));
+    });
+
+    it('refuses before the installation row exists', async () => {
+      await db().delete(installation);
+      await expectRefused('AAAA-AAAA-AAAA-AAAA', T0);
     });
   });
 
