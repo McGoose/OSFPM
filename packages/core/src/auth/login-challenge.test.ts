@@ -5,6 +5,7 @@ import { auditEvent, loginChallenge } from '../db/schema/index.js';
 import { createMigratedDatabase, testTargets } from '../db/test-support.js';
 import { AuthInputError, AuthStateError } from './errors.js';
 import {
+  cleanupExpiredChallenges,
   consumeLoginChallenge,
   createLoginChallenge,
   LOGIN_CHALLENGE,
@@ -128,6 +129,100 @@ describe.each(testTargets)('login challenges on $name', (target) => {
         .from(loginChallenge)
         .where(eq(loginChallenge.userId, userId));
       expect(rows).toEqual([]);
+    });
+  });
+
+  describe('the expired challenges of the user', () => {
+    const rowsOfUser = (userId: string) =>
+      db()
+        .select()
+        .from(loginChallenge)
+        .where(eq(loginChallenge.userId, userId));
+
+    it('makes a new challenge delete the user’s expired ones, used or not, and keep the live ones and other users’', async () => {
+      const userId = await seedActiveUser(database);
+      const secret = await seedTotp(database, userId, { now: T0 });
+      const other = await seedActiveUser(database);
+      const unused = await createLoginChallenge(db(), userId, {
+        kind: 'totp',
+        now: T0,
+      });
+      const used = await createLoginChallenge(db(), userId, {
+        kind: 'totp',
+        now: T0,
+      });
+      await consumeLoginChallenge(db(), {
+        challenge: used.challenge,
+        code: totpCodeAt(secret, T0),
+        now: T0,
+      });
+      const live = await createLoginChallenge(db(), userId, {
+        kind: 'totp',
+        now: at(4 * MINUTE),
+      });
+      // Another user's, long expired.
+      const theirs = await createLoginChallenge(db(), other, {
+        kind: 'totp',
+        now: T0,
+      });
+      expect(await rowsOfUser(userId)).toHaveLength(3);
+
+      const fresh = await createLoginChallenge(db(), userId, {
+        kind: 'totp',
+        now: at(6 * MINUTE),
+      });
+      expect(await rowOf(unused.challenge)).toBeUndefined();
+      expect(await rowOf(used.challenge)).toBeUndefined();
+      expect(await rowOf(live.challenge)).toBeDefined();
+      expect(await rowOf(fresh.challenge)).toBeDefined();
+      expect(await rowsOfUser(userId)).toHaveLength(2);
+      // Only the user's own: another user's expired row is for the cleanup.
+      expect(await rowOf(theirs.challenge)).toBeDefined();
+    });
+
+    it('deletes a challenge that ends at that very moment, and keeps one that ends a millisecond later', async () => {
+      const userId = await seedActiveUser(database);
+      const exact = await createLoginChallenge(db(), userId, {
+        kind: 'totp',
+        now: T0,
+      });
+      const justAfter = await createLoginChallenge(db(), userId, {
+        kind: 'totp',
+        now: at(1),
+      });
+      await createLoginChallenge(db(), userId, {
+        kind: 'totp',
+        now: at(LOGIN_CHALLENGE.ttlMs),
+      });
+      expect(await rowOf(exact.challenge)).toBeUndefined();
+      expect(await rowOf(justAfter.challenge)).toBeDefined();
+    });
+
+    it('deletes nothing when the user is refused', async () => {
+      const userId = await seedActiveUser(database);
+      const old = await createLoginChallenge(db(), userId, {
+        kind: 'totp',
+        now: T0,
+      });
+      await setUserStatus(database, userId, 'disabled');
+      await expect(
+        createLoginChallenge(db(), userId, {
+          kind: 'totp',
+          now: at(10 * MINUTE),
+        }),
+      ).rejects.toBeInstanceOf(AuthStateError);
+      expect(await rowOf(old.challenge)).toBeDefined();
+    });
+
+    it('writes no audit event for it: it is housekeeping, not a security change', async () => {
+      const userId = await seedActiveUser(database);
+      const before = (await db().select().from(auditEvent)).length;
+      await createLoginChallenge(db(), userId, { kind: 'totp', now: T0 });
+      await createLoginChallenge(db(), userId, {
+        kind: 'totp',
+        now: at(10 * MINUTE),
+      });
+      expect((await db().select().from(auditEvent)).length).toBe(before);
     });
   });
 
@@ -396,3 +491,100 @@ describe.each(testTargets)('login challenges on $name', (target) => {
     });
   });
 });
+
+describe.each(testTargets)(
+  'cleaning up expired login challenges on $name',
+  (target) => {
+    let database: Database;
+    let cleanup: () => Promise<void>;
+
+    beforeAll(async () => {
+      ({ database, cleanup } = await createMigratedDatabase(target));
+      await seedInstallation(database);
+    });
+    afterAll(async () => {
+      await cleanup();
+    });
+
+    const db = () => database.db;
+    const rows = () => db().select().from(loginChallenge);
+
+    it('deletes every expired challenge of every user, used or not, keeps the live ones, and says how many it deleted', async () => {
+      const first = await seedActiveUser(database);
+      const second = await seedActiveUser(database);
+      const secret = await seedTotp(database, first, { now: T0 });
+      const make = (userId: string, now: Date) =>
+        createLoginChallenge(db(), userId, { kind: 'totp', now });
+      // Expired, for two users, one of them used; and two that are still live,
+      // one of them used.
+      await make(first, T0);
+      await make(second, T0);
+      const usedExpired = await make(first, T0);
+      await consumeLoginChallenge(db(), {
+        challenge: usedExpired.challenge,
+        code: totpCodeAt(secret, T0),
+        now: T0,
+      });
+      const live = await make(second, at(4 * MINUTE));
+      const usedLive = await make(first, at(4 * MINUTE));
+      await consumeLoginChallenge(db(), {
+        challenge: usedLive.challenge,
+        code: totpCodeAt(secret, at(4 * MINUTE)),
+        now: at(4 * MINUTE),
+      });
+      // Making a challenge for a user cleans that user's own, so the cleanup
+      // starts from what is left.
+      const before = await rows();
+      const expired = before.filter(
+        (row) => row.expiresAt.getTime() <= at(6 * MINUTE).getTime(),
+      );
+      expect(expired.length).toBeGreaterThan(0);
+
+      expect(await cleanupExpiredChallenges(db(), at(6 * MINUTE))).toBe(
+        expired.length,
+      );
+      const after = await rows();
+      expect(after).toHaveLength(before.length - expired.length);
+      expect(
+        after.every(
+          (row) => row.expiresAt.getTime() > at(6 * MINUTE).getTime(),
+        ),
+      ).toBe(true);
+      expect(after.map((row) => row.tokenHash)).toContain(
+        hashToken(live.challenge),
+      );
+      expect(after.map((row) => row.tokenHash)).toContain(
+        hashToken(usedLive.challenge),
+      );
+      // Nothing is left to do.
+      expect(await cleanupExpiredChallenges(db(), at(6 * MINUTE))).toBe(0);
+    });
+
+    it('deletes a challenge that ends at that very moment and no other', async () => {
+      const userId = await seedActiveUser(database);
+      const ends = await createLoginChallenge(db(), userId, {
+        kind: 'totp',
+        now: at(20 * MINUTE),
+      });
+      const later = await createLoginChallenge(db(), userId, {
+        kind: 'totp',
+        now: at(20 * MINUTE + 1),
+      });
+      const now = at(20 * MINUTE + LOGIN_CHALLENGE.ttlMs);
+      expect(await cleanupExpiredChallenges(db(), now)).toBeGreaterThanOrEqual(
+        1,
+      );
+      const remaining = (await rows()).map((row) => row.tokenHash);
+      expect(remaining).not.toContain(hashToken(ends.challenge));
+      expect(remaining).toContain(hashToken(later.challenge));
+    });
+
+    it('answers 0 when nothing has expired, and writes no audit event whatever it deletes', async () => {
+      const events = (await db().select().from(auditEvent)).length;
+      expect(await cleanupExpiredChallenges(db(), at(-60 * MINUTE))).toBe(0);
+      await cleanupExpiredChallenges(db(), at(24 * 60 * MINUTE));
+      expect((await db().select().from(auditEvent)).length).toBe(events);
+      expect(await rows()).toEqual([]);
+    });
+  },
+);

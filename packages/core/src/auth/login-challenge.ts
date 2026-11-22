@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, lte, sql } from 'drizzle-orm';
 import {
   LOGIN_CHALLENGE_KINDS,
   loginChallenge,
@@ -52,7 +52,10 @@ const MAX_TOKEN_LENGTH = 256;
 /**
  * Starts the second step of a sign-in for a user whose password was right:
  * makes a challenge that ends in `LOGIN_CHALLENGE.ttlMs` and returns its raw
- * token once. Only its hash is stored. Older challenges of the user are left
+ * token once. Only its hash is stored. First it deletes the user's expired
+ * challenges, used or not (one that ends at `now` is expired), so a user's rows
+ * do not pile up; that is housekeeping and writes no audit event, and nothing is
+ * deleted when the call is refused. Challenges that have not expired are left
  * alone: asking for new ones does not give more guesses, because the throttle
  * counts every wrong code of the account, whichever challenge it came with.
  *
@@ -78,6 +81,15 @@ export async function createLoginChallenge(
       if (locked.status === 'disabled') {
         throw new AuthStateError('user-disabled');
       }
+      // After the user is judged, so a refused call deletes nothing.
+      await inner
+        .delete(loginChallenge)
+        .where(
+          and(
+            eq(loginChallenge.userId, userId),
+            lte(loginChallenge.expiresAt, now),
+          ),
+        );
       const token = generateToken();
       const expiresAt = new Date(now.getTime() + LOGIN_CHALLENGE.ttlMs);
       await inner.insert(loginChallenge).values({
@@ -92,6 +104,31 @@ export async function createLoginChallenge(
       return { challenge: token, expiresAt };
     }),
   );
+}
+
+/**
+ * Deletes every login challenge that has expired, of every user, used or not,
+ * and returns how many it deleted. A challenge that ends at `now` is expired
+ * (`expires_at <= now`), as `consumeLoginChallenge` counts it; one that is used
+ * but still has time left stays until it expires. For the worker, which calls it
+ * on a schedule: `createLoginChallenge` only cleans the user it makes a
+ * challenge for, so the rows of a user who never signs in again are left to
+ * this. It is housekeeping, not a security change, so it writes no audit event,
+ * and it checks no permission: only the worker calls it. One DELETE, so it is
+ * atomic, and it takes no user lock: a challenge it deletes was refused by
+ * `consumeLoginChallenge` already.
+ *
+ * @throws RecordWriteError when the database refuses the delete; it carries the
+ * SQLSTATE and constraint name only.
+ */
+export function cleanupExpiredChallenges(tx: Tx, now: Date): Promise<number> {
+  return guardedAuth('login_challenge', 'delete', async () => {
+    const deleted = await tx
+      .delete(loginChallenge)
+      .where(lte(loginChallenge.expiresAt, now))
+      .returning({ id: loginChallenge.id });
+    return deleted.length;
+  });
 }
 
 /**
