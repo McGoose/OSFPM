@@ -1,10 +1,5 @@
 import { and, eq, lte, sql } from 'drizzle-orm';
-import {
-  LOGIN_CHALLENGE_KINDS,
-  loginChallenge,
-  user,
-  type LoginChallengeKind,
-} from '../db/schema/index.js';
+import { loginChallenge, user } from '../db/schema/index.js';
 import type { Tx } from '../db/write.js';
 import { AuthInputError, AuthStateError } from './errors.js';
 import { SESSION_USER_COLUMNS, type SessionUser } from './sessions.js';
@@ -50,6 +45,15 @@ export const LOGIN_CHALLENGE = {
 const MAX_TOKEN_LENGTH = 256;
 
 /**
+ * The kinds `createLoginChallenge` makes: the step that follows a right
+ * password. The passkey kinds are made by `auth/passkeys.ts`, whose challenge is
+ * also the value the authenticator signs, and are never the second step of a
+ * password sign-in, so this function refuses them and
+ * `consumeLoginChallenge` ignores them.
+ */
+const SECOND_STEP_KINDS = ['totp'] as const;
+
+/**
  * Starts the second step of a sign-in for a user whose password was right:
  * makes a challenge that ends in `LOGIN_CHALLENGE.ttlMs` and returns its raw
  * token once. Only its hash is stored. First it deletes the user's expired
@@ -59,7 +63,8 @@ const MAX_TOKEN_LENGTH = 256;
  * alone: asking for new ones does not give more guesses, because the throttle
  * counts every wrong code of the account, whichever challenge it came with.
  *
- * @throws AuthInputError `kind` when it is not in `LOGIN_CHALLENGE_KINDS`.
+ * @throws AuthInputError `kind` when it is not a second step of a password
+ * sign-in (`totp`): the passkey kinds have their own functions.
  * @throws AuthStateError `user-not-found` for an unknown or deleted user,
  * `user-disabled` for a disabled one, `installation-missing` before the
  * installation row exists.
@@ -69,9 +74,9 @@ const MAX_TOKEN_LENGTH = 256;
 export async function createLoginChallenge(
   tx: Tx,
   userId: string,
-  options: { kind: LoginChallengeKind; now: Date },
+  options: { kind: (typeof SECOND_STEP_KINDS)[number]; now: Date },
 ): Promise<{ challenge: string; expiresAt: Date }> {
-  if (!isOneOf(LOGIN_CHALLENGE_KINDS, options.kind)) {
+  if (!isOneOf(SECOND_STEP_KINDS, options.kind)) {
     throw new AuthInputError('kind');
   }
   const { now } = options;
@@ -188,12 +193,25 @@ export async function consumeLoginChallenge(
   const hash = hashToken(token);
 
   return guardedAuth('login_challenge', 'update', async () => {
-    const [found] = await tx
+    // Only a `totp` challenge: a passkey challenge has its own token and its own
+    // steps, and one of them must never pass for the second step of a password
+    // sign-in, which would let it skip the password.
+    const [first] = await tx
       .select({ userId: loginChallenge.userId })
       .from(loginChallenge)
-      .where(eq(loginChallenge.tokenHash, hash))
+      .where(
+        and(
+          eq(loginChallenge.tokenHash, hash),
+          eq(loginChallenge.kind, 'totp'),
+        ),
+      )
       .limit(1);
-    if (found === undefined) return fail(tx, null, 'challenge-invalid');
+    // A `totp` row always has a user (`login_challenge_user_check`); the test
+    // is for the type, which says the column may be NULL.
+    if (first === undefined || first.userId === null) {
+      return fail(tx, null, 'challenge-invalid');
+    }
+    const found = { userId: first.userId };
 
     return tx.transaction(async (inner) => {
       let locked: { status: string };
@@ -214,7 +232,12 @@ export async function consumeLoginChallenge(
           attempts: loginChallenge.attempts,
         })
         .from(loginChallenge)
-        .where(eq(loginChallenge.tokenHash, hash))
+        .where(
+          and(
+            eq(loginChallenge.tokenHash, hash),
+            eq(loginChallenge.kind, 'totp'),
+          ),
+        )
         .limit(1)
         .for('update');
       if (
