@@ -54,6 +54,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 ## Code rules
 
 - Routes validate input with Zod schemas and never return core errors directly; the error table in `packages/api/src/errors.ts` maps them.
+- The API package never imports drizzle-orm; it calls core services.
 - Every new route declares `auth`; the default is `required`. Cookie requests that change data must pass the Origin check.
 - Status codes: 401 = not signed in; 403 = signed in but not allowed; 404 for by-id lookups where existence must not leak.
 - Login failures always answer the same 401 `sign-in-failed`; never reveal which part failed.
@@ -83,6 +84,7 @@ Only the fictional demo production _The Last Withdrawal_ or invented data. Never
 - Branches are named `type/pNN-slug`, for example `docs/p01b-claude-md`.
 - British spelling (organisation, licence) in code identifiers and docs.
 - Run the full test suite before every commit.
+- Tests that pin a list (audit categories, routes, errors, throttle) change in the same commit as the list.
 - Before deliberately breaking code to check that a test catches it, commit or stash your work first, and undo the break with git, not by copying a backup file back.
 - If `node -v` does not match `.nvmrc`, or `pnpm` will not run, stop and tell the maintainer. Do not run the tools another way.
 - Ask before any change not listed in the prompt, and before adding any dependency the prompt does not name.
