@@ -25,6 +25,7 @@ import {
 } from './login-challenge.js';
 import {
   promoteSession,
+  revokePasskeySessions,
   SESSION_USER_COLUMNS,
   type SessionUser,
 } from './sessions.js';
@@ -485,10 +486,17 @@ export function startPasskeyLogin(
 
 /**
  * The answer of `finishPasskeyLogin`. A failure is one value whatever the cause;
- * the reason is for the audit trail alone.
+ * the reason is for the audit trail alone. A success names the user and the
+ * passkey's row id (never its credential id), which the caller gives to
+ * `createSession` so that revoking the passkey ends the session.
  */
 export type PasskeyLoginResult =
-  { readonly ok: true; readonly user: SessionUser } | { readonly ok: false };
+  | {
+      readonly ok: true;
+      readonly user: SessionUser;
+      readonly passkeyId: string;
+    }
+  | { readonly ok: false };
 
 /** A credential id is at most 1023 bytes (WebAuthn, section 4), which is 1364 characters in base64url. */
 const MAX_CREDENTIAL_ID_LENGTH = 1400;
@@ -506,8 +514,9 @@ function claimedCredentialId(response: unknown): string | null {
 /**
  * Finishes a sign-in with a passkey: takes the challenge `startPasskeyLogin`
  * made and the browser's response, finds the credential by its id, and returns
- * the user it belongs to when everything is right. Creating the session is the
- * caller's next move.
+ * the user it belongs to, and the passkey, when everything is right. Creating the
+ * session is the caller's next move: it passes the passkey to `createSession`, so
+ * that revoking the passkey ends the session.
  *
  * Returns `{ ok: false }` for every other case, one value for all: a challenge
  * that is unknown, used, expired or of another kind; a credential the server
@@ -678,7 +687,7 @@ export function finishPasskeyLogin(
         details: { method: 'passkey', next: 'session' },
         occurredAt: now,
       });
-      return { ok: true, user: signedIn! };
+      return { ok: true, user: signedIn!, passkeyId: row.id };
     }),
   );
 }
@@ -768,7 +777,10 @@ export async function renamePasskey(
  * when the user has no live passkey with this id (someone else's, none, or one
  * already revoked), with one answer for all. The owner is checked here, so no
  * caller has to look first. Audited as `auth.passkey-revoked` with the passkey
- * as its target. It ends no session: a user ends those on their own.
+ * as its target. It also ends every live session the passkey opened, which may
+ * include the one making the request (`revokePasskeySessions`, reason
+ * `passkey-revoked`, one more event), and no other session: a passkey that is
+ * revoked may have been lost or copied, so what it opened must not outlive it.
  *
  * Every user keeps at least one way to sign in (SC-10, decision D-56): a user
  * who has no password and no other live passkey cannot revoke their last one, and
@@ -842,6 +854,7 @@ export function revokePasskey(
         targetId: passkeyId,
         occurredAt: now,
       });
+      await revokePasskeySessions(inner, passkeyId, { userId, now });
       return true;
     }),
   );

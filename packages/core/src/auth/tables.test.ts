@@ -176,6 +176,67 @@ describe.each(testTargets)('login tables on $name', (target) => {
       );
       expect(failure).toEqual(check('session_scope_check'));
     });
+
+    describe('passkey_credential_id', () => {
+      const passkeyOf = async (owner: string) => {
+        const [row] = await db()
+          .insert(passkeyCredential)
+          .values({
+            originServer: origin,
+            userId: owner,
+            credentialId: `session-credential-${next()}`,
+            publicKey: Buffer.from([0x04]),
+          })
+          .returning({ id: passkeyCredential.id });
+        return row!.id;
+      };
+
+      it('is NULL unless set, and is accepted on a passkey session', async () => {
+        const [plain] = await db()
+          .insert(session)
+          .values(sessionValues())
+          .returning();
+        expect(plain!.passkeyCredentialId).toBeNull();
+        const passkeyCredentialId = await passkeyOf(userId);
+        const [tied] = await db()
+          .insert(session)
+          .values(sessionValues({ method: 'passkey', passkeyCredentialId }))
+          .returning();
+        expect(tied!.passkeyCredentialId).toBe(passkeyCredentialId);
+      });
+
+      it('is refused on a session of any other method', async () => {
+        const passkeyCredentialId = await passkeyOf(userId);
+        for (const method of [
+          'password',
+          'password+totp',
+          'recovery',
+          'setup',
+          'invite',
+        ] as const) {
+          const failure = await failureOf(() =>
+            db()
+              .insert(session)
+              .values(sessionValues({ method, passkeyCredentialId })),
+          );
+          expect(failure).toEqual(check('session_passkey_credential_check'));
+        }
+      });
+
+      it('must name a passkey that exists', async () => {
+        const failure = await failureOf(() =>
+          db()
+            .insert(session)
+            .values(
+              sessionValues({
+                method: 'passkey',
+                passkeyCredentialId: newId(),
+              }),
+            ),
+        );
+        expect(failure).toEqual(foreignKey('session_passkey_credential_fk'));
+      });
+    });
   });
 
   describe('login_challenge', () => {

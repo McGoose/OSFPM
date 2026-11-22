@@ -2,7 +2,13 @@ import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
-import { auditEvent, session, user } from '../db/schema/index.js';
+import { ORIGIN } from '../access/test-fixtures.js';
+import {
+  auditEvent,
+  passkeyCredential,
+  session,
+  user,
+} from '../db/schema/index.js';
 import { createMigratedDatabase, testTargets } from '../db/test-support.js';
 import { AuthInputError, AuthStateError } from './errors.js';
 import {
@@ -12,6 +18,7 @@ import {
   enableUser,
   listUserSessions,
   promoteSession,
+  revokePasskeySessions,
   revokeSession,
   revokeUserSessions,
   SESSION_DEFAULTS,
@@ -503,6 +510,186 @@ describe.each(testTargets)('sessions on $name', (target) => {
       await expect(
         revokeUserSessions(db(), userId, { reason: 'nope' as never, now: T0 }),
       ).rejects.toBeInstanceOf(AuthInputError);
+    });
+  });
+
+  describe('sessions opened by a passkey', () => {
+    /** A passkey row for `owner`, inserted as a fixture does. */
+    const passkeyOf = async (
+      owner: string,
+      options: { revoked?: boolean } = {},
+    ) => {
+      const [row] = await db()
+        .insert(passkeyCredential)
+        .values({
+          originServer: ORIGIN,
+          userId: owner,
+          credentialId: `credential-${newId()}`,
+          publicKey: Buffer.from([0x04]),
+          revokedAt: options.revoked === true ? T0 : null,
+        })
+        .returning({ id: passkeyCredential.id });
+      return row!.id;
+    };
+    const sessionOfPasskey = (
+      userId: string,
+      passkeyCredentialId: string,
+      now = T0,
+    ) =>
+      createSession(db(), {
+        userId,
+        method: 'passkey',
+        passkeyCredentialId,
+        now,
+      });
+    const revokeFor = (userId: string, passkeyId: string, now = at(MINUTE)) =>
+      revokePasskeySessions(db(), passkeyId, { userId, now });
+    const passkeyEvents = async (userId: string) =>
+      (await db().select().from(auditEvent)).filter(
+        (event) =>
+          event.category === AUTH_AUDIT.sessionsRevoked &&
+          event.targetId === userId &&
+          (event.details as { reason?: string }).reason === 'passkey-revoked',
+      );
+
+    describe('createSession', () => {
+      it('stores the passkey on the row, and does not return it in the view', async () => {
+        const userId = await seedActiveUser(database);
+        const passkeyId = await passkeyOf(userId);
+        const { session: created } = await sessionOfPasskey(userId, passkeyId);
+        expect((await sessionRow(created.id)).passkeyCredentialId).toBe(
+          passkeyId,
+        );
+        expect(created).not.toHaveProperty('passkeyCredentialId');
+      });
+
+      it('leaves it NULL for a session that names none, of any method', async () => {
+        const userId = await seedActiveUser(database);
+        for (const method of ['passkey', 'password'] as const) {
+          const { session: created } = await createSession(db(), {
+            userId,
+            method,
+            now: T0,
+          });
+          expect((await sessionRow(created.id)).passkeyCredentialId).toBeNull();
+        }
+      });
+
+      it('refuses a passkey for any other method, another user’s passkey, a revoked one and one that is not there, writing nothing', async () => {
+        const userId = await seedActiveUser(database);
+        const other = await seedActiveUser(database);
+        const mine = await passkeyOf(userId);
+        const theirs = await passkeyOf(other);
+        const revoked = await passkeyOf(userId, { revoked: true });
+        const before = (await db().select().from(session)).length;
+        await expect(
+          createSession(db(), {
+            userId,
+            method: 'password',
+            passkeyCredentialId: mine,
+            now: T0,
+          }),
+        ).rejects.toBeInstanceOf(AuthInputError);
+        for (const passkeyCredentialId of [theirs, revoked, newId()]) {
+          await expect(
+            sessionOfPasskey(userId, passkeyCredentialId),
+          ).rejects.toMatchObject({ field: 'passkeyCredentialId' });
+        }
+        expect((await db().select().from(session)).length).toBe(before);
+      });
+    });
+
+    describe('revokePasskeySessions', () => {
+      it('ends the live sessions the passkey opened, with the reason, and says so once in the trail', async () => {
+        const userId = await seedActiveUser(database);
+        const passkeyId = await passkeyOf(userId);
+        const first = await sessionOfPasskey(userId, passkeyId);
+        const second = await sessionOfPasskey(userId, passkeyId, at(1000));
+        expect(await revokeFor(userId, passkeyId)).toBe(2);
+        for (const { session: opened, token } of [first, second]) {
+          expect(await sessionRow(opened.id)).toMatchObject({
+            revokedAt: at(MINUTE),
+            revokedReason: 'passkey-revoked',
+            updatedAt: at(MINUTE),
+          });
+          expect(await validateSession(db(), token, at(2 * MINUTE))).toBeNull();
+        }
+        const found = await passkeyEvents(userId);
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({
+          action: 'revoke-all',
+          actorType: 'user',
+          actorId: userId,
+          targetType: 'user',
+          details: { reason: 'passkey-revoked', count: 2, passkeyId },
+        });
+        expect(found[0]!.occurredAt).toEqual(at(MINUTE));
+      });
+
+      it('leaves every other session alone: other methods, the user’s other passkey, other users, and ones that are over already', async () => {
+        const userId = await seedActiveUser(database);
+        const other = await seedActiveUser(database);
+        const passkeyId = await passkeyOf(userId);
+        const otherPasskeyId = await passkeyOf(userId);
+        const mine = await sessionOfPasskey(userId, passkeyId);
+        const byPassword = await createSession(db(), {
+          userId,
+          method: 'password',
+          now: T0,
+        });
+        const byOtherPasskey = await sessionOfPasskey(userId, otherPasskeyId);
+        const bySomeoneElse = await sessionOfPasskey(
+          other,
+          await passkeyOf(other),
+        );
+        // One that ended already, by revocation, and one that ran out.
+        const ended = await sessionOfPasskey(userId, passkeyId);
+        await revokeSession(db(), ended.session.id, {
+          reason: 'logout',
+          now: at(10),
+        });
+        const idle = await sessionOfPasskey(
+          userId,
+          passkeyId,
+          at(-SESSION_DEFAULTS.idleMs - 1000),
+        );
+        expect(await revokeFor(userId, passkeyId)).toBe(1);
+
+        expect((await sessionRow(mine.session.id)).revokedReason).toBe(
+          'passkey-revoked',
+        );
+        for (const kept of [byPassword, byOtherPasskey, bySomeoneElse]) {
+          expect((await sessionRow(kept.session.id)).revokedAt).toBeNull();
+        }
+        expect(await sessionRow(ended.session.id)).toMatchObject({
+          revokedReason: 'logout',
+          revokedAt: at(10),
+        });
+        expect((await sessionRow(idle.session.id)).revokedAt).toBeNull();
+      });
+
+      it('writes no event, and returns 0, when the passkey opened no live session', async () => {
+        const userId = await seedActiveUser(database);
+        const passkeyId = await passkeyOf(userId);
+        const before = (await db().select().from(auditEvent)).length;
+        expect(await revokeFor(userId, passkeyId)).toBe(0);
+        expect(await revokeFor(userId, newId())).toBe(0);
+        expect((await db().select().from(auditEvent)).length).toBe(before);
+      });
+
+      it('says who did it: the user, or an actor given', async () => {
+        const userId = await seedActiveUser(database);
+        const admin = await seedActiveUser(database);
+        const passkeyId = await passkeyOf(userId);
+        await sessionOfPasskey(userId, passkeyId);
+        await revokePasskeySessions(db(), passkeyId, {
+          userId,
+          now: at(MINUTE),
+          actor: { type: 'user', id: admin },
+        });
+        const [event] = await passkeyEvents(userId);
+        expect(event).toMatchObject({ actorType: 'user', actorId: admin });
+      });
     });
   });
 

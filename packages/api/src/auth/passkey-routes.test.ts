@@ -710,7 +710,8 @@ describe.each(testTargets)(
 
     describe('POST /auth/login/passkey/verify', () => {
       it('signs in with no address: 200 with the user, a session cookie of method passkey, and nothing cached', async () => {
-        const { userId, email, authenticator } = await userWithPasskey();
+        const { userId, email, authenticator, passkey } =
+          await userWithPasskey();
         const response = await signIn(authenticator);
         expect(response.statusCode).toBe(200);
         expect(response.headers['cache-control']).toBe('no-store');
@@ -749,6 +750,8 @@ describe.each(testTargets)(
         );
         expect(made).toHaveLength(1);
         expect(made[0]).toMatchObject({ scope: 'full', revokedAt: null });
+        // The session is tied to the passkey that opened it.
+        expect(made[0]!.passkeyCredentialId).toBe(passkey.id);
         expect(
           await eventsOf(AUTH_AUDIT.sessionCreated, userId),
         ).toContainEqual(
@@ -1170,6 +1173,41 @@ describe.each(testTargets)(
         expect(await eventsOf(AUTH_AUDIT.passkeyRevoked, userId)).toHaveLength(
           1,
         );
+      });
+
+      it('ends the sessions that passkey opened, and no other, including the one that made the request', async () => {
+        const user = await userWithPasskey();
+        const second = await addPasskey(user.token);
+        const viaFirst = tokenIn(await signIn(user.authenticator));
+        const alsoViaFirst = tokenIn(await signIn(user.authenticator));
+        const viaSecond = tokenIn(await signIn(second.authenticator));
+        const me = async (token: string) =>
+          (await send('GET', '/me', { token })).statusCode;
+        expect(await me(viaFirst)).toBe(200);
+
+        // Revoked from a session the passkey did not open.
+        const revoked = await send('DELETE', `/passkeys/${user.passkey.id}`, {
+          token: user.token,
+        });
+        expect(revoked.statusCode).toBe(204);
+        expect(await me(viaFirst)).toBe(401);
+        expect(await me(alsoViaFirst)).toBe(401);
+        expect(await me(user.token)).toBe(200);
+        expect(await me(viaSecond)).toBe(200);
+
+        // Revoked from the very session it opened: that one ends too.
+        const third = await addPasskey(user.token);
+        const viaThird = tokenIn(await signIn(third.authenticator));
+        expect(
+          (
+            await send('DELETE', `/passkeys/${third.passkey.id}`, {
+              token: viaThird,
+            })
+          ).statusCode,
+        ).toBe(204);
+        expect(await me(viaThird)).toBe(401);
+        expect(await me(user.token)).toBe(200);
+        expect(await me(viaSecond)).toBe(200);
       });
 
       it('answers the same 404 for another user’s passkey, an id that is not there and one already revoked', async () => {

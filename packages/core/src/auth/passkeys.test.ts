@@ -805,6 +805,8 @@ describe.each(testTargets)('passkeys on $name', (target) => {
       const result = await signIn(started, authenticator, { now: at(MINUTE) });
       expect(result.ok).toBe(true);
       if (!result.ok) return;
+      // The passkey that signed in, so the session can be tied to it.
+      expect(result.passkeyId).toBe(passkey.id);
       expect(Object.keys(result.user).sort()).toEqual([
         'displayName',
         'email',
@@ -1500,6 +1502,86 @@ describe.each(testTargets)('passkeys on $name', (target) => {
           now: at(2 * MINUTE),
         }),
       ).toEqual({ ok: false });
+    });
+
+    describe('the sessions it opened', () => {
+      const sessionRowOf = async (id: string) =>
+        (await db().select().from(session)).find((row) => row.id === id)!;
+      const sessionsRevokedFor = async (userId: string) =>
+        (await events(AUTH_AUDIT.sessionsRevoked)).filter(
+          (event) =>
+            event.targetId === userId &&
+            (event.details as { reason?: string }).reason === 'passkey-revoked',
+        );
+      const openBy = (
+        userId: string,
+        method: 'passkey' | 'password',
+        passkeyCredentialId?: string,
+      ) =>
+        createSession(db(), {
+          userId,
+          method,
+          ...(passkeyCredentialId === undefined ? {} : { passkeyCredentialId }),
+          now: T0,
+        });
+
+      it('are ended with it, with the reason, and every other session stays', async () => {
+        const { userId, passkey } = await userWithPasswordAndPasskey();
+        const second = await addPasskey(userId);
+        const stranger = await userWithPasswordAndPasskey();
+        const opened = [
+          await openBy(userId, 'passkey', passkey.id),
+          await openBy(userId, 'passkey', passkey.id),
+        ];
+        const kept = [
+          await openBy(userId, 'password'),
+          await openBy(userId, 'passkey', second.passkey.id),
+          await openBy(stranger.userId, 'passkey', stranger.passkey.id),
+        ];
+        expect(await revoke(userId, passkey.id)).toBe(true);
+        for (const { session: one } of opened) {
+          expect(await sessionRowOf(one.id)).toMatchObject({
+            revokedAt: at(MINUTE),
+            revokedReason: 'passkey-revoked',
+          });
+        }
+        for (const { session: one } of kept) {
+          expect((await sessionRowOf(one.id)).revokedAt).toBeNull();
+        }
+        const found = await sessionsRevokedFor(userId);
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({
+          actorId: userId,
+          details: {
+            reason: 'passkey-revoked',
+            count: 2,
+            passkeyId: passkey.id,
+          },
+        });
+        // The same transaction wrote the revocation of the passkey itself.
+        expect(
+          (await events(AUTH_AUDIT.passkeyRevoked)).filter(
+            (event) => event.targetId === passkey.id,
+          ),
+        ).toHaveLength(1);
+      });
+
+      it('writes no session event when it opened none', async () => {
+        const { userId, passkey } = await userWithPasswordAndPasskey();
+        expect(await revoke(userId, passkey.id)).toBe(true);
+        expect(await sessionsRevokedFor(userId)).toEqual([]);
+      });
+
+      it('stay when the revocation is refused: the last way to sign in is not given up', async () => {
+        const userId = await seedActiveUser(database);
+        const { passkey } = await addPasskey(userId);
+        const opened = await openBy(userId, 'passkey', passkey.id);
+        await expect(revoke(userId, passkey.id)).rejects.toMatchObject({
+          reason: 'last-sign-in-method',
+        });
+        expect((await sessionRowOf(opened.session.id)).revokedAt).toBeNull();
+        expect(await sessionsRevokedFor(userId)).toEqual([]);
+      });
     });
 
     it('gives one answer, false, for another user’s passkey, one that is not there and one already revoked, and changes nothing', async () => {

@@ -13,6 +13,7 @@ import {
   sqlList,
   timestamptz,
 } from '../columns.js';
+import { passkeyCredential } from './passkey-credential.js';
 import { user } from './user.js';
 
 /**
@@ -49,6 +50,11 @@ export type SessionScope = (typeof SESSION_SCOPES)[number];
  * audit log is the record. `cleanupEndedSessions` deletes a session once it has
  * ended, by revocation or by going idle, for `SESSION_DEFAULTS.endedKeepMs`.
  *
+ * `passkey_credential_id` is the passkey that opened the session, set only for a
+ * session of method `passkey` (`session_passkey_credential_check`) and NULL for
+ * every other, so that revoking a passkey can end the sessions it opened
+ * (`revokePasskeySessions`; SC-10, decision D-56).
+ *
  * A security table: only `auth/sessions.ts` writes it, directly, and each
  * security-relevant change is audited, not change-logged (CLAUDE.md, Data
  * rules).
@@ -67,6 +73,7 @@ export const session = securityTable(
     revokedAt: timestamptz('revoked_at'),
     revokedReason: text('revoked_reason'),
     userAgentSummary: text('user_agent_summary'),
+    passkeyCredentialId: uuid('passkey_credential_id'),
   },
   (t) => [
     foreignKey({
@@ -74,8 +81,19 @@ export const session = securityTable(
       columns: [t.userId],
       foreignColumns: [user.id],
     }),
+    foreignKey({
+      name: 'session_passkey_credential_fk',
+      columns: [t.passkeyCredentialId],
+      foreignColumns: [passkeyCredential.id],
+    }),
     unique('session_token_hash_unique').on(t.tokenHash),
     index('session_user_idx').on(t.userId),
+    // Revoking a passkey finds the sessions it opened by it.
+    index('session_passkey_credential_idx').on(t.passkeyCredentialId),
+    check(
+      'session_passkey_credential_check',
+      sql`${t.passkeyCredentialId} is null or ${t.method} = 'passkey'`,
+    ),
     check(
       'session_method_check',
       sql`${t.method} in (${sqlList(SESSION_METHODS)})`,

@@ -109,7 +109,8 @@ function deviceOf(request: FastifyRequest): { userAgentSummary?: string } {
 /**
  * Makes the session for a finished sign-in and puts its cookie on the reply.
  * The raw token goes only into the cookie. The response is marked uncacheable,
- * because it holds a session or a challenge.
+ * because it holds a session or a challenge. A passkey sign-in passes the passkey
+ * that opened the session, so that revoking the passkey ends it.
  */
 async function startSession(
   tx: Tx,
@@ -117,8 +118,15 @@ async function startSession(
   userId: string,
   method: SessionMethod,
   now: Date,
+  passkeyCredentialId?: string,
 ) {
-  return createSession(tx, { userId, method, now, ...deviceOf(request) });
+  return createSession(tx, {
+    userId,
+    method,
+    now,
+    ...(passkeyCredentialId === undefined ? {} : { passkeyCredentialId }),
+    ...deviceOf(request),
+  });
 }
 
 /** Sets the cookie of a session just made, and marks the response not to be stored. */
@@ -361,6 +369,7 @@ export const loginRoutes: FastifyPluginAsyncZod<LoginRoutesOptions> = (
           checked.user.id,
           'passkey',
           now,
+          checked.passkeyId,
         );
         return { user: checked.user, created };
       });
