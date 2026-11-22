@@ -157,3 +157,15 @@ export function totpCodeAt(secret: string, time: Date): string {
     timestamp: time.getTime(),
   });
 }
+
+/** Marks a user deleted directly, bypassing the services, for the cases an active user does not cover. */
+export async function markUserDeleted(
+  database: Database,
+  userId: string,
+  at: Date = new Date(),
+): Promise<void> {
+  await database.db
+    .update(user)
+    .set({ deletedAt: at })
+    .where(eq(user.id, userId));
+}

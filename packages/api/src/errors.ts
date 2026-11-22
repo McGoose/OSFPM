@@ -89,6 +89,21 @@ export class RateLimitedError extends Error {
 }
 
 /**
+ * A step of signing in failed: an address no one has, an account with no
+ * password, a wrong password, authenticator code or recovery code, a challenge
+ * that is unknown, used or over, a disabled user, or an account the throttle
+ * has closed. Maps to a 401 `sign-in-failed` with one fixed body for every
+ * cause (SC-10), so a response never says which part failed. The message and
+ * the response name no cause; the cause is in the audit trail alone.
+ */
+export class SignInFailedError extends Error {
+  constructor() {
+    super('The sign-in was not accepted');
+    this.name = 'SignInFailedError';
+  }
+}
+
+/**
  * What a client reads when it has no usable session. One text for every cause,
  * so the response never says whether the cookie was missing, unknown, expired,
  * revoked or the user disabled.
@@ -122,6 +137,14 @@ export type ProblemRule = {
  * record learns nothing from the refusal (see `AccessDeniedError`).
  */
 export const PROBLEM_TABLE: readonly ProblemRule[] = [
+  {
+    // The one answer to every failed sign-in step, whatever failed.
+    errorClass: SignInFailedError,
+    status: 401,
+    code: 'sign-in-failed',
+    title: 'Sign-in failed',
+    detail: 'The sign-in details were not accepted.',
+  },
   {
     errorClass: AuthenticationRequiredError,
     status: 401,

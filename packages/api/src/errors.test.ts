@@ -38,6 +38,7 @@ import {
   PROBLEM_TABLE,
   RateLimitedError,
   ServiceUnavailableError,
+  SignInFailedError,
   StartingError,
 } from './errors.js';
 import { createTestApp, UUID_V7 } from './test-support.js';
@@ -94,6 +95,7 @@ const fixtures = new Map<abstract new (...args: never[]) => Error, () => Error>(
       () => new ServiceUnavailableError(`the database at db.internal is down`),
     ],
     [AuthenticationRequiredError, () => new AuthenticationRequiredError()],
+    [SignInFailedError, () => new SignInFailedError()],
     [AuthInputError, () => new AuthInputError('method')],
     [AuthStateError, () => new AuthStateError('user-disabled')],
     [OriginMismatchError, () => new OriginMismatchError()],

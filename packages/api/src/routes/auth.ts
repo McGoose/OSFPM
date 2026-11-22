@@ -23,8 +23,11 @@ const wrongOrigin = problemResponse(
   'The request changes data, carries a session cookie and did not come from this server’s own origin.',
 );
 
-/** The user that is signed in. Their own details only, and none of them sensitive. */
-const meSchema = z.object({
+/**
+ * The user that is signed in. Their own details only, and none of them
+ * sensitive. Also what the login routes return for the user who just signed in.
+ */
+export const meSchema = z.object({
   id: z.uuid(),
   displayName: z.string(),
   email: z.string(),
