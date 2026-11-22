@@ -10,7 +10,7 @@ export const openapiRoutes: FastifyPluginAsyncZod = (app) => {
   app.get(
     '/openapi.json',
     {
-      config: { auth: 'none' },
+      config: { auth: 'none', availableBeforeSetup: true },
       schema: {
         summary: 'OpenAPI document',
         response: { 200: z.looseObject({ openapi: z.string() }) },

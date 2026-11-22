@@ -103,6 +103,7 @@ describe.each(testTargets)(
         method: 'POST',
         url: `${API_PREFIX}/auth/login/password`,
         payload: { email, password },
+        headers: { origin: TEST_PUBLIC_ORIGIN },
         remoteAddress: freshAddress(),
       });
 
@@ -681,6 +682,7 @@ describe.each(testTargets)(
           method: 'POST',
           url: `${API_PREFIX}/auth/login/recovery`,
           payload: { email, code: codes[0] },
+          headers: { origin: TEST_PUBLIC_ORIGIN },
           remoteAddress: freshAddress(),
         });
         expect(signIn.statusCode).toBe(200);
@@ -700,6 +702,7 @@ describe.each(testTargets)(
           method: 'POST',
           url: `${API_PREFIX}/auth/login/recovery`,
           payload: { email, code: old },
+          headers: { origin: TEST_PUBLIC_ORIGIN },
           remoteAddress: freshAddress(),
         });
         expect(signIn.statusCode).toBe(401);

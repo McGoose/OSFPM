@@ -4,7 +4,15 @@ import { project } from './project.js';
 import { organisation } from './organisation.js';
 import { user } from './user.js';
 
-/** A role. `project_id` NULL means an organisation-wide template. */
+/**
+ * A role. `project_id` NULL means an organisation-wide template. A `managed` role
+ * is one the server makes and keeps, the Administrator role (SC-10, decision
+ * D-56): an organisation cannot edit or delete it or its grants. Only the server
+ * writes one, with the check switched off for its transaction
+ * (`withManagedRoleMaintenance`); a database trigger refuses every other write to
+ * a managed role and to its grants. The triggers are hand-written SQL (see
+ * `0031_role_managed.sql`).
+ */
 export const role = tenantTable(
   'role',
   () => organisation.id,
@@ -15,6 +23,7 @@ export const role = tenantTable(
     name: text('name').notNull(),
     description: text('description'),
     isDefault: boolean('is_default').notNull().default(false),
+    managed: boolean('managed').notNull().default(false),
   },
   (t) => [
     // Composite, so the project must be in the same organisation. A NULL

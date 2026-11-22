@@ -23,6 +23,7 @@ import type { App } from '../app.js';
 import { problemResponse, SignInFailedError } from '../errors.js';
 import { meSchema } from '../routes/auth.js';
 import { setSessionCookie } from './cookie.js';
+import { assertOriginRequired } from './plugin.js';
 import {
   authenticationResponseSchema,
   passkeyChallenge,
@@ -34,6 +35,9 @@ const signInFailed = problemResponse(
 );
 const badRequest = problemResponse(
   'The request is not shaped as this endpoint accepts. The failing fields are listed, never their values.',
+);
+const wrongOrigin = problemResponse(
+  'The request has no `Origin` header, or one that is not this server’s own origin. A browser always sends it; a script must send it, with the origin of the address people open.',
 );
 const tooManyRequests = problemResponse(
   'Too many requests from this address. Retry-After says how many seconds to wait.',
@@ -98,8 +102,14 @@ async function signInStep<T>(
   return result;
 }
 
-/** The browser the request came from, for the user's list of where they are signed in. */
-function deviceOf(request: FastifyRequest): { userAgentSummary?: string } {
+/**
+ * The browser the request came from, for the user's list of where they are
+ * signed in: the `User-Agent` header, when there is one, in the form
+ * `createSession` takes. Reads no secret; the setup route uses it as well.
+ */
+export function deviceOf(request: FastifyRequest): {
+  userAgentSummary?: string;
+} {
   const header = request.headers['user-agent'];
   return typeof header === 'string' && header.length > 0
     ? { userAgentSummary: header }
@@ -111,6 +121,9 @@ function deviceOf(request: FastifyRequest): { userAgentSummary?: string } {
  * The raw token goes only into the cookie. The response is marked uncacheable,
  * because it holds a session or a challenge. A passkey sign-in passes the passkey
  * that opened the session, so that revoking the passkey ends it.
+ *
+ * Every route that gets here says `requireOrigin` (see `assertOriginRequired`), so
+ * the plugin has already refused a request from another site.
  */
 async function startSession(
   tx: Tx,
@@ -120,6 +133,7 @@ async function startSession(
   now: Date,
   passkeyCredentialId?: string,
 ) {
+  assertOriginRequired(request);
   return createSession(tx, {
     userId,
     method,
@@ -151,6 +165,13 @@ export type LoginRoutesOptions = {
  * needs a session (`auth: 'none'`), and all count against the strict limit per
  * address (`AUTH_RATE_LIMIT`), together.
  *
+ * The routes that make a session (`password`, `totp`, `recovery` and
+ * `passkey/verify`) say `requireOrigin`: a request without the public origin as
+ * its `Origin`, or with another, is a 403 `origin-mismatch`, cookie or not, so a
+ * page on another site cannot sign a visitor in as someone else. A browser always
+ * sends the header; a script must. `passkey/options` makes no session, only a
+ * challenge, and needs none.
+ *
  * Every failure answers the same 401 `sign-in-failed`, with one body, for every
  * cause: nothing in the answer says which part failed or whether an address has
  * an account or a credential. The cause, a reason class and never what was sent,
@@ -169,7 +190,7 @@ export const loginRoutes: FastifyPluginAsyncZod<LoginRoutesOptions> = (
   app.post(
     '/login/password',
     {
-      config: { auth: 'none', authRateLimit: true },
+      config: { auth: 'none', authRateLimit: true, requireOrigin: true },
       schema: {
         summary: 'Sign in with a password',
         description:
@@ -185,6 +206,7 @@ export const loginRoutes: FastifyPluginAsyncZod<LoginRoutesOptions> = (
           ]),
           400: badRequest,
           401: signInFailed,
+          403: wrongOrigin,
           429: tooManyRequests,
         },
       },
@@ -228,7 +250,7 @@ export const loginRoutes: FastifyPluginAsyncZod<LoginRoutesOptions> = (
   app.post(
     '/login/totp',
     {
-      config: { auth: 'none', authRateLimit: true },
+      config: { auth: 'none', authRateLimit: true, requireOrigin: true },
       schema: {
         summary: 'Finish a sign-in with an authenticator code',
         description:
@@ -238,6 +260,7 @@ export const loginRoutes: FastifyPluginAsyncZod<LoginRoutesOptions> = (
           200: z.object({ user: meSchema }),
           400: badRequest,
           401: signInFailed,
+          403: wrongOrigin,
           429: tooManyRequests,
         },
       },
@@ -268,7 +291,7 @@ export const loginRoutes: FastifyPluginAsyncZod<LoginRoutesOptions> = (
   app.post(
     '/login/recovery',
     {
-      config: { auth: 'none', authRateLimit: true },
+      config: { auth: 'none', authRateLimit: true, requireOrigin: true },
       schema: {
         summary: 'Sign in with a recovery code',
         description:
@@ -278,6 +301,7 @@ export const loginRoutes: FastifyPluginAsyncZod<LoginRoutesOptions> = (
           200: z.object({ user: meSchema, mustSecureAccount: z.literal(true) }),
           400: badRequest,
           401: signInFailed,
+          403: wrongOrigin,
           429: tooManyRequests,
         },
       },
@@ -336,7 +360,7 @@ export const loginRoutes: FastifyPluginAsyncZod<LoginRoutesOptions> = (
   app.post(
     '/login/passkey/verify',
     {
-      config: { auth: 'none', authRateLimit: true },
+      config: { auth: 'none', authRateLimit: true, requireOrigin: true },
       schema: {
         summary: 'Finish a sign-in with a passkey',
         description:
@@ -349,6 +373,7 @@ export const loginRoutes: FastifyPluginAsyncZod<LoginRoutesOptions> = (
           200: z.object({ user: meSchema }),
           400: badRequest,
           401: signInFailed,
+          403: wrongOrigin,
           429: tooManyRequests,
         },
       },

@@ -18,16 +18,26 @@ import { generateHumanCode, hashHumanCode } from './tokens.js';
  * instead of change-logged (CLAUDE.md, Data rules). A raw code is never
  * stored, logged or audited (CLAUDE.md, Privacy rule).
  *
- * Printing the code at start-up, and the first-run flow that consumes it, come
- * in P-03b4. These functions check no permission: nobody is signed in yet.
- * Pass the transaction handle.
+ * The server prints the code at start-up (`packages/api/src/setup/first-run.ts`),
+ * and `completeFirstRunSetup` (`first-run-setup.ts`) spends it and creates the
+ * first administrator. These functions check no permission: nobody is signed in
+ * yet. Pass the transaction handle.
  */
 
 /** How long a setup code works: 24 hours from the moment it is issued. */
 export const SETUP_CODE_LIFETIME_MS = 24 * 60 * 60 * 1000;
 
-/** The installation row, held until the transaction ends, or undefined before it exists. */
-async function lockedInstallation(tx: Tx) {
+/**
+ * Takes the `installation` row, which is held until the transaction ends, and
+ * answers its id and when setup was completed (null until it is). Answers
+ * undefined before the row exists. Everything that decides who may become the
+ * first administrator serialises on this one lock: issuing a code, spending one
+ * and completing setup (`completeFirstRunSetup`), so whichever comes second
+ * waits for the first and then sees what it did. Takes the lock and nothing
+ * else, and checks no permission: only the auth services call it, in the
+ * caller's transaction.
+ */
+export async function lockInstallation(tx: Tx) {
   const [row] = await tx
     .select({
       id: installation.id,
@@ -53,6 +63,81 @@ export async function isSetupComplete(tx: Tx): Promise<boolean> {
   return row?.setupCompletedAt != null;
 }
 
+/** Why the setup code was looked at: only a check (`checkSetupCode`), or the setup itself. */
+export type SetupCodePurpose = 'check' | 'setup';
+
+/**
+ * Records that a setup code was refused, as `auth.setup-check-failed` from the
+ * system, with the purpose and nothing else: no code, typed or hashed, and no
+ * other value the request carried (CLAUDE.md, Privacy rule). It is written
+ * outside any savepoint that was rolled back, so it survives the refusal. Only
+ * the auth services call it, in the caller's transaction, which must commit.
+ *
+ * @throws RecordWriteError when the database refuses the write.
+ */
+export function recordSetupCodeRefused(
+  tx: Tx,
+  purpose: SetupCodePurpose,
+  now: Date,
+): Promise<void> {
+  return guardedAuth('audit_event', 'insert', async () => {
+    await recordAuthAudit(tx, {
+      category: AUTH_AUDIT.setupCheckFailed,
+      action: 'check',
+      actor: { type: 'system', id: null },
+      targetType: null,
+      targetId: null,
+      details: { purpose },
+      occurredAt: now,
+    });
+  });
+}
+
+/**
+ * Whether `code` would be accepted now, without using it: true only for the live
+ * code, before it expires, while setup is not complete. For a setup screen that
+ * wants to check the code before it asks for details. Any spelling of the code
+ * does. A refusal, whatever the cause (unknown, expired, replaced, used, setup
+ * already complete, not shaped like a code), is the same `false`, and is audited
+ * as `auth.setup-check-failed` with the purpose `check` and no code; it is
+ * returned, not thrown, so the caller's transaction commits and the event is
+ * kept. A live code writes nothing. It takes no lock: it only reads.
+ *
+ * @throws RecordWriteError when the database fails; it carries the SQLSTATE
+ * only, never the code or its hash.
+ */
+export async function checkSetupCode(
+  tx: Tx,
+  code: string,
+  now: Date,
+): Promise<boolean> {
+  const hash = hashHumanCode(code);
+  const live =
+    hash !== null &&
+    (await guardedAuth('setup_code', 'select', async () => {
+      const [server] = await tx
+        .select({ setupCompletedAt: installation.setupCompletedAt })
+        .from(installation)
+        .limit(1);
+      if (!server || server.setupCompletedAt !== null) return false;
+      const [row] = await tx
+        .select({ id: setupCode.id })
+        .from(setupCode)
+        .where(
+          and(
+            eq(setupCode.codeHash, hash),
+            isNull(setupCode.usedAt),
+            isNull(setupCode.revokedAt),
+            gt(setupCode.expiresAt, now),
+          ),
+        )
+        .limit(1);
+      return row !== undefined;
+    }));
+  if (!live) await recordSetupCodeRefused(tx, 'check', now);
+  return live;
+}
+
 /**
  * Issues a setup code and returns the raw code, which exists nowhere else: show
  * it once. It expires `SETUP_CODE_LIFETIME_MS` after `now`. Any earlier live
@@ -76,7 +161,7 @@ export function issueSetupCode(
   return guardedAuth('setup_code', 'insert', () =>
     // A savepoint: a failure leaves the old code live and no event.
     tx.transaction(async (inner) => {
-      const server = await lockedInstallation(inner);
+      const server = await lockInstallation(inner);
       if (!server) throw new AuthStateError('installation-missing');
       if (server.setupCompletedAt !== null) {
         throw new AuthStateError('setup-complete');
@@ -127,7 +212,7 @@ export function issueSetupCode(
  * Audited as `auth.setup-code-used`, with no code.
  *
  * This only spends the code. Creating the administrator and setting
- * `setup_completed_at` is the first-run flow's job (P-03b4), in the same
+ * `setup_completed_at` is `completeFirstRunSetup`'s job, in the same
  * transaction.
  *
  * @throws RecordWriteError when the database fails; it carries the SQLSTATE
@@ -142,7 +227,7 @@ export async function consumeSetupCode(
   if (hash === null) return false;
   return guardedAuth('setup_code', 'update', () =>
     tx.transaction(async (inner) => {
-      const server = await lockedInstallation(inner);
+      const server = await lockInstallation(inner);
       if (!server || server.setupCompletedAt !== null) return false;
       const [row] = await inner
         .update(setupCode)

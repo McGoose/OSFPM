@@ -1,6 +1,6 @@
 # installation
 
-This server's own identity. The `installation` table holds one row, created by first-run setup, and its `id` is the id of this server.
+This server's own identity. The `installation` table holds one row, made when the server first starts (`ensureInstallation`, in `src/auth/`), and its `id` is the id of this server. First-run setup later sets `setup_completed_at` on it.
 
 **Entry points**
 
@@ -9,7 +9,7 @@ This server's own identity. The `installation` table holds one row, created by f
 **Rules you must not break**
 
 - The id never changes once the row exists, so a caller may keep it.
-- `installation` is written only by the core services named in `SERVICE_WRITTEN_TABLES` (the auth service now, the setup service later), never through the write helper. This folder only reads it.
+- `installation` is written only by the core services named in `SERVICE_WRITTEN_TABLES` (the auth service: `ensureInstallation` at start-up and `completeFirstRunSetup`), never through the write helper. This folder only reads it.
 - Pass `lock: true` only from a service that serialises on the installation row, such as the setup code. A plain read must not hold a row.
 
 **Tests:** `pnpm test packages/core/src/installation` runs `server-id.test.ts`, on PGlite, and on PostgreSQL too when `DATABASE_URL` is set.

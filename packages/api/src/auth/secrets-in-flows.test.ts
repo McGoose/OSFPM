@@ -82,9 +82,11 @@ describe.each(testTargets)(
       options: { token?: string; payload?: unknown } = {},
     ) {
       const headers: Record<string, string> = {};
+      // From the site itself, as a browser sends it: a request that changes data
+      // with a cookie, and every sign-in step, are refused without the Origin.
+      if (method !== 'GET') headers.origin = TEST_PUBLIC_ORIGIN;
       if (options.token !== undefined) {
         headers.cookie = `${SESSION_COOKIE}=${options.token}`;
-        if (method !== 'GET') headers.origin = TEST_PUBLIC_ORIGIN;
       }
       const response = await ctx.app.inject({
         method,

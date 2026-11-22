@@ -15,7 +15,8 @@ export const TEST_PUBLIC_ORIGIN = 'https://osfpm.example.test';
 /**
  * An app over a throwaway, empty database on `target`, with the log lines it
  * writes collected in `lines`. The database is not migrated, and no start-up
- * runs, so the app is marked ready by hand where `runStartup` would do it.
+ * runs, so the app is marked ready by hand where `runStartup` would do it, and
+ * told setup is complete unless `setupComplete` says otherwise.
  * Only tests import this file.
  */
 export async function createTestApp(
@@ -33,6 +34,14 @@ export async function createTestApp(
       readonly max: number;
       readonly timeWindowMs: number;
     };
+    /**
+     * Whether the app is told first-run setup is complete, as the setup route
+     * tells it. True by default, so a test that is not about setup is not
+     * answered 503 `setup-required` and the app never asks the database; a test
+     * of the gate or of the setup routes passes `false` and gives the database
+     * the state it needs.
+     */
+    readonly setupComplete?: boolean;
   } = {},
 ) {
   const { database, cleanup } = await target.create();
@@ -53,6 +62,7 @@ export async function createTestApp(
     },
   });
   app.readiness.markReady();
+  if (options.setupComplete !== false) app.setup.markComplete();
   return {
     app,
     database,

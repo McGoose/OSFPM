@@ -389,8 +389,10 @@ export async function revokeSession(
  * (a password change keeps the session that made it). A session that has
  * already expired or been revoked is left as it is. Returns how many were
  * revoked. Audited as one `auth.sessions-revoked` event with the reason and
- * the count, also when the count is 0, because the action itself is what is
- * worth knowing.
+ * the count, only when the count is above 0: an event for a call that changed
+ * nothing would say that something happened when nothing did, and the action
+ * that asked for it (a password change, a recovery sign-in, a disabling) has its
+ * own event. `revokePasskeySessions` does the same.
  *
  * @throws AuthInputError `reason` when the reason is not in
  * `SESSION_REVOKE_REASONS`.
@@ -423,19 +425,21 @@ export async function revokeUserSessions(
           ),
         )
         .returning({ id: session.id });
-      await recordAuthAudit(inner, {
-        category: AUTH_AUDIT.sessionsRevoked,
-        action: 'revoke-all',
-        actor: options.actor ?? { type: 'user', id: userId },
-        targetType: 'user',
-        targetId: userId,
-        details: {
-          reason,
-          count: revoked.length,
-          exceptSessionId: options.exceptSessionId ?? null,
-        },
-        occurredAt: now,
-      });
+      if (revoked.length > 0) {
+        await recordAuthAudit(inner, {
+          category: AUTH_AUDIT.sessionsRevoked,
+          action: 'revoke-all',
+          actor: options.actor ?? { type: 'user', id: userId },
+          targetType: 'user',
+          targetId: userId,
+          details: {
+            reason,
+            count: revoked.length,
+            exceptSessionId: options.exceptSessionId ?? null,
+          },
+          occurredAt: now,
+        });
+      }
       return revoked.length;
     }),
   );
@@ -630,8 +634,9 @@ export function cleanupEndedSessions(tx: Tx, now: Date): Promise<number> {
  * Disables a user and revokes all their sessions, in one transaction. A
  * disabled user cannot sign in and any session they still hold stops being
  * valid. Returns false, writing nothing, when the user is already disabled.
- * Audited as `auth.user-disabled` and, for the sessions, `auth.sessions-revoked`.
- * `actor` is who did it; without it the event is a `system` one.
+ * Audited as `auth.user-disabled` and, when the user had live sessions,
+ * `auth.sessions-revoked`. `actor` is who did it; without it the event is a
+ * `system` one.
  *
  * @throws AuthStateError `user-not-found` for an unknown or deleted user.
  * @throws RecordWriteError when the database refuses a write.

@@ -33,7 +33,7 @@ import {
   type TestTarget,
 } from '@osfpm/core/src/db/test-support.js';
 import { API_PREFIX } from '../api-version.js';
-import { createTestApp } from '../test-support.js';
+import { createTestApp, TEST_PUBLIC_ORIGIN } from '../test-support.js';
 import { AUTH_RATE_LIMIT } from './rate-limit.js';
 import { SESSION_COOKIE } from './cookie.js';
 
@@ -79,19 +79,27 @@ describe.each(testTargets)(
     const freshAddress = () =>
       `10.9.${Math.floor(addresses / 250)}.${(addresses++ % 250) + 1}`;
 
+    /**
+     * A `POST` to a login route, from the site itself unless `origin` says otherwise:
+     * a browser always sends an `Origin`, and the routes that make a session refuse
+     * a request without the right one. `origin: null` sends none.
+     */
     function post(
       path: string,
       payload: unknown,
       options: {
         remoteAddress?: string;
         headers?: Record<string, string>;
+        origin?: string | null;
       } = {},
     ) {
+      const origin =
+        options.origin === undefined ? TEST_PUBLIC_ORIGIN : options.origin;
       return ctx.app.inject({
         method: 'POST',
         url: `${API_PREFIX}/auth/login/${path}`,
         payload: payload as Record<string, unknown>,
-        headers: options.headers ?? {},
+        headers: { ...(origin === null ? {} : { origin }), ...options.headers },
         remoteAddress: options.remoteAddress ?? freshAddress(),
       });
     }
@@ -629,6 +637,146 @@ describe.each(testTargets)(
             JSON.stringify(payload).slice(0, 40),
           ).toBe(400);
         }
+      });
+    });
+
+    describe('the Origin check on the routes that make a session', () => {
+      // A page on another site cannot make a visitor's browser sign in as someone
+      // else: a browser always sends the Origin of the page, and a request from
+      // anywhere but the public origin is refused, with a cookie or without one.
+      // A script has to send the header itself.
+      const ROUTES = ['password', 'totp', 'recovery', 'passkey/verify'];
+      const FOREIGN = [
+        ['no Origin', null],
+        ['another site', 'https://attacker.example.test'],
+        ['the right host over http', 'http://osfpm.example.test'],
+        ['the origin with a trailing slash', `${TEST_PUBLIC_ORIGIN}/`],
+        ['the string null a sandboxed page sends', 'null'],
+      ] as const;
+
+      it.each(ROUTES)(
+        'POST /auth/login/%s is a 403 origin-mismatch with no Origin or a wrong one, before the body is looked at',
+        async (route) => {
+          for (const [label, origin] of FOREIGN) {
+            // An empty body: shaped wrong, so only the Origin can explain a 403.
+            const response = await post(route, {}, { origin });
+            expect(response.statusCode, `${route}: ${label}`).toBe(403);
+            expect(response.headers['content-type']).toMatch(
+              /^application\/problem\+json/,
+            );
+            expect(response.json<Record<string, unknown>>()).toMatchObject({
+              status: 403,
+              code: 'origin-mismatch',
+              type: '/problems/origin-mismatch',
+            });
+            expect(setCookies(response.headers), `${route}: ${label}`).toEqual(
+              [],
+            );
+          }
+        },
+      );
+
+      it.each(ROUTES)(
+        'POST /auth/login/%s with the right Origin gets past the check: the same empty body is then a 400',
+        async (route) => {
+          const response = await post(route, {});
+          expect(response.statusCode).toBe(400);
+          expect(response.json<{ code: string }>().code).not.toBe(
+            'origin-mismatch',
+          );
+        },
+      );
+
+      it('refuses a cookie too: a request with a session cookie and a wrong Origin is the same 403', async () => {
+        const { userId, email } = await userWithPassword();
+        const { token } = await createSession(db(), {
+          userId,
+          method: 'password',
+          now: new Date(),
+        });
+        const response = await post(
+          'password',
+          { email, password: PASSWORD },
+          {
+            origin: 'https://attacker.example.test',
+            headers: { cookie: `${SESSION_COOKIE}=${token}` },
+          },
+        );
+        expect(response.statusCode).toBe(403);
+        expect(response.json<{ code: string }>().code).toBe('origin-mismatch');
+      });
+
+      it('makes no session, sets no cookie and writes no event for a password sign-in that would have worked', async () => {
+        const { userId, email } = await userWithPassword();
+        const events = (await db().select().from(auditEvent)).length;
+        for (const [, origin] of FOREIGN) {
+          const response = await post(
+            'password',
+            { email, password: PASSWORD },
+            { origin },
+          );
+          expect(response.statusCode).toBe(403);
+          expect(setCookies(response.headers)).toEqual([]);
+        }
+        expect(await sessionsOf(userId)).toEqual([]);
+        expect((await db().select().from(auditEvent)).length).toBe(events);
+        // The same request from the site itself works: the Origin was all that was wrong.
+        expect(
+          (await post('password', { email, password: PASSWORD })).statusCode,
+        ).toBe(200);
+      });
+
+      it('leaves an authenticator challenge and its code unspent when it refuses the Origin', async () => {
+        const { userId } = await userWithPassword();
+        const secret = await seedTotp(ctx.database, userId);
+        const { challenge } = await createLoginChallenge(db(), userId, {
+          kind: 'totp',
+          now: new Date(),
+        });
+        const body = { challenge, code: totpCodeAt(secret, new Date()) };
+        for (const [, origin] of FOREIGN) {
+          expect((await post('totp', body, { origin })).statusCode).toBe(403);
+        }
+        expect(await sessionsOf(userId)).toEqual([]);
+        // Not used up, and not counted as an attempt: the real request works.
+        expect((await post('totp', body)).statusCode).toBe(200);
+      });
+
+      it('leaves a recovery code unspent, and ends no session, when it refuses the Origin', async () => {
+        const { userId, email } = await userWithPassword();
+        const [code] = await generateRecoveryCodes(db(), userId, {
+          now: new Date(),
+        });
+        const older = await createSession(db(), {
+          userId,
+          method: 'password',
+          now: new Date(),
+        });
+        for (const [, origin] of FOREIGN) {
+          expect(
+            (await post('recovery', { email, code }, { origin })).statusCode,
+          ).toBe(403);
+        }
+        expect((await meWith(older.token)).statusCode).toBe(200);
+        expect((await post('recovery', { email, code })).statusCode).toBe(200);
+      });
+
+      it('counts a request refused for its Origin against the strict limit, which comes first', async () => {
+        const address = freshAddress();
+        for (let i = 0; i < AUTH_RATE_LIMIT.max; i += 1) {
+          const response = await post(
+            'password',
+            {},
+            { remoteAddress: address, origin: null },
+          );
+          expect(response.statusCode).toBe(403);
+        }
+        const limited = await post(
+          'password',
+          {},
+          { remoteAddress: address, origin: null },
+        );
+        expect(limited.statusCode).toBe(429);
       });
     });
 

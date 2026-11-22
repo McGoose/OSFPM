@@ -2,6 +2,7 @@ import type { FastifyError, FastifyReply, FastifyRequest } from 'fastify';
 import { hasZodFastifySchemaValidationErrors } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { AccessDeniedError } from '@osfpm/core/src/access/access-denied-error.js';
+import { ManagedRoleError } from '@osfpm/core/src/access/managed-role.js';
 import { PermissionSyncError } from '@osfpm/core/src/access/permission-sync.js';
 import { AccountInputError } from '@osfpm/core/src/accounts/service.js';
 import { AuthInputError, AuthStateError } from '@osfpm/core/src/auth/errors.js';
@@ -56,6 +57,64 @@ export class StartingError extends Error {
 }
 
 /**
+ * First-run setup is not complete: the first administrator does not exist yet,
+ * so every route but the health routes, `/meta`, the OpenAPI document and the
+ * setup routes is closed (SC-10, decision D-56, Q1). Maps to a 503 problem
+ * `setup-required`. The message and the response say only that setup is needed:
+ * they carry no value.
+ */
+export class SetupRequiredError extends Error {
+  constructor() {
+    super('First-run setup is not complete');
+    this.name = 'SetupRequiredError';
+  }
+}
+
+/**
+ * The setup code given to first-run setup was no good: unknown, expired,
+ * replaced by a newer one, already used, not shaped like a code, or setup is
+ * already complete (SC-10). Maps to a 401 `setup-code-invalid` with one fixed body
+ * for every cause, so a response never says which. The message and the response
+ * name no cause and hold no code.
+ */
+export class SetupCodeInvalidError extends Error {
+  constructor() {
+    // Not the text of the response's `detail`, which a test requires.
+    super('No live setup code matched the request');
+    this.name = 'SetupCodeInvalidError';
+  }
+}
+
+/**
+ * The password given to first-run setup does not meet the password policy (SC-10;
+ * NIST SP 800-63B-4, section 3.1.1.2, which requires the reason to be given). Maps
+ * to a 422 `password-refused`, as `PasswordRefusedError` does for every other
+ * password the policy refuses, with the reason as the `errors` entry at
+ * `admin.password` and in the `detail`. Its message is fixed text chosen by the
+ * reason alone (`describePasswordRefusal`): it carries no part of the password or
+ * of the address, never what was typed.
+ */
+export class SetupPasswordRefusedError extends Error {
+  constructor(readonly reason: PasswordRefusal) {
+    super(describePasswordRefusal(reason));
+    this.name = 'SetupPasswordRefusedError';
+  }
+}
+
+/**
+ * The route is closed for good: it answers while first-run setup is still to do,
+ * and not after (the setup routes). Maps to the same 404 as a path that is no
+ * route, code `route-not-found`, so a finished install shows no sign that the
+ * route ever existed. The message and the response carry no value.
+ */
+export class RouteNotFoundError extends Error {
+  constructor() {
+    super('There is no such route');
+    this.name = 'RouteNotFoundError';
+  }
+}
+
+/**
  * The route needs a signed-in user and the request has none. Maps to a 401.
  * The message is the same whatever the reason (no cookie, an unknown token, an
  * expired or revoked session, a disabled user), so a caller learns nothing
@@ -69,9 +128,11 @@ export class AuthenticationRequiredError extends Error {
 }
 
 /**
- * A request that changes data, with a session cookie, did not come from this
- * server's own origin (cross-site request forgery defence). Maps to a 403. The
- * message names neither the expected origin nor the one that was sent.
+ * A request that changes data did not come from this server's own origin
+ * (cross-site request forgery defence): it has a session cookie, or is to a route
+ * that makes a session (`config.requireOrigin`), and its `Origin` is missing or
+ * is another. Maps to a 403. The message names neither the expected origin nor
+ * the one that was sent.
  */
 export class OriginMismatchError extends Error {
   constructor() {
@@ -218,6 +279,17 @@ export class LastSignInMethodError extends Error {
  */
 const AUTHENTICATION_REQUIRED_DETAIL = 'Sign in to use this.';
 
+/**
+ * What a path that is no route answers, and what a route closed for good answers
+ * (`RouteNotFoundError`): one text, so the two cannot be told apart.
+ */
+const ROUTE_NOT_FOUND = {
+  status: 404,
+  code: 'route-not-found',
+  title: 'Route not found',
+  detail: 'There is no endpoint at this path and method.',
+} as const;
+
 /** One row of `PROBLEM_TABLE`. */
 export type ProblemRule = {
   /** Matched with `instanceof`, so a subclass takes its parent's row. */
@@ -257,6 +329,15 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
     code: 'sign-in-failed',
     title: 'Sign-in failed',
     detail: 'The sign-in details were not accepted.',
+  },
+  {
+    // The one answer to every setup code that does not work, whatever is wrong.
+    errorClass: SetupCodeInvalidError,
+    status: 401,
+    code: 'setup-code-invalid',
+    title: 'Setup code not accepted',
+    detail:
+      'The setup code was not accepted. Use the code the server printed when it started.',
   },
   {
     errorClass: AuthenticationRequiredError,
@@ -319,6 +400,23 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
     errors: (error: PasswordRefusedError) => [
       { in: 'body', path: 'newPassword', code: error.reason },
     ],
+  },
+  {
+    // The person setting the first password is owed the reason, as at any other
+    // password change, and gets the same status: the policy answers 422
+    // everywhere. Only the field differs, `admin.password` for the setup body.
+    errorClass: SetupPasswordRefusedError,
+    status: 422,
+    code: 'password-refused',
+    title: 'Password refused',
+    detail: null,
+    errors: (error: SetupPasswordRefusedError) => [
+      { in: 'body', path: 'admin.password', code: error.reason },
+    ],
+  },
+  {
+    errorClass: RouteNotFoundError,
+    ...ROUTE_NOT_FOUND,
   },
   {
     errorClass: TotpAlreadyEnrolledError,
@@ -408,6 +506,17 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
     title: 'Record in the wrong state',
     detail: 'The record is in the wrong state for this operation.',
   },
+  {
+    // The Administrator role is the server's own: nobody edits or deletes it or
+    // its permissions, whatever they hold, so the answer is about the role and not
+    // about the caller (not a 403). Fixed text, so it names no role.
+    errorClass: ManagedRoleError,
+    status: 409,
+    code: 'role-managed',
+    title: 'Role is managed',
+    detail:
+      'This role is kept by the server. It and its permissions cannot be edited or deleted.',
+  },
   // The three input errors below document that they carry no ids and no
   // values, so their own message is safe to show. A test checks that every row
   // with `detail: null` is such a class.
@@ -456,6 +565,14 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
     code: 'starting',
     title: 'Starting',
     detail: 'The server is starting. Try again shortly.',
+  },
+  {
+    errorClass: SetupRequiredError,
+    status: 503,
+    code: 'setup-required',
+    title: 'Setup required',
+    detail:
+      'This server has not been set up yet. Enter the setup code to create the first administrator.',
   },
   {
     errorClass: ServiceUnavailableError,
@@ -726,11 +843,6 @@ export function registerErrorHandling(app: App): void {
     handleError(error, request, reply),
   );
   app.setNotFoundHandler((request, reply) =>
-    sendProblem(request, reply, {
-      status: 404,
-      code: 'route-not-found',
-      title: 'Route not found',
-      detail: 'There is no endpoint at this path and method.',
-    }),
+    sendProblem(request, reply, ROUTE_NOT_FOUND),
   );
 }

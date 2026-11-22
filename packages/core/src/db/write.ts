@@ -4,7 +4,12 @@ import type { ActorType } from './columns.js';
 import type { SchemaDb } from './client.js';
 import { newId } from './ids.js';
 import { parentKeysOf, resolveProjectId } from './project-resolver.js';
-import { auditEvent, changeEvent, changeSeq } from './schema/index.js';
+import {
+  auditEvent,
+  changeEvent,
+  changeSeq,
+  organisation,
+} from './schema/index.js';
 import type { ChangeAction } from './schema/index.js';
 import { sensitiveColumns } from './sensitive.js';
 
@@ -413,6 +418,12 @@ async function loadRow(tx: Tx, table: TenantTable, id: string): Promise<Row> {
  * (sensitive values left out). Called by server-side services only, with the
  * transaction handle.
  *
+ * It serves four kinds of table: organisation-level records, project-level
+ * records, the project table itself and the organisation table itself. For the
+ * last two the change counter is taken after the row, because it references the
+ * row: a new project gets seq 1 in its own sequence, and a new organisation seq 1
+ * in its own (`project_id` NULL). Every other table takes the counter first.
+ *
  * @throws MissingActingUserError for a `token` or `email` context without
  * `onBehalfOfUserId`.
  * @throws RecordWriteError when the database refuses the row; it carries the
@@ -444,11 +455,21 @@ export function insertRecord<T extends TenantTable>(
         deletedBy: null,
       } as Row;
       const projectId = await resolveProjectId(inner, table, full);
-      // A new project is its own project, and `change_seq` references it, so
-      // its counter can only be taken once the row exists. Nothing else
-      // writes to a project that is not committed yet, so the order does not
-      // matter for locking.
-      const ownsSequence = projectId !== null && projectId === full.id;
+      // A new project is its own project, and a new organisation is its own
+      // tenant with a sequence of its own (`project_id` NULL). `change_seq`
+      // references both, so their counter can only be taken once the row exists.
+      // Nothing else writes to a project or an organisation that is not
+      // committed yet, because no one else can see it, let alone reference it, so
+      // the order does not matter for locking: no writer can be waiting on the
+      // counter, and the lock order (counter before any row lock, see
+      // `lockProjectChanges`) is kept by every writer of a record that exists.
+      // An organisation has no project resolver, so nothing is queried or locked
+      // before its row is inserted. The insert itself takes only the shared key
+      // locks its foreign keys take (on the user and the retention class), which
+      // no writer takes exclusively.
+      const ownsSequence =
+        (projectId !== null && projectId === full.id) ||
+        (table as PgTable) === organisation;
       let seq = ownsSequence
         ? 0
         : await nextSeq(inner, full.organisationId as string, projectId);

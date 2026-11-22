@@ -34,7 +34,8 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Modules never read other modules' tables; they use core services and events.
 - Tenant records are written only through the write helper in `src/db/write.ts`.
 - Tables in `SECURITY_TABLES` are written only by the auth service, never through the write helper; their changes are audited, not change-logged.
-- `user` and `installation` are install-level tables, written only by the core services named for them in `SERVICE_WRITTEN_TABLES` (the auth service now, the setup service later), never through the write helper; their changes are audited, not change-logged.
+- `user` and `installation` are install-level tables, written only by the core services named for them in `SERVICE_WRITTEN_TABLES` (the auth service, which also does first-run setup), never through the write helper; their changes are audited, not change-logged.
+- The setup code is the only secret OSFPM prints; it goes to stderr outside the logger.
 - Test fixtures may insert rows directly to set up state. Code under test always writes through the write helper.
 - A helper that writes records needs at least one test for each kind of table it serves (organisation-level, project-level, and the project table itself).
 - Side effects (email, webhooks, notifications, jobs) are only queued inside the write's own transaction; sending happens later in the worker, never in the request path.
@@ -49,7 +50,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Public endpoints (`auth: 'none'`) test identical failure answers and their rate limit.
 - A string from a caller never indexes a plain object and never goes through `in`. Use Object.hasOwn, a Map, or check it against the constant list first.
 - A guard that checks for live rows pointing at a record locks them (FOR UPDATE on the record, FOR SHARE on the reference) so a concurrent write can't slip past it.
-- Lock order: take the project's change counter (lockProjectChanges) before any row lock. Every writer follows this order, or concurrent writes can deadlock.
+- Lock order: take the project's change counter (lockProjectChanges) before any row lock. Every writer follows this order, or concurrent writes can deadlock. A new organisation or project takes its own counter after its row exists.
 
 ## Code rules
 

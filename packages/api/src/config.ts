@@ -27,9 +27,11 @@ export type Config = {
   readonly port: number;
   readonly logLevel: LogLevel;
   /**
-   * The origin of `OSFPM_PUBLIC_URL`, written as a browser writes it in an
-   * `Origin` header. It is the only origin allowed to send a state-changing
-   * request that carries a session cookie.
+   * `OSFPM_PUBLIC_URL`, written as a browser writes an origin in an `Origin`
+   * header (lower case, a default port left out, no trailing slash). The setting
+   * itself may have no path, query or fragment, so this is the whole address. It is
+   * the only origin allowed to send a state-changing request that carries a session
+   * cookie, or that is to a route that makes a session.
    */
   readonly publicOrigin: string;
   /** Run pending migrations when the server starts (`OSFPM_AUTO_MIGRATE`). */
@@ -91,6 +93,25 @@ function isAllowedPublicUrl(value: string): boolean {
     );
   } catch {
     return false;
+  }
+}
+
+/**
+ * True for an address that is an origin and nothing more: after the host and the
+ * port there is at most one slash. A path, a query or a fragment makes it false.
+ * They are refused, not dropped, because the server is reached at the root of its
+ * host (the session cookie is `__Host-`, which needs `Path=/`), so an address with
+ * a path is one that cannot work, and keeping only its origin would hide that from
+ * whoever set it. A `?` or `#` counts even with nothing after it, which `new URL`
+ * would report as no query and no fragment. Text that is not a URL passes: the
+ * rule on the scheme and the host says so, and one message is enough.
+ */
+function isOriginOnly(value: string): boolean {
+  try {
+    const { pathname } = new URL(value);
+    return pathname === '/' && !value.includes('?') && !value.includes('#');
+  } catch {
+    return true;
   }
 }
 
@@ -164,6 +185,10 @@ const environmentSchema = z.object({
     .refine(
       isAllowedPublicUrl,
       'must be an https:// URL, or http://localhost or http://127.0.0.1 with any port',
+    )
+    .refine(
+      isOriginOnly,
+      'must have no path, query or fragment: give the address alone, such as https://osfpm.example.org (one slash after it is fine)',
     ),
   // `true` or `false` in any case, like LOG_LEVEL. Other spellings (`1`, `yes`)
   // are refused rather than guessed: a typo must not skip the migrations.
@@ -190,9 +215,10 @@ const VARIABLES = Object.keys(environmentSchema.shape);
 /**
  * Reads and validates the configuration from `env` (the process environment
  * by default). Exactly one of `DATABASE_URL` (PostgreSQL) or `OSFPM_DATA_DIR`
- * (PGlite, for small installs) must be set, and so must `OSFPM_PUBLIC_URL`.
- * An empty variable counts as not set, so an `.env` file may list a variable
- * it leaves blank.
+ * (PGlite, for small installs) must be set, and so must `OSFPM_PUBLIC_URL`, which
+ * is an origin: `https://…`, or `http://localhost` or `http://127.0.0.1`, with no
+ * path other than one slash, no query and no fragment. An empty variable counts as
+ * not set, so an `.env` file may list a variable it leaves blank.
  *
  * @throws ConfigError listing every problem found. The server entry prints it
  * and stops. Values are never part of the message.

@@ -8,8 +8,10 @@ import { migrate } from '@osfpm/core/src/db/migrate.js';
 import type { Tx } from '@osfpm/core/src/db/write.js';
 import type { App } from './app.js';
 import { errorClassName } from './logging.js';
+import { topUpAdministrator } from './setup/administrator.js';
+import { issueFirstRunCode, setupCodeBlock } from './setup/first-run.js';
 
-/** The two things start-up does to the database. Tests swap them to watch the order. */
+/** What start-up does to the database. Tests swap the steps to watch the order. */
 export type StartupSteps = {
   /** Applies pending migrations (the core's `migrate`). */
   readonly migrate: (database: Database) => Promise<void>;
@@ -18,9 +20,28 @@ export type StartupSteps = {
     tx: Tx,
     list: readonly PermissionDefinition[],
   ) => Promise<void>;
+  /**
+   * Makes the `installation` row and, until first-run setup is complete, issues a
+   * setup code and answers it (`issueFirstRunCode`). Answers null when there is
+   * none to print. Left out, nothing is done: a test that swaps `migrate` and
+   * `syncPermissions` gets only those two, so it needs no installation.
+   */
+  readonly issueSetupCode?: (app: App) => Promise<string | null>;
+  /**
+   * Gives every organisation's Administrator role the permissions added since it
+   * was made, and answers how many grants it made (`topUpAdministrator`). Runs
+   * after `issueSetupCode`, which makes the `installation` row it needs. Left out,
+   * nothing is done, for the reason `issueSetupCode` gives.
+   */
+  readonly topUpAdministrator?: (app: App) => Promise<number>;
 };
 
-const REAL_STEPS: StartupSteps = { migrate, syncPermissions };
+const REAL_STEPS: StartupSteps = {
+  migrate,
+  syncPermissions,
+  issueSetupCode: issueFirstRunCode,
+  topUpAdministrator,
+};
 
 /**
  * How long start-up waits between attempts while the database cannot be
@@ -159,18 +180,36 @@ export type StartupControl = {
   readonly retry?: StartupRetry;
   /** Aborted when the server is stopped, so a wait or a retry ends at once. */
   readonly signal?: AbortSignal;
+  /**
+   * Where the setup code is written. Defaults to the process's standard error.
+   * Tests pass a sink to read it, or to keep it off the test output.
+   */
+  readonly stderr?: { write(text: string): unknown };
 };
 
 /**
  * What the server does to its database once it is listening, in this order:
  * apply pending migrations (unless `autoMigrate` is false), then sync every
- * list in the core's `PERMISSION_LISTS`, then mark the app ready so `/health/ready` stops
- * answering 503 and the other routes stop answering a 503 problem `starting`.
+ * list in the core's `PERMISSION_LISTS`, then make sure the `installation` row
+ * exists and, until first-run setup is complete, issue a setup code, then give the
+ * Administrator role of every organisation the permissions added since it was
+ * made, then mark the app ready so `/health/ready` stops answering 503 and the
+ * other routes stop answering a 503 problem `starting`.
  *
  * The lists are synced in one transaction: all of them or none, so a refused
  * list does not leave the catalogue half updated. Migrations run first because
  * the catalogue table is one of the things they create. With `autoMigrate` off
- * the database must already be migrated, or the sync fails.
+ * the database must already be migrated, or the sync fails. The Administrator
+ * role is topped up after the sync, which makes the catalogue rows its grants
+ * point to, and after the `installation` row exists, which the top-up locks.
+ *
+ * **The setup code is printed here, once, to standard error** (`control.stderr`),
+ * in a marked block (`setupCodeBlock`), and only after the transaction that saved
+ * it has committed. It never goes through the logger: it is the only secret
+ * OSFPM prints, so it is written by hand to the one place a person reads it, and
+ * the logger's masking is left as it is. A restart prints a new code and revokes
+ * the old one; once setup is complete nothing is printed. If an attempt fails
+ * and is tried again, only the attempt that succeeded prints.
  *
  * If the database cannot be reached (see `isDatabaseUnreachable`) the whole
  * sequence is tried again after a wait that doubles from `STARTUP_RETRY` up to
@@ -200,10 +239,12 @@ export async function runStartup(
   const retry: StartupRetry = control.retry ?? STARTUP_RETRY;
   const sleep = retry.sleep ?? sleepUnlessStopped;
 
+  // Set by the attempt that succeeds: the loop ends only by that, or by throwing.
+  let setupCode: string | null;
   for (let attempt = 1; ; attempt += 1) {
     if (signal?.aborted) throw new StartupAbortedError();
     try {
-      await attemptOnce(app, options, steps);
+      setupCode = await attemptOnce(app, options, steps);
       break;
     } catch (error) {
       // The shutdown closes the database under a step, which then fails: that
@@ -227,15 +268,25 @@ export async function runStartup(
       await sleep(retryInMs, signal);
     }
   }
+  // Written by hand, not logged: see the note on `runStartup`. After the
+  // transaction that saved the code has committed, and before the routes open.
+  if (setupCode !== null) {
+    (control.stderr ?? process.stderr).write(
+      setupCodeBlock(setupCode, app.publicOrigin),
+    );
+  }
   app.readiness.markReady();
 }
 
-/** One go at the migrations and the permission sync. */
+/**
+ * One go at the migrations, the permission sync and the installation. Answers
+ * the setup code to print, or null when there is none.
+ */
 async function attemptOnce(
   app: App,
   options: { readonly autoMigrate: boolean },
   steps: StartupSteps,
-): Promise<void> {
+): Promise<string | null> {
   if (options.autoMigrate) {
     await steps.migrate(app.db);
     app.log.info('migrations are up to date');
@@ -248,4 +299,20 @@ async function attemptOnce(
     }
   });
   app.log.info('the permission catalogue is up to date');
+  const setupCode = (await steps.issueSetupCode?.(app)) ?? null;
+  // The line says where to look, never what the code is.
+  if (setupCode !== null) {
+    app.log.info(
+      'first-run setup is not complete: a setup code was written to standard error',
+    );
+  }
+  const added = (await steps.topUpAdministrator?.(app)) ?? 0;
+  // A count only, as the audit event has: each grant itself is in the change log.
+  if (added > 0) {
+    app.log.info(
+      { added },
+      'the Administrator role was given the permissions added since it was made',
+    );
+  }
+  return setupCode;
 }

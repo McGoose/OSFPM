@@ -511,6 +511,102 @@ describe.each(testTargets)('sessions on $name', (target) => {
         revokeUserSessions(db(), userId, { reason: 'nope' as never, now: T0 }),
       ).rejects.toBeInstanceOf(AuthInputError);
     });
+
+    describe('the audit event', () => {
+      const events = async (userId: string) =>
+        (await db().select().from(auditEvent)).filter(
+          (event) =>
+            event.category === AUTH_AUDIT.sessionsRevoked &&
+            event.targetId === userId,
+        );
+
+      it('is written when it revoked some sessions, with the reason, the count and the session it kept', async () => {
+        const userId = await seedActiveUser(database);
+        const make = () =>
+          createSession(db(), { userId, method: 'password', now: T0 });
+        const kept = await make();
+        await make();
+        await make();
+        expect(
+          await revokeUserSessions(db(), userId, {
+            reason: 'password-changed',
+            exceptSessionId: kept.session.id,
+            now: at(MINUTE),
+          }),
+        ).toBe(2);
+        const found = await events(userId);
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({
+          action: 'revoke-all',
+          targetType: 'user',
+          details: {
+            reason: 'password-changed',
+            count: 2,
+            exceptSessionId: kept.session.id,
+          },
+        });
+      });
+
+      it('is not written when the user had no live session: nothing changed, so there is nothing to record', async () => {
+        const userId = await seedActiveUser(database);
+        expect(
+          await revokeUserSessions(db(), userId, { reason: 'logout', now: T0 }),
+        ).toBe(0);
+        expect(await events(userId)).toEqual([]);
+      });
+
+      it('is not written when the only live session is the one to keep', async () => {
+        const userId = await seedActiveUser(database);
+        const only = await createSession(db(), {
+          userId,
+          method: 'password',
+          now: T0,
+        });
+        expect(
+          await revokeUserSessions(db(), userId, {
+            reason: 'password-changed',
+            exceptSessionId: only.session.id,
+            now: at(MINUTE),
+          }),
+        ).toBe(0);
+        expect(await events(userId)).toEqual([]);
+        expect(
+          await validateSession(db(), only.token, at(MINUTE)),
+        ).not.toBeNull();
+      });
+
+      it('is not written when every session had ended already, by expiry or by a revocation', async () => {
+        const userId = await seedActiveUser(database);
+        await createSession(db(), { userId, method: 'password', now: T0 });
+        const revoked = await createSession(db(), {
+          userId,
+          method: 'password',
+          now: at(14 * HOUR),
+        });
+        await revokeSession(db(), revoked.session.id, {
+          reason: 'logout',
+          now: at(14 * HOUR),
+        });
+        // The first expired at +12h of idleness, the second was revoked.
+        expect(
+          await revokeUserSessions(db(), userId, {
+            reason: 'admin-action',
+            now: at(15 * HOUR),
+          }),
+        ).toBe(0);
+        expect(await events(userId)).toEqual([]);
+      });
+
+      it('is written once for a call that revoked some, and not again for the call that follows', async () => {
+        const userId = await seedActiveUser(database);
+        await createSession(db(), { userId, method: 'password', now: T0 });
+        const revoke = (now: Date) =>
+          revokeUserSessions(db(), userId, { reason: 'admin-action', now });
+        expect(await revoke(at(MINUTE))).toBe(1);
+        expect(await revoke(at(2 * MINUTE))).toBe(0);
+        expect(await events(userId)).toHaveLength(1);
+      });
+    });
   });
 
   describe('sessions opened by a passkey', () => {
@@ -928,6 +1024,28 @@ describe.each(testTargets)('sessions on $name', (target) => {
       expect(
         await validateSession(db(), fresh.token, at(5 * MINUTE)),
       ).not.toBeNull();
+    });
+
+    it('audits the disabling, and the revocation only when there were sessions to revoke', async () => {
+      const categoriesFor = async (userId: string) =>
+        (await db().select().from(auditEvent))
+          .filter((event) => event.targetId === userId)
+          .map((event) => event.category)
+          .sort();
+      const without = await seedActiveUser(database);
+      await disableUser(db(), without, { now: T0 });
+      expect(await categoriesFor(without)).toEqual([AUTH_AUDIT.userDisabled]);
+      const withSession = await seedActiveUser(database);
+      await createSession(db(), {
+        userId: withSession,
+        method: 'password',
+        now: T0,
+      });
+      await disableUser(db(), withSession, { now: at(MINUTE) });
+      // The session's own creation is about the session, not about the user.
+      expect(await categoriesFor(withSession)).toEqual(
+        [AUTH_AUDIT.sessionsRevoked, AUTH_AUDIT.userDisabled].sort(),
+      );
     });
 
     it('does nothing the second time', async () => {

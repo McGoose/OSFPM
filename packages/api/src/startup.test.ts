@@ -84,6 +84,32 @@ describe.each(testTargets)('start-up on $name', (target: TestTarget) => {
     expect(response.json()).toEqual({ status: 'ready' });
   });
 
+  it('makes the installation after the sync, then tops up the Administrator role, then reports ready', async () => {
+    const calls: string[] = [];
+    const steps: StartupSteps = {
+      ...recordingSteps(calls),
+      issueSetupCode: () => {
+        calls.push('installation');
+        return Promise.resolve(null);
+      },
+      topUpAdministrator: () => {
+        calls.push('top-up');
+        return Promise.resolve(0);
+      },
+    };
+    await runStartup(app, { autoMigrate: true }, steps);
+
+    // The top-up locks the installation row and grants what the sync made rows
+    // for, so it can neither come before the installation nor before the sync.
+    expect(calls).toEqual([
+      'migrate',
+      ...PERMISSION_LISTS.map(() => 'sync'),
+      'installation',
+      'top-up',
+    ]);
+    expect((await ready()).statusCode).toBe(200);
+  });
+
   it('answers 503 until the migrations and the sync have both finished', async () => {
     const migrated = deferred();
     const releaseMigrate = deferred();

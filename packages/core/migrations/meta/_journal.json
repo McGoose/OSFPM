@@ -218,6 +218,13 @@
       "when": 1795358919673,
       "tag": "0030_session_passkey_credential",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1795376135575,
+      "tag": "0031_role_managed",
+      "breakpoints": true
     }
   ]
 }

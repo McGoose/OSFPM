@@ -16,7 +16,15 @@ const testRoutes: FastifyPluginAsync = (app) => {
   }));
   app.get(
     '/test/open-while-starting',
-    { config: { auth: 'none', availableWhileStarting: true } },
+    {
+      // Open before setup too: this database is empty, so the setup gate
+      // that follows would have nothing to read.
+      config: {
+        auth: 'none',
+        availableWhileStarting: true,
+        availableBeforeSetup: true,
+      },
+    },
     () => ({ ok: true }),
   );
   return Promise.resolve();
@@ -133,8 +141,10 @@ describe.each(testTargets)(
       expect(response.json<{ code: string }>().code).toBe('route-not-found');
     });
 
-    it('opens every route once start-up has finished', async () => {
+    it('opens every route once start-up has finished and setup is complete', async () => {
       app.readiness.markReady();
+      // This database is empty, so the gate is told rather than asked.
+      app.setup.markComplete();
       expect((await call('GET', '/meta')).statusCode).toBe(200);
       expect((await call('GET', '/test/says-nothing')).statusCode).toBe(200);
       expect((await call('GET', '/auth/me')).statusCode).toBe(401);

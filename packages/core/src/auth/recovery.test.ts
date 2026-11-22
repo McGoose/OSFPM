@@ -445,16 +445,15 @@ describe.each(testTargets)('recovery codes on $name', (target) => {
         expect(live.map((row) => row.id)).toEqual([recovery.session.id]);
       });
 
-      it('writes the event when the user had no session, with a count of 0', async () => {
+      it('writes no event when the user had no session to end', async () => {
         const userId = await seedActiveUser(database);
         const email = await emailOf(database, userId);
         const [code] = await generateRecoveryCodes(db(), userId, { now: T0 });
-        await verifyRecoveryLogin(db(), { email, code: code!, now: LATER });
-        expect((await revocations(userId))[0]!.details).toEqual({
-          reason: 'recovery-used',
-          count: 0,
-          exceptSessionId: null,
-        });
+        expect(
+          await verifyRecoveryLogin(db(), { email, code: code!, now: LATER }),
+        ).toMatchObject({ ok: true });
+        // The code was used, which has its own event; no session changed.
+        expect(await revocations(userId)).toEqual([]);
       });
 
       it('ends nothing when the sign-in fails: a wrong code, a disabled user, a closed account', async () => {

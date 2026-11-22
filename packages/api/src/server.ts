@@ -40,6 +40,11 @@ export type StartOptions = {
   readonly startupSteps?: StartupSteps;
   /** Replaces the waits between attempts while the database is unreachable. */
   readonly startupRetry?: StartupRetry;
+  /**
+   * Where the setup code is written. Defaults to the process's standard error,
+   * which is where the server must print it: never the logger. Tests pass a sink.
+   */
+  readonly stderr?: { write(text: string): unknown };
 };
 
 /** A server that is listening. It may still be starting: see `ready`. */
@@ -76,9 +81,10 @@ async function quietly(action: () => PromiseLike<unknown>): Promise<void> {
 
 /**
  * Opens the database, builds the app and listens, and then, in the background,
- * runs pending migrations (unless `config.autoMigrate` is false) and syncs the
- * permission lists (see `runStartup`). The returned server's `ready` settles
- * when that is over. On SIGTERM or SIGINT it shuts down in order: end start-up
+ * runs pending migrations (unless `config.autoMigrate` is false), syncs the
+ * permission lists, makes the installation row and, until first-run setup is
+ * complete, prints a setup code to standard error (see `runStartup`). The
+ * returned server's `ready` settles when that is over. On SIGTERM or SIGINT it shuts down in order: end start-up
  * if it is still going, stop accepting requests, close the app, close the
  * database, then exit with code 0, or 1 if shutdown failed or took longer than
  * the limit.
@@ -149,6 +155,7 @@ export async function startServer(
     {
       signal: startup.signal,
       ...(options.startupRetry ? { retry: options.startupRetry } : {}),
+      ...(options.stderr ? { stderr: options.stderr } : {}),
     },
   );
   // Handled here, so a caller that never awaits `ready` does not crash the

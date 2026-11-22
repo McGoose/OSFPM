@@ -27,6 +27,8 @@ import {
   type LoggerSettings,
 } from './logging.js';
 import { PACKAGE_VERSION } from './package-info.js';
+import { registerSetupGate } from './setup/gate.js';
+import { setupRoutes } from './setup/routes.js';
 import { safeValidatorCompiler } from './validation.js';
 import { authRoutes } from './routes/auth.js';
 import { healthRoutes } from './routes/health.js';
@@ -55,6 +57,12 @@ declare module 'fastify' {
   interface FastifyInstance {
     /** The database every route plugin works on. The caller of `buildApp` owns it. */
     db: Database;
+    /**
+     * The origin of `OSFPM_PUBLIC_URL` (see `BuildAppOptions.publicOrigin`). Start-up
+     * uses it for the installation's base URL and for the address it prints with
+     * the setup code.
+     */
+    publicOrigin: string;
     /** Whether start-up has finished (see `Readiness`). */
     readiness: Readiness;
   }
@@ -69,7 +77,8 @@ export type BuildAppOptions = {
   readonly db: Database;
   /**
    * The origin of `OSFPM_PUBLIC_URL` (`Config.publicOrigin`): the only `Origin`
-   * a request that changes data and carries a session cookie may have.
+   * a request that changes data may have when it carries a session cookie or
+   * when it is to a route that makes a session.
    */
   readonly publicOrigin: string;
   /**
@@ -104,6 +113,9 @@ export type BuildAppOptions = {
  * The app starts not ready: it does not migrate or sync anything itself (see
  * `runStartup`). Until that has run, `/health/ready` answers 503 and every
  * route but `/health` and `/health/ready` answers a 503 problem `starting`.
+ * Once it is ready, and until first-run setup is complete, every route that does
+ * not say `config.availableBeforeSetup` answers a 503 problem `setup-required`
+ * (see `registerSetupGate`).
  *
  * Every request gets a UUIDv7 from the core's generator. A request ID sent by
  * the caller is ignored, so a caller cannot choose what appears in the logs.
@@ -130,6 +142,7 @@ export function buildApp(options: BuildAppOptions) {
   app.setValidatorCompiler(safeValidatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   app.decorate('db', options.db);
+  app.decorate('publicOrigin', options.publicOrigin);
   // Not ready until `runStartup` says so. A caller that forgets gets 503s from
   // `/health/ready`, which is the safe way to be wrong.
   let ready = false;
@@ -172,6 +185,12 @@ export function buildApp(options: BuildAppOptions) {
     done(new StartingError());
   });
 
+  // After the check above, because it asks the database, which must be migrated
+  // by now, and before the auth plugin: until the first administrator exists,
+  // every route that does not say `availableBeforeSetup` answers 503
+  // `setup-required`, with or without a cookie. It also puts `app.setup` on the app.
+  registerSetupGate(app);
+
   // The cookie parser and the rate limiter first, then the auth plugin that
   // uses both. They register on the whole app, before any route. The limiter
   // limits nothing by itself (`global: false`): the auth plugin calls it for
@@ -207,6 +226,7 @@ export function buildApp(options: BuildAppOptions) {
   void app.register(healthRoutes, { prefix: API_PREFIX });
   void app.register(metaRoutes, { prefix: API_PREFIX });
   void app.register(openapiRoutes, { prefix: API_PREFIX });
+  void app.register(setupRoutes, { prefix: API_PREFIX });
   void app.register(authRoutes, { prefix: `${API_PREFIX}/auth` });
   void app.register(loginRoutes, {
     prefix: `${API_PREFIX}/auth`,

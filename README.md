@@ -83,7 +83,7 @@ Troubleshooting:
 
 ## Start the API
 
-Set exactly one database setting, and `OSFPM_PUBLIC_URL`, the URL you open the server at. There is no way to sign in yet, so keep it on your own machine.
+Set exactly one database setting, and `OSFPM_PUBLIC_URL`, the URL you open the server at: the address alone, with no path, query or fragment. Keep it on your own machine until you have set up and secured it.
 
 ```sh
 # Small install: PGlite, stored in a directory
@@ -99,7 +99,9 @@ Then:
 curl http://127.0.0.1:3000/api/v1/health
 ```
 
-The server applies pending migrations when it starts; set `OSFPM_AUTO_MIGRATE=false` to stop that. The settings, the routes and how to add one are in [packages/api/README.md](packages/api/README.md).
+The server applies pending migrations when it starts; set `OSFPM_AUTO_MIGRATE=false` to stop that.
+
+**First run.** On a fresh install the server also prints a **setup code** to standard error, in a marked block outside the logs. It is the only secret OSFPM prints, it works once, for 24 hours, and a restart prints a new one and revokes the old. Whoever enters it creates the first organisation and its administrator (`POST /api/v1/setup`, with `POST /api/v1/setup/check` to check the code first); until then every route but the health and meta routes answers 503 `setup-required`. See "First run" in [packages/api/README.md](packages/api/README.md). The settings, the routes and how to add one are in [packages/api/README.md](packages/api/README.md).
 
 ## Contributing
 

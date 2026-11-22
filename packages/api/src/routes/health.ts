@@ -55,6 +55,7 @@ export const healthRoutes: FastifyPluginAsyncZod = (app) => {
       config: {
         auth: 'none',
         availableWhileStarting: true,
+        availableBeforeSetup: true,
         exemptFromAddressRateLimit: true,
       },
       schema: {
@@ -72,6 +73,7 @@ export const healthRoutes: FastifyPluginAsyncZod = (app) => {
       config: {
         auth: 'none',
         availableWhileStarting: true,
+        availableBeforeSetup: true,
         exemptFromAddressRateLimit: true,
       },
       schema: {
