@@ -25,6 +25,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Fields are tagged `normal` or `sensitive`. Sensitive fields never appear in logs, emails, webhook payloads, exports, error messages or API error responses unless a sensitive scope explicitly allows it.
 - Migrations are forward-only; never edit an applied migration.
 - Migrations may contain hand-written SQL (triggers, functions, reordered statements) that drizzle snapshots don't track. Say so in the commit message. Never edit an applied migration.
+- Migrations may change metadata of existing rows (retention class, defaults) without audit events; they never change security state (revoke, disable, grant).
 - Explicit foreign-key names follow `<table>_<target>_fk`; when a table references itself or the same target twice, use `<table>_<column without _id>_fk`.
 - A unique key that includes a nullable column is NULLS NOT DISTINCT unless several NULLs are meant to be allowed; Drizzle can't express it on indexes, so add it by hand in the migration with a comment.
 - No legal or financial numbers (rates, caps, thresholds, deadlines) in code: they live in rule packs as data.
