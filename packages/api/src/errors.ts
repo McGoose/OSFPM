@@ -70,6 +70,49 @@ export class SetupRequiredError extends Error {
 }
 
 /**
+ * The setup code given to first-run setup was no good: unknown, expired,
+ * replaced by a newer one, already used, not shaped like a code, or setup is
+ * already complete (SC-10). Maps to a 401 `setup-code-invalid` with one fixed body
+ * for every cause, so a response never says which. The message and the response
+ * name no cause and hold no code.
+ */
+export class SetupCodeInvalidError extends Error {
+  constructor() {
+    // Not the text of the response's `detail`, which a test requires.
+    super('No live setup code matched the request');
+    this.name = 'SetupCodeInvalidError';
+  }
+}
+
+/**
+ * The password given to first-run setup does not meet the password policy (SC-10;
+ * NIST SP 800-63B-4, section 3.1.1.2, which requires the reason to be given). Maps
+ * to a 400 `password-refused` with the reason as the `errors` entry at
+ * `admin.password` and in the `detail`. Its message is fixed text chosen by the
+ * reason alone (`describePasswordRefusal`): it carries no part of the password or
+ * of the address, never what was typed.
+ */
+export class SetupPasswordRefusedError extends Error {
+  constructor(readonly reason: PasswordRefusal) {
+    super(describePasswordRefusal(reason));
+    this.name = 'SetupPasswordRefusedError';
+  }
+}
+
+/**
+ * The route is closed for good: it answers while first-run setup is still to do,
+ * and not after (the setup routes). Maps to the same 404 as a path that is no
+ * route, code `route-not-found`, so a finished install shows no sign that the
+ * route ever existed. The message and the response carry no value.
+ */
+export class RouteNotFoundError extends Error {
+  constructor() {
+    super('There is no such route');
+    this.name = 'RouteNotFoundError';
+  }
+}
+
+/**
  * The route needs a signed-in user and the request has none. Maps to a 401.
  * The message is the same whatever the reason (no cookie, an unknown token, an
  * expired or revoked session, a disabled user), so a caller learns nothing
@@ -232,6 +275,17 @@ export class LastSignInMethodError extends Error {
  */
 const AUTHENTICATION_REQUIRED_DETAIL = 'Sign in to use this.';
 
+/**
+ * What a path that is no route answers, and what a route closed for good answers
+ * (`RouteNotFoundError`): one text, so the two cannot be told apart.
+ */
+const ROUTE_NOT_FOUND = {
+  status: 404,
+  code: 'route-not-found',
+  title: 'Route not found',
+  detail: 'There is no endpoint at this path and method.',
+} as const;
+
 /** One row of `PROBLEM_TABLE`. */
 export type ProblemRule = {
   /** Matched with `instanceof`, so a subclass takes its parent's row. */
@@ -271,6 +325,15 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
     code: 'sign-in-failed',
     title: 'Sign-in failed',
     detail: 'The sign-in details were not accepted.',
+  },
+  {
+    // The one answer to every setup code that does not work, whatever is wrong.
+    errorClass: SetupCodeInvalidError,
+    status: 401,
+    code: 'setup-code-invalid',
+    title: 'Setup code not accepted',
+    detail:
+      'The setup code was not accepted. Use the code the server printed when it started.',
   },
   {
     errorClass: AuthenticationRequiredError,
@@ -333,6 +396,22 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
     errors: (error: PasswordRefusedError) => [
       { in: 'body', path: 'newPassword', code: error.reason },
     ],
+  },
+  {
+    // The person setting the first password is owed the reason, as at any other
+    // password change; it is a 400 here because setup has no signed-in user.
+    errorClass: SetupPasswordRefusedError,
+    status: 400,
+    code: 'password-refused',
+    title: 'Password refused',
+    detail: null,
+    errors: (error: SetupPasswordRefusedError) => [
+      { in: 'body', path: 'admin.password', code: error.reason },
+    ],
+  },
+  {
+    errorClass: RouteNotFoundError,
+    ...ROUTE_NOT_FOUND,
   },
   {
     errorClass: TotpAlreadyEnrolledError,
@@ -748,11 +827,6 @@ export function registerErrorHandling(app: App): void {
     handleError(error, request, reply),
   );
   app.setNotFoundHandler((request, reply) =>
-    sendProblem(request, reply, {
-      status: 404,
-      code: 'route-not-found',
-      title: 'Route not found',
-      detail: 'There is no endpoint at this path and method.',
-    }),
+    sendProblem(request, reply, ROUTE_NOT_FOUND),
   );
 }

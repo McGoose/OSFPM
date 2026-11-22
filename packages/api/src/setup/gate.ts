@@ -1,6 +1,6 @@
 import { isSetupComplete } from '@osfpm/core/src/auth/setup-code.js';
 import type { App } from '../app.js';
-import { SetupRequiredError } from '../errors.js';
+import { RouteNotFoundError, SetupRequiredError } from '../errors.js';
 
 declare module 'fastify' {
   interface FastifyContextConfig {
@@ -12,6 +12,13 @@ declare module 'fastify' {
      * cannot be open before setup by accident.
      */
     availableBeforeSetup?: boolean;
+    /**
+     * The route answers only while first-run setup is to do. Once it is complete
+     * the route is a 404 problem, the same as a path that is no route, so a
+     * finished install shows no sign that it ever existed. Only the two setup
+     * routes say so, and they also say `availableBeforeSetup`.
+     */
+    closedAfterSetup?: boolean;
   }
   interface FastifyInstance {
     /** Whether first-run setup is complete (see `SetupState`). */
@@ -44,14 +51,16 @@ export type SetupState = {
  * app. While setup is incomplete, a request to any route that does not say
  * `config.availableBeforeSetup` is a 503 problem `setup-required`: nobody can
  * hold a session yet, so a route that needs one answers this rather than a 401.
- * An unknown path is still the usual 404, which has nothing to protect.
+ * Once it is complete, a route that says `config.closedAfterSetup` (the setup
+ * routes) is a 404 problem `route-not-found`, as a path that is no route is. An
+ * unknown path is still the usual 404, which has nothing to protect.
  *
  * Registered once, in `buildApp`, after the check that start-up has finished
  * (the database must be migrated before it is asked) and before the auth plugin,
  * so a caller with a cookie, a foreign `Origin` or none gets the same answer and
- * no cookie is looked at or cleared. A route that is open before setup is not
- * counted here and costs no database query. Once setup is complete the check is
- * a flag in memory, so it costs nothing.
+ * no cookie is looked at or cleared. A route that is open both before and after
+ * setup costs no database query. Once setup is complete the check is a flag in
+ * memory, so it costs nothing.
  */
 export function registerSetupGate(app: App): void {
   let complete = false;
@@ -68,7 +77,14 @@ export function registerSetupGate(app: App): void {
 
   app.addHook('onRequest', async (request) => {
     if (request.is404) return;
-    if (request.routeOptions.config.availableBeforeSetup === true) return;
-    if (!(await state.isComplete())) throw new SetupRequiredError();
+    const { availableBeforeSetup, closedAfterSetup } =
+      request.routeOptions.config;
+    // Open whatever the state: no need to ask.
+    if (availableBeforeSetup === true && closedAfterSetup !== true) return;
+    if (await state.isComplete()) {
+      if (closedAfterSetup === true) throw new RouteNotFoundError();
+      return;
+    }
+    if (availableBeforeSetup !== true) throw new SetupRequiredError();
   });
 }

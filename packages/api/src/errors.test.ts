@@ -43,7 +43,10 @@ import {
   PROBLEM_TABLE,
   RateLimitedError,
   RecoveryRequiredError,
+  RouteNotFoundError,
   ServiceUnavailableError,
+  SetupCodeInvalidError,
+  SetupPasswordRefusedError,
   SetupRequiredError,
   SignInFailedError,
   StartingError,
@@ -123,6 +126,12 @@ const fixtures = new Map<abstract new (...args: never[]) => Error, () => Error>(
     [RateLimitedError, () => new RateLimitedError()],
     [StartingError, () => new StartingError()],
     [SetupRequiredError, () => new SetupRequiredError()],
+    [SetupCodeInvalidError, () => new SetupCodeInvalidError()],
+    [
+      SetupPasswordRefusedError,
+      () => new SetupPasswordRefusedError('too-short'),
+    ],
+    [RouteNotFoundError, () => new RouteNotFoundError()],
     [
       SensitivePayloadInvalidError,
       () =>

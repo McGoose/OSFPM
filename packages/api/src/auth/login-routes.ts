@@ -98,8 +98,14 @@ async function signInStep<T>(
   return result;
 }
 
-/** The browser the request came from, for the user's list of where they are signed in. */
-function deviceOf(request: FastifyRequest): { userAgentSummary?: string } {
+/**
+ * The browser the request came from, for the user's list of where they are
+ * signed in: the `User-Agent` header, when there is one, in the form
+ * `createSession` takes. Reads no secret; the setup route uses it as well.
+ */
+export function deviceOf(request: FastifyRequest): {
+  userAgentSummary?: string;
+} {
   const header = request.headers['user-agent'];
   return typeof header === 'string' && header.length > 0
     ? { userAgentSummary: header }

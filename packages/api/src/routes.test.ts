@@ -279,6 +279,8 @@ describe.each(testTargets)('the routes on $name', (target) => {
         [`${API_PREFIX}/health/ready`]: ['get'],
         [`${API_PREFIX}/meta`]: ['get'],
         [`${API_PREFIX}/openapi.json`]: ['get'],
+        [`${API_PREFIX}/setup`]: ['post'],
+        [`${API_PREFIX}/setup/check`]: ['post'],
         [`${API_PREFIX}/auth/me`]: ['get'],
         [`${API_PREFIX}/auth/logout`]: ['post'],
         [`${API_PREFIX}/auth/sessions`]: ['get'],

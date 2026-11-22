@@ -28,6 +28,7 @@ import {
 } from './logging.js';
 import { PACKAGE_VERSION } from './package-info.js';
 import { registerSetupGate } from './setup/gate.js';
+import { setupRoutes } from './setup/routes.js';
 import { safeValidatorCompiler } from './validation.js';
 import { authRoutes } from './routes/auth.js';
 import { healthRoutes } from './routes/health.js';
@@ -224,6 +225,10 @@ export function buildApp(options: BuildAppOptions) {
   void app.register(healthRoutes, { prefix: API_PREFIX });
   void app.register(metaRoutes, { prefix: API_PREFIX });
   void app.register(openapiRoutes, { prefix: API_PREFIX });
+  void app.register(setupRoutes, {
+    prefix: API_PREFIX,
+    publicOrigin: options.publicOrigin,
+  });
   void app.register(authRoutes, { prefix: `${API_PREFIX}/auth` });
   void app.register(loginRoutes, {
     prefix: `${API_PREFIX}/auth`,
