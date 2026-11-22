@@ -183,6 +183,35 @@ export class TotpCodeIncorrectError extends Error {
 }
 
 /**
+ * A passkey could not be added: the challenge was unknown, used, expired or made
+ * for another user, the browser's response did not verify (a wrong origin,
+ * relying party, challenge or key type, or no user verification), or the
+ * credential is already registered. Maps to a 422 `passkey-registration-failed`
+ * with one fixed body for every cause. The user is signed in, so it is not a 401.
+ * The message and the response name no cause and no value: the library's own
+ * messages quote the challenge.
+ */
+export class PasskeyRegistrationRefusedError extends Error {
+  constructor() {
+    // Not the text of the response's `detail`, which a test requires.
+    super('Passkey registration refused');
+    this.name = 'PasskeyRegistrationRefusedError';
+  }
+}
+
+/**
+ * The passkey is the user's only way to sign in: they have no password and no
+ * other live passkey, so removing it would lock them out (SC-10, decision D-56).
+ * Maps to a 409 `last-sign-in-method`. The message names no user and no passkey.
+ */
+export class LastSignInMethodError extends Error {
+  constructor() {
+    super('The passkey is the last way to sign in');
+    this.name = 'LastSignInMethodError';
+  }
+}
+
+/**
  * What a client reads when it has no usable session. One text for every cause,
  * so the response never says whether the cookie was missing, unknown, expired,
  * revoked or the user disabled.
@@ -313,6 +342,21 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
     code: 'totp-code-incorrect',
     title: 'Authenticator code incorrect',
     detail: 'The code was not correct. Check the app and try again.',
+  },
+  {
+    errorClass: PasskeyRegistrationRefusedError,
+    status: 422,
+    code: 'passkey-registration-failed',
+    title: 'Passkey registration failed',
+    detail: 'The passkey could not be registered. Start again.',
+  },
+  {
+    errorClass: LastSignInMethodError,
+    status: 409,
+    code: 'last-sign-in-method',
+    title: 'Last way to sign in',
+    detail:
+      'This passkey is the only way to sign in. Set a password or add another passkey first.',
   },
   {
     errorClass: RateLimitedError,

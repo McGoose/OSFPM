@@ -6,6 +6,11 @@ import {
   consumeLoginChallenge,
   createLoginChallenge,
 } from '@osfpm/core/src/auth/login-challenge.js';
+import {
+  finishPasskeyLogin,
+  startPasskeyLogin,
+  type RelyingParty,
+} from '@osfpm/core/src/auth/passkeys.js';
 import { verifyPasswordLogin } from '@osfpm/core/src/auth/password-service.js';
 import { verifyRecoveryLogin } from '@osfpm/core/src/auth/recovery.js';
 import {
@@ -18,9 +23,14 @@ import type { App } from '../app.js';
 import { problemResponse, SignInFailedError } from '../errors.js';
 import { meSchema } from '../routes/auth.js';
 import { setSessionCookie } from './cookie.js';
+import {
+  authenticationResponseSchema,
+  passkeyChallenge,
+  requestOptionsSchema,
+} from './passkey-schemas.js';
 
 const signInFailed = problemResponse(
-  'The sign-in was not accepted. The answer is the same for every cause: an address no one has, no password, a wrong password or code, a challenge that is unknown, used or over, a disabled user, or an account closed for a while after too many wrong guesses.',
+  'The sign-in was not accepted. The answer is the same for every cause: an address no one has, no password, a wrong password or code, a challenge that is unknown, used or over, a passkey that is unknown, revoked or does not verify, a disabled user, or an account closed for a while after too many wrong guesses.',
 );
 const badRequest = problemResponse(
   'The request is not shaped as this endpoint accepts. The failing fields are listed, never their values.',
@@ -120,23 +130,34 @@ function sendSession(
   reply.header('cache-control', 'no-store');
 }
 
+/** What `loginRoutes` is registered with. */
+export type LoginRoutesOptions = {
+  /** The site a passkey belongs to, from `OSFPM_PUBLIC_URL` (see `relyingPartyFor`). */
+  readonly relyingParty: RelyingParty;
+};
+
 /**
  * The sign-in routes under `/api/v1/auth/login` (SC-10, decision D-56):
- * password, then the authenticator code if the user has one, and a recovery
- * code. None needs a session (`auth: 'none'`), and all count against the strict
- * limit per address (`AUTH_RATE_LIMIT`), together.
+ * password, then the authenticator code if the user has one, a recovery code,
+ * and a passkey (two requests: `passkey/options`, then `passkey/verify`). None
+ * needs a session (`auth: 'none'`), and all count against the strict limit per
+ * address (`AUTH_RATE_LIMIT`), together.
  *
  * Every failure answers the same 401 `sign-in-failed`, with one body, for every
  * cause: nothing in the answer says which part failed or whether an address has
- * an account. The cause, a reason class and never what was typed, is in the
- * audit trail, written by the core before the answer is built. A request that is
- * not shaped right stays a 400. A success sets the session cookie
- * (`setSessionCookie`) and returns the user; the raw token is never in a body,
- * a log line or an audit event.
+ * an account or a credential. The cause, a reason class and never what was sent,
+ * is in the audit trail, written by the core before the answer is built. A
+ * request that is not shaped right stays a 400. A success sets the session
+ * cookie (`setSessionCookie`) and returns the user; the raw token is never in a
+ * body, a log line or an audit event. A challenge is returned in an uncacheable
+ * response and is never logged or audited.
  *
  * The routes check no permission: signing in is how a person gets one.
  */
-export const loginRoutes: FastifyPluginAsyncZod = (app) => {
+export const loginRoutes: FastifyPluginAsyncZod<LoginRoutesOptions> = (
+  app,
+  options,
+) => {
   app.post(
     '/login/password',
     {
@@ -274,6 +295,77 @@ export const loginRoutes: FastifyPluginAsyncZod = (app) => {
       });
       sendSession(reply, outcome.created);
       return { user: userView(outcome.user), mustSecureAccount: true as const };
+    },
+  );
+
+  app.post(
+    '/login/passkey/options',
+    {
+      config: { auth: 'none', authRateLimit: true },
+      schema: {
+        summary: 'Start a sign-in with a passkey',
+        description:
+          'Needs no session and no address. Returns a challenge and the options for `navigator.credentials.get()`: no credential is named, so the device offers the passkeys it has for this site, and the answer says nothing about who has one. The challenge works once, for five minutes. The answer is not to be cached. Finish with `POST /auth/login/passkey/verify`.',
+        response: {
+          200: z.object({
+            challenge: passkeyChallenge,
+            options: requestOptionsSchema,
+          }),
+          429: tooManyRequests,
+        },
+      },
+    },
+    async (_request, reply) => {
+      const started = await startPasskeyLogin(app.db.db, {
+        relyingParty: options.relyingParty,
+        now: new Date(),
+      });
+      reply.header('cache-control', 'no-store');
+      return { challenge: started.challenge, options: started.options };
+    },
+  );
+
+  app.post(
+    '/login/passkey/verify',
+    {
+      config: { auth: 'none', authRateLimit: true },
+      schema: {
+        summary: 'Finish a sign-in with a passkey',
+        description:
+          'The second request, with the challenge `POST /auth/login/passkey/options` returned and what the browser answered. A right answer signs the user in, with no address or password: a session cookie (method `passkey`) and the user. A challenge works once, and the first answer that reaches it uses it up, right or wrong.',
+        body: z.object({
+          challenge: passkeyChallenge,
+          response: authenticationResponseSchema,
+        }),
+        response: {
+          200: z.object({ user: meSchema }),
+          400: badRequest,
+          401: signInFailed,
+          429: tooManyRequests,
+        },
+      },
+    },
+    async (request, reply) => {
+      const now = new Date();
+      const outcome = await signInStep(app, async (tx) => {
+        const checked = await finishPasskeyLogin(tx, {
+          relyingParty: options.relyingParty,
+          challenge: request.body.challenge,
+          response: request.body.response,
+          now,
+        });
+        if (!checked.ok) return null;
+        const created = await startSession(
+          tx,
+          request,
+          checked.user.id,
+          'passkey',
+          now,
+        );
+        return { user: checked.user, created };
+      });
+      sendSession(reply, outcome.created);
+      return { user: userView(outcome.user) };
     },
   );
 

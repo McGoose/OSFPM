@@ -59,9 +59,10 @@ const sessionSchema = z.object({
  * against the limit per session (`SESSION_RATE_LIMIT`); `POST` and `DELETE` also
  * need the right `Origin` (see `authPlugin`). `me` and `logout` are also open to a
  * session a recovery code opened (`allowedInRecovery`); the session list is not.
- * Signing in is in `auth/login-routes.ts` (password, authenticator code and
- * recovery code), and securing the account in `auth/account-routes.ts`. Passkeys
- * come later.
+ * Signing in is in `auth/login-routes.ts` (password, authenticator code,
+ * recovery code and passkey), securing the account in `auth/account-routes.ts`,
+ * and adding, listing, renaming and revoking passkeys in
+ * `auth/passkey-routes.ts`.
  *
  * These are self-service routes: every one acts on the signed-in user's own
  * account and sessions, so there is no permission to lack. Without a session the
