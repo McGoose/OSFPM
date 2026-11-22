@@ -45,6 +45,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Tenant tables are defined with `tenantTable()`, never bare `pgTable`.
 - Permission checks run only on the server through the policy engine.
 - Organisation role grants reach projects only with `reach = 'all-projects'`, never for sensitive permissions.
+- A service that edits roles or grants calls `assertRoleEditable` / `assertGrantEditable` first; the managed-role triggers are the backstop, not the check.
 - Every permission-protected endpoint gets a test proving 403 without access and no sensitive fields without `sensitive:read`.
 - A self-service endpoint (it acts only on the signed-in user's own account, so there is no permission to lack) gets tests proving 401 without a session, 403 for a foreign `Origin` on a request that changes data, and 403 `account-recovery-required` for a recovery-scope session unless the route says `allowedInRecovery`.
 - Public endpoints (`auth: 'none'`) test identical failure answers and their rate limit.
@@ -57,6 +58,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Routes validate input with Zod schemas and never return core errors directly; the error table in `packages/api/src/errors.ts` maps them.
 - The API package never imports drizzle-orm; it calls core services.
 - Every new route declares `auth`; the default is `required`. Cookie requests that change data must pass the Origin check.
+- Every route that creates a session passes the Origin check, with or without a cookie.
 - Status codes: 401 = not signed in; 403 = signed in but not allowed; 404 for by-id lookups where existence must not leak.
 - Login failures always answer the same 401 `sign-in-failed`; never reveal which part failed.
 - Log lines use the logger's known keys (req, res, err) or plain scalar fields; never log whole objects or request data.
