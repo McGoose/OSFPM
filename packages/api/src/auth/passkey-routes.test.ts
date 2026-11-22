@@ -845,6 +845,19 @@ describe.each(testTargets)(
           },
         ],
         [
+          'a user handle that is not the credential owner’s',
+          'verification-failed',
+          async () => {
+            const { userId, authenticator } = await userWithPasskey();
+            return {
+              response: await signIn(authenticator, {
+                userHandle: 'bm90LXRoZS1oYW5kbGU',
+              }),
+              userId,
+            };
+          },
+        ],
+        [
           'no user verification',
           'verification-failed',
           async () => {

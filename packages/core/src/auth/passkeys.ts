@@ -184,6 +184,24 @@ function userHandleOf(userId: string): Uint8Array<ArrayBuffer> {
   return Buffer.from(userId.replaceAll('-', ''), 'hex');
 }
 
+/**
+ * Whether the user handle in an authentication response, if it has one, is the
+ * handle of `ownerId`. No handle, or an empty one, is a match: a device may leave
+ * it out, and `@simplewebauthn/browser` writes an empty one as none. Anything
+ * that is not the owner's 16 bytes in base64url, with or without padding, is not.
+ */
+function userHandleMatches(response: unknown, ownerId: string): boolean {
+  const handle = (
+    response as { response?: { userHandle?: unknown } } | null | undefined
+  )?.response?.userHandle;
+  if (handle === undefined || handle === null || handle === '') return true;
+  if (typeof handle !== 'string') return false;
+  return (
+    handle.replace(/=+$/, '') ===
+    Buffer.from(userHandleOf(ownerId)).toString('base64url')
+  );
+}
+
 /** What `startPasskeyRegistration` returns. */
 export type PasskeyRegistrationStart = {
   /**
@@ -518,11 +536,15 @@ function claimedCredentialId(response: unknown): string | null {
  * stored. The library's own counter check is switched off by giving it a count
  * of 0, because the rule lives here, where it has its own audit reason.
  *
- * The account is found from the credential id, which maps only to its owner; the
- * `userHandle` in the response is not used to find it. A failure never counts
- * toward the account's throttle: a passkey is not a secret anyone guesses. It
- * does not spend the time of one derivation to hide which cause it was, as the
- * password step does.
+ * The account is found from the credential id, which maps only to its owner. If
+ * the response carries a `userHandle`, it must be the owner's (`userHandleOf`),
+ * or the sign-in is refused as `verification-failed`: WebAuthn requires the
+ * check for a sign-in with no address, and it catches a credential whose
+ * authenticator says it belongs to someone else. A response with no handle is
+ * accepted: a device may leave it out. A failure never counts toward the
+ * account's throttle: a passkey is not a secret anyone guesses. It does not
+ * spend the time of one derivation to hide which cause it was, as the password
+ * step does.
  *
  * @throws RecordWriteError when the database refuses a write; it carries the
  * SQLSTATE and constraint name only.
@@ -604,6 +626,12 @@ export function finishPasskeyLogin(
       if (row === undefined) return refuse(null, 'unknown-credential');
       if (row.revokedAt !== null) return refuse(knownUser, 'revoked');
       if (status === 'disabled') return refuse(knownUser, 'disabled');
+      // A response that carries a user handle must carry the owner's (WebAuthn,
+      // section 7.2). Checked before the library is asked, because the handle is
+      // not covered by the signature, so it says nothing about the verification.
+      if (!userHandleMatches(input.response, knownUser)) {
+        return refuse(knownUser, 'verification-failed');
+      }
 
       let verified: Awaited<ReturnType<typeof verifyAuthenticationResponse>>;
       try {

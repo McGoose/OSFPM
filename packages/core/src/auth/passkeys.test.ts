@@ -854,15 +854,55 @@ describe.each(testTargets)('passkeys on $name', (target) => {
       }
     });
 
-    it('does not use the user handle: a sign-in with none, or with another, still goes to the owner of the credential', async () => {
-      // The account is found from the credential id, which maps only to its owner.
-      const { userId, authenticator } = await userWithPasskey();
-      for (const userHandle of [null, 'bm90LXRoZS1oYW5kbGU']) {
+    describe('the user handle', () => {
+      // WebAuthn, section 7.2: a response that carries a user handle must carry
+      // the one of the credential's owner. The account is still found from the
+      // credential id; the handle is a check on it.
+      it('is accepted when it is the owner’s, in either spelling, and when the response carries none', async () => {
+        const { userId, authenticator } = await userWithPasskey();
+        const own = userHandleOf(userId);
+        for (const userHandle of [undefined, null, own, `${own}==`]) {
+          const started = await startLogin();
+          expect(
+            await signIn(started, authenticator, {
+              ...(userHandle === undefined ? {} : { tweaks: { userHandle } }),
+            }),
+          ).toMatchObject({ ok: true, user: { id: userId } });
+        }
+      });
+
+      it('is refused when it is another user’s or is no handle of anyone, as verification-failed, and the challenge is used up', async () => {
+        const mine = await userWithPasskey();
+        const other = await userWithPasskey();
+        for (const userHandle of [
+          userHandleOf(other.userId),
+          'bm90LXRoZS1oYW5kbGU',
+          // The owner's handle with its first character changed.
+          userHandleOf(mine.userId).replace(/^./, (c) =>
+            c === 'B' ? 'C' : 'B',
+          ),
+        ]) {
+          const started = await startLogin();
+          expect(
+            await signIn(started, mine.authenticator, {
+              tweaks: { userHandle },
+            }),
+          ).toEqual({ ok: false });
+          expect(await lastFailure()).toMatchObject({
+            targetId: mine.userId,
+            details: { method: 'passkey', reason: 'verification-failed' },
+          });
+          expect(
+            (await challengeRow(started.challenge))!.usedAt,
+          ).not.toBeNull();
+        }
+        // Nothing was stored for the passkey, and it still signs in with its own handle.
+        expect((await storedPasskey(mine.passkey.id)).signCount).toBe(0);
         const started = await startLogin();
-        expect(
-          await signIn(started, authenticator, { tweaks: { userHandle } }),
-        ).toMatchObject({ ok: true, user: { id: userId } });
-      }
+        expect(await signIn(started, mine.authenticator)).toMatchObject({
+          ok: true,
+        });
+      });
     });
 
     describe('the signature counter', () => {
@@ -1038,6 +1078,15 @@ describe.each(testTargets)('passkeys on $name', (target) => {
         'verification-failed',
         () =>
           Promise.resolve({ tweaks: { userVerified: false }, targeted: true }),
+      ],
+      [
+        'a user handle that is not the credential owner’s',
+        'verification-failed',
+        () =>
+          Promise.resolve({
+            tweaks: { userHandle: 'bm90LXRoZS1oYW5kbGU' },
+            targeted: true,
+          }),
       ],
       [
         'a challenge nobody made',
