@@ -15,7 +15,7 @@ import {
   sqlList,
   timestamptz,
 } from '../columns.js';
-import { ORG_ROLES, type OrgRole } from './org-membership.js';
+import type { OrgRole } from './org-membership.js';
 import { organisation } from './organisation.js';
 import { role } from './role.js';
 import { user } from './user.js';
@@ -25,11 +25,16 @@ import { user } from './user.js';
  * `owner`, which no invite can give (SC-10; decision D-51: a tier grants no
  * permission, so an invite's power is its roles, and the first administrator is
  * the owner). The CHECK is built from this list, so a new value needs a new
- * migration.
+ * migration. Written out, not filtered from `ORG_ROLES`, so the API can build its
+ * enum from it; `schema.test.ts` requires it to equal `ORG_ROLES` without `owner`,
+ * so a new tier cannot be forgotten here.
  */
-export const INVITE_TIERS = ORG_ROLES.filter(
-  (tier): tier is Exclude<OrgRole, 'owner'> => tier !== 'owner',
-);
+export const INVITE_TIERS = [
+  'admin',
+  'member',
+  'supervisor',
+  'guest',
+] as const satisfies readonly Exclude<OrgRole, 'owner'>[];
 /** One value of `INVITE_TIERS`. */
 export type InviteTier = (typeof INVITE_TIERS)[number];
 

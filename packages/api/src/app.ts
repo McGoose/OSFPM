@@ -26,6 +26,8 @@ import {
   UNMATCHED_ROUTE,
   type LoggerSettings,
 } from './logging.js';
+import { organisationInviteRoutes } from './invites/organisation-routes.js';
+import { publicInviteRoutes } from './invites/public-routes.js';
 import { PACKAGE_VERSION } from './package-info.js';
 import { registerSetupGate } from './setup/gate.js';
 import { setupRoutes } from './setup/routes.js';
@@ -237,6 +239,10 @@ export function buildApp(options: BuildAppOptions) {
     prefix: `${API_PREFIX}/auth`,
     relyingParty,
   });
+  void app.register(organisationInviteRoutes, {
+    prefix: `${API_PREFIX}/organisations`,
+  });
+  void app.register(publicInviteRoutes, { prefix: `${API_PREFIX}/invites` });
 
   return app;
 }

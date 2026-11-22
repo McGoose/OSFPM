@@ -27,7 +27,9 @@ import { sensitiveColumns } from './sensitive.js';
 import * as schemaModule from './schema/index.js';
 import {
   department,
+  INVITE_TIERS,
   installation,
+  ORG_ROLES,
   orgMembership,
   orgMembershipRole,
   organisation,
@@ -354,6 +356,16 @@ describe('security tables in the schema', () => {
           : [],
       );
     }
+  });
+});
+
+// The tiers an invite may give are the membership tiers but the owner, which no
+// invite can give. Written out in the schema so the API can build an enum from it.
+describe('invite tiers', () => {
+  it('are the membership tiers except owner, in the same order', () => {
+    expect([...INVITE_TIERS]).toEqual(
+      ORG_ROLES.filter((tier) => tier !== 'owner'),
+    );
   });
 });
 
