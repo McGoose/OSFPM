@@ -34,6 +34,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Modules never read other modules' tables; they use core services and events.
 - Tenant records are written only through the write helper in `src/db/write.ts`.
 - Tables in `SECURITY_TABLES` are written only by the auth service, never through the write helper; their changes are audited, not change-logged.
+- A security table has no `organisation_id`, except one that declares `organisationScoped` in code (`invite`, and its child `invite_role`): the composite keys that keep an invite and its roles inside one organisation need the column. The write helper still refuses them.
 - `user` and `installation` are install-level tables, written only by the core services named for them in `SERVICE_WRITTEN_TABLES` (the auth service, which also does first-run setup), never through the write helper; their changes are audited, not change-logged.
 - The setup code is the only secret OSFPM prints; it goes to stderr outside the logger.
 - Test fixtures may insert rows directly to set up state. Code under test always writes through the write helper.

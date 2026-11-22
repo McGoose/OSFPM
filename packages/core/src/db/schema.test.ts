@@ -14,7 +14,9 @@ import type { Database } from './client.js';
 import {
   declaredRetentionClasses,
   organisationForeignKeyName,
+  organisationScopedSecurityTables,
   retentionClassForeignKeyName,
+  securityChildTables,
   securityTableNames,
   tenantTableNames,
 } from './columns.js';
@@ -35,6 +37,7 @@ import {
   projectMembershipRole,
   role,
   rolePermission,
+  SECURITY_CHILD_TABLES,
   SECURITY_TABLES,
   settingValue,
   user,
@@ -304,14 +307,30 @@ describe('security tables in the schema', () => {
     }
   });
 
-  // The write helper needs organisation_id to number and log a change; without
-  // the column a security table could never go through it.
-  it('have no organisation_id, owner_org_id or visibility', () => {
+  // The write helper needs organisation_id to number and log a change, so a
+  // security table has none, with one exception: a table that declared
+  // `organisationScoped` in code (`invite`), because its role links are tied to
+  // its organisation through composite keys. The write helper refuses it all the
+  // same (`write-security-tables.test.ts`). The declaration is read from code, not
+  // from a list kept here, so a table cannot get the column without declaring it,
+  // and cannot declare it without the column.
+  it('have no owner_org_id or visibility, and an organisation_id only when the table declared organisationScoped', () => {
+    const declared = organisationScopedSecurityTables();
     for (const table of SECURITY_TABLES) {
+      const name = getTableName(table);
       const names = getTableConfig(table).columns.map((c) => c.name);
-      for (const omitted of USER_OMITTED) {
-        expect(names, getTableName(table)).not.toContain(omitted);
-      }
+      expect(names, name).not.toContain('owner_org_id');
+      expect(names, name).not.toContain('visibility');
+      expect(names.includes('organisation_id'), name).toBe(declared.has(name));
+    }
+  });
+
+  it('declare organisationScoped only for security tables that exist, each with a reason', () => {
+    // Guards against the record being empty and the check above passing for nothing.
+    expect(organisationScopedSecurityTables().size).toBeGreaterThanOrEqual(1);
+    for (const [name, reason] of organisationScopedSecurityTables()) {
+      expect(securityNames, name).toContain(name);
+      expect(reason.trim().length, name).toBeGreaterThan(0);
     }
   });
 
@@ -334,6 +353,73 @@ describe('security tables in the schema', () => {
           ? [`${name}_user_fk`]
           : [],
       );
+    }
+  });
+});
+
+// A child table of a security table (`invite_role`): rows that belong to one row
+// of a security table and are deleted with it, written only by the auth service.
+describe('security child tables in the schema', () => {
+  const childNames = SECURITY_CHILD_TABLES.map((table) => getTableName(table));
+
+  it('are the tables defined through securityChildTable, no more and no fewer', () => {
+    // Guards against both lists being empty and passing for nothing.
+    expect(childNames.length).toBeGreaterThanOrEqual(1);
+    expect([...childNames].sort()).toEqual(
+      [...securityChildTables().keys()].sort(),
+    );
+  });
+
+  it('are in the schema, are neither security tables nor tenant tables, and name a parent that is a security table', () => {
+    const inSchema = new Set<string>(
+      schemaTables.map((table) => getTableName(table)),
+    );
+    for (const [name, { parent, reason }] of securityChildTables()) {
+      expect(inSchema.has(name), name).toBe(true);
+      expect(securityTableNames().has(name), name).toBe(false);
+      expect(tenantTableNames().has(name), name).toBe(false);
+      expect(securityTableNames().has(parent), `${name}'s parent`).toBe(true);
+      expect(reason.trim().length, name).toBeGreaterThan(0);
+    }
+  });
+
+  // The rows go with the parent's, so the parent's cleanup covers both and the
+  // child needs no retention class (and no cleanup of its own).
+  it('carry organisation_id, have no retention class, and are deleted with their parent row', () => {
+    for (const table of SECURITY_CHILD_TABLES) {
+      const config = getTableConfig(table);
+      const names = config.columns.map((c) => c.name);
+      expect(names, config.name).toContain('organisation_id');
+      expect(names, config.name).not.toContain('retention_class');
+      const parent = securityChildTables().get(config.name)!.parent;
+      const toParent = config.foreignKeys.filter(
+        (fk) => getTableName(fk.reference().foreignTable) === parent,
+      );
+      expect(toParent.length, config.name).toBeGreaterThanOrEqual(1);
+      for (const fk of toParent) {
+        expect(fk.onDelete, fk.getName()).toBe('cascade');
+      }
+    }
+  });
+
+  // So that a row of one organisation can never be tied to a record of another:
+  // the only reference that is not composite is the one to the organisation.
+  it('tie every reference but the one to the organisation to organisation_id, in a composite key', () => {
+    for (const table of SECURITY_CHILD_TABLES) {
+      const config = getTableConfig(table);
+      for (const fk of config.foreignKeys) {
+        const ref = fk.reference();
+        const target = getTableName(ref.foreignTable);
+        const own = ref.columns.map((c) => c.name);
+        const theirs = ref.foreignColumns.map((c) => c.name);
+        if (target === 'organisation') {
+          expect(own, fk.getName()).toEqual(['organisation_id']);
+        } else {
+          expect(own[0], fk.getName()).toBe('organisation_id');
+          expect(theirs[0], fk.getName()).toBe('organisation_id');
+          expect(own.length, fk.getName()).toBeGreaterThanOrEqual(2);
+        }
+      }
     }
   });
 });
@@ -464,6 +550,8 @@ describe.each(testTargets)('database schema on $name', (target) => {
           'department',
           'episode',
           'installation',
+          'invite',
+          'invite_role',
           'legal_hold',
           'location',
           'login_challenge',
@@ -865,12 +953,15 @@ describe.each(testTargets)('database schema on $name', (target) => {
         });
       });
 
-      it('gives every security table the standard columns except the tenant trio', async () => {
+      it('gives every security table the standard columns except the tenant trio, bar the organisation_id of a table that declared it', async () => {
         for (const table of SECURITY_TABLES) {
           const name = getTableName(table);
           const columns = await columnsOf(database, name);
           for (const [column, spec] of Object.entries(STANDARD_COLUMNS)) {
-            if (USER_OMITTED.includes(column)) {
+            const declared =
+              column === 'organisation_id' &&
+              organisationScopedSecurityTables().has(name);
+            if (USER_OMITTED.includes(column) && !declared) {
               expect(columns.has(column), `${name}.${column}`).toBe(false);
             } else {
               expect(columns.get(column), `${name}.${column}`).toMatchObject(

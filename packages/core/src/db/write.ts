@@ -7,7 +7,7 @@ import {
   sql,
 } from 'drizzle-orm';
 import type { AnyPgColumn, PgTable } from 'drizzle-orm/pg-core';
-import type { ActorType } from './columns.js';
+import { isSecurityTableName, type ActorType } from './columns.js';
 import type { SchemaDb } from './client.js';
 import { newId } from './ids.js';
 import { parentKeysOf, resolveProjectId } from './project-resolver.js';
@@ -133,6 +133,29 @@ export type UpdatePatch<T extends TenantTable> = Partial<
 >;
 
 /**
+ * The write helper was given a security table, or the child table of one. Only the
+ * auth service writes those, directly, and audits instead of change-logging
+ * (CLAUDE.md, Data rules), so the helper refuses them even when they have an
+ * `organisation_id`, like `invite` and `invite_role`. Nothing was written. The
+ * message names the table and carries no row value. It is a bug in the caller, not
+ * in a request, so the API does not map it: it becomes a generic 500.
+ */
+export class SecurityTableWriteError extends Error {
+  constructor(readonly entityType: string) {
+    super(
+      `${entityType} is a security table: only the auth service writes it, never the write helper`,
+    );
+    this.name = 'SecurityTableWriteError';
+  }
+}
+
+/** Refuses a security table, or the child table of one, before anything is written. */
+function refuseSecurityTable(table: PgTable): void {
+  const name = getTableName(table);
+  if (isSecurityTableName(name)) throw new SecurityTableWriteError(name);
+}
+
+/**
  * `expectedVersion` did not match the stored version, so nothing was written.
  * Carries the ids and the two versions, never row values.
  */
@@ -256,6 +279,7 @@ async function guarded<R>(
       error instanceof RecordNotFoundError ||
       error instanceof RecordStateError ||
       error instanceof MissingActingUserError ||
+      error instanceof SecurityTableWriteError ||
       error instanceof RecordWriteError
     ) {
       throw error;
@@ -488,6 +512,7 @@ export function insertRecord<T extends TenantTable>(
   return guarded(table, 'insert', () =>
     // A savepoint: a failed insert leaves no row, event or used `seq`.
     tx.transaction(async (inner) => {
+      refuseSecurityTable(table);
       attributedUserId(ctx); // refuses a missing acting user before any write
       const now = ctx.clock();
       const full = {
@@ -561,6 +586,7 @@ function modifyRecord<T extends TenantTable>(
   return guarded(table, action, () =>
     // A savepoint, as in `insertRecord`.
     tx.transaction(async (inner) => {
+      refuseSecurityTable(table);
       attributedUserId(ctx); // refuses a missing acting user before any write
       const before = await loadRow(inner, table, id);
       const entityType = getTableName(table);

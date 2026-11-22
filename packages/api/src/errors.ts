@@ -17,6 +17,7 @@ import {
   RecordNotFoundError,
   RecordStateError,
   RecordWriteError,
+  SecurityTableWriteError,
   VersionConflictError,
 } from '@osfpm/core/src/db/write.js';
 import { InstallationMissingError } from '@osfpm/core/src/installation/server-id.js';
@@ -602,6 +603,11 @@ export const INTERNAL_ERRORS: readonly {
     errorClass: MissingActingUserError,
     reason:
       'The types forbid it, so it is a bug in the server, not the request.',
+  },
+  {
+    errorClass: SecurityTableWriteError,
+    reason:
+      'A service handed the write helper a security table, which only the auth service writes. A bug in the server, not the request; the message names the table and no row value.',
   },
   {
     errorClass: PermissionSyncError,

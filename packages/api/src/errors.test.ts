@@ -22,6 +22,7 @@ import {
   RecordNotFoundError,
   RecordStateError,
   RecordWriteError,
+  SecurityTableWriteError,
   VersionConflictError,
 } from '@osfpm/core/src/db/write.js';
 import { testTargets } from '@osfpm/core/src/db/test-support.js';
@@ -155,6 +156,7 @@ const internalFixtures = new Map<
       new RecordWriteError('person', 'insert', '23505', `person_${SECRET}_key`),
   ],
   [MissingActingUserError, () => new MissingActingUserError('token')],
+  [SecurityTableWriteError, () => new SecurityTableWriteError('invite')],
   [PermissionSyncError, () => new PermissionSyncError([])],
   [InstallationMissingError, () => new InstallationMissingError()],
 ]);

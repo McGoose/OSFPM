@@ -12,7 +12,11 @@ import { fileURLToPath } from 'node:url';
 import { getTableName, is } from 'drizzle-orm';
 import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
-import { securityTableNames, tenantTableNames } from './columns.js';
+import {
+  securityChildTables,
+  securityTableNames,
+  tenantTableNames,
+} from './columns.js';
 import * as schemaModule from './schema/index.js';
 
 /**
@@ -97,11 +101,13 @@ const PACKAGES = fileURLToPath(new URL('../../../', import.meta.url));
 describe('who may write tenant and security tables', () => {
   const tenant = tablesNamed(tenantTableNames());
   const security = tablesNamed(securityTableNames());
+  const securityChildren = tablesNamed(new Set(securityChildTables().keys()));
 
   it('finds the tables and the source it is meant to check', () => {
     // Guards against the scan matching nothing and passing for nothing.
     expect(tenant.length).toBeGreaterThanOrEqual(20);
     expect(security.length).toBeGreaterThanOrEqual(6);
+    expect(securityChildren.length).toBeGreaterThanOrEqual(1);
     const files = sourceFiles(PACKAGES).map((file) =>
       relative(PACKAGES, file).split(sep).join('/'),
     );
@@ -114,6 +120,12 @@ describe('who may write tenant and security tables', () => {
 
   it('writes security tables only in the auth service', () => {
     expect(violations(PACKAGES, security, AUTH_SERVICE)).toEqual([]);
+  });
+
+  // A child table of a security table (invite_role) has an organisation_id like a
+  // tenant table, but it is the auth service's, not the write helper's.
+  it('writes the child tables of security tables only in the auth service', () => {
+    expect(violations(PACKAGES, securityChildren, AUTH_SERVICE)).toEqual([]);
   });
 
   describe('user and installation', () => {
