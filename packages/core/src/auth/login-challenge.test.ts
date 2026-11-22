@@ -19,7 +19,7 @@ import {
   setUserStatus,
   totpCodeAt,
 } from './test-support.js';
-import { hashToken } from './tokens.js';
+import { generateToken, hashToken } from './tokens.js';
 import { LOGIN_THROTTLE } from './throttle.js';
 import { newId } from '../db/ids.js';
 
@@ -124,6 +124,20 @@ describe.each(testTargets)('login challenges on $name', (target) => {
       await expect(
         createLoginChallenge(db(), userId, { kind: 'sms' as never, now: T0 }),
       ).rejects.toBeInstanceOf(AuthInputError);
+      const rows = await db()
+        .select()
+        .from(loginChallenge)
+        .where(eq(loginChallenge.userId, userId));
+      expect(rows).toEqual([]);
+    });
+
+    it('makes only the second step of a password sign-in: a passkey kind is refused, writing nothing', async () => {
+      const userId = await seedActiveUser(database);
+      for (const kind of ['webauthn-register', 'webauthn-login']) {
+        await expect(
+          createLoginChallenge(db(), userId, { kind: kind as never, now: T0 }),
+        ).rejects.toBeInstanceOf(AuthInputError);
+      }
       const rows = await db()
         .select()
         .from(loginChallenge)
@@ -266,6 +280,36 @@ describe.each(testTargets)('login challenges on $name', (target) => {
           now: at(STEP),
         }),
       ).toEqual({ ok: false });
+      expect((await lastFailure()).details).toEqual({
+        method: 'totp',
+        reason: 'challenge-invalid',
+      });
+    });
+
+    it('refuses the token of a passkey challenge, even with a right code, and leaves it untouched', async () => {
+      // A registration challenge is tied to a user and is given to someone who is
+      // already signed in. It must not do for the second step of a password
+      // sign-in, which would skip the password.
+      const userId = await seedActiveUser(database);
+      const secret = await seedTotp(database, userId, { now: T0 });
+      const token = generateToken();
+      await db()
+        .insert(loginChallenge)
+        .values({
+          originServer: newId(),
+          userId,
+          kind: 'webauthn-register',
+          tokenHash: hashToken(token),
+          expiresAt: at(LOGIN_CHALLENGE.ttlMs),
+        });
+      expect(
+        await consumeLoginChallenge(db(), {
+          challenge: token,
+          code: totpCodeAt(secret, T0),
+          now: T0,
+        }),
+      ).toEqual({ ok: false });
+      expect(await rowOf(token)).toMatchObject({ attempts: 0, usedAt: null });
       expect((await lastFailure()).details).toEqual({
         method: 'totp',
         reason: 'challenge-invalid',

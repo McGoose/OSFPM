@@ -209,6 +209,45 @@ describe.each(testTargets)('login tables on $name', (target) => {
       expect(failure).toEqual(check('login_challenge_kind_check'));
     });
 
+    it('accepts every kind on the list, and no user only for a passkey sign-in', async () => {
+      for (const kind of ['totp', 'webauthn-register'] as const) {
+        await db().insert(loginChallenge).values(challengeValues({ kind }));
+      }
+      // A passkey sign-in is not tied to a user until the credential is known.
+      await db()
+        .insert(loginChallenge)
+        .values(challengeValues({ kind: 'webauthn-login', userId: null }));
+      // ... and may be, which the rule does not forbid.
+      await db()
+        .insert(loginChallenge)
+        .values(challengeValues({ kind: 'webauthn-login' }));
+    });
+
+    it('rejects a challenge with no user unless it is a passkey sign-in', async () => {
+      for (const kind of ['totp', 'webauthn-register'] as const) {
+        const failure = await failureOf(() =>
+          db()
+            .insert(loginChallenge)
+            .values(challengeValues({ kind, userId: null })),
+        );
+        expect(failure).toEqual(check('login_challenge_user_check'));
+      }
+    });
+
+    it('rejects removing the user from a challenge that needs one', async () => {
+      const [row] = await db()
+        .insert(loginChallenge)
+        .values(challengeValues({ kind: 'webauthn-register' }))
+        .returning({ id: loginChallenge.id });
+      const failure = await failureOf(() =>
+        db()
+          .update(loginChallenge)
+          .set({ userId: null })
+          .where(eq(loginChallenge.id, row!.id)),
+      );
+      expect(failure).toEqual(check('login_challenge_user_check'));
+    });
+
     it('rejects a negative attempt count', async () => {
       const failure = await failureOf(() =>
         db()
