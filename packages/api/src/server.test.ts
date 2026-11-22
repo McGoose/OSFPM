@@ -472,7 +472,7 @@ describe('describeStartupFailure', () => {
     const text = describeStartupFailure(error);
     expect(text).toBe(error.message);
     expect(text).toContain('sensitive:read:medical');
-    expect(text).toContain('Remove those grants, then restart');
+    expect(text).toContain('ship a migration that narrows');
     expect(text).not.toMatch(/\n\s+at /);
     expect(text).not.toContain('PermissionSyncError');
   });

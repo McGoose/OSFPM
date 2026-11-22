@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { base, seedOrganisation } from '../access/test-fixtures.js';
 import { createLoginChallenge } from '../auth/login-challenge.js';
 import { createSession } from '../auth/sessions.js';
 import { consumeSetupCode, issueSetupCode } from '../auth/setup-code.js';
@@ -10,7 +11,14 @@ import {
 } from '../auth/test-support.js';
 import type { Database } from '../db/client.js';
 import { declaredRetentionClasses } from '../db/columns.js';
-import { loginChallenge, session, setupCode } from '../db/schema/index.js';
+import {
+  invite,
+  inviteRole,
+  loginChallenge,
+  role,
+  session,
+  setupCode,
+} from '../db/schema/index.js';
 import { createMigratedDatabase, testTargets } from '../db/test-support.js';
 import { TRANSIENT_CLEANUPS } from './transient-cleanups.js';
 
@@ -122,9 +130,54 @@ describe.each(testTargets)(
       const used = await issueSetupCode(db, ago(60 * DAY));
       expect(await consumeSetupCode(db, used, ago(60 * DAY - HOUR))).toBe(true);
       await issueSetupCode(db, ago(HOUR));
+      // Invites, each with a role link: one that expired, and one with time left.
+      // Rows are written directly, as fixtures do; the services that write them
+      // come with the invite flow.
+      const { organisationId } = await seedOrganisation(database);
+      const [crew] = await db
+        .insert(role)
+        .values({
+          ...base(organisationId),
+          projectId: null,
+          key: 'crew',
+          name: 'Crew',
+        })
+        .returning();
+      const seedInvite = async (
+        name: string,
+        createdAt: Date,
+        expiresAt: Date,
+      ) => {
+        const [row] = await db
+          .insert(invite)
+          .values({
+            originServer: base(organisationId).originServer,
+            organisationId,
+            tokenHash: `cleanup-${name}`,
+            tier: 'member',
+            createdAt,
+            createdBy: userId,
+            expiresAt,
+          })
+          .returning();
+        await db.insert(inviteRole).values({
+          organisationId,
+          inviteId: row!.id,
+          roleId: crew!.id,
+        });
+        return row!;
+      };
+      await seedInvite('expired', ago(60 * DAY), ago(53 * DAY));
+      const liveInvite = await seedInvite(
+        'live',
+        ago(HOUR),
+        new Date(now.getTime() + 6 * DAY),
+      );
       expect(await db.select().from(session)).toHaveLength(2);
       expect(await db.select().from(loginChallenge)).toHaveLength(2);
       expect(await db.select().from(setupCode)).toHaveLength(2);
+      expect(await db.select().from(invite)).toHaveLength(2);
+      expect(await db.select().from(inviteRole)).toHaveLength(2);
 
       // What the worker does: every cleanup, with the same time. The name an
       // entry is listed under must be the table its cleanup empties, so each
@@ -156,6 +209,13 @@ describe.each(testTargets)(
             .from(loginChallenge)
         ).map((r) => r.expiresAt),
       ).toEqual([liveChallenge.expiresAt]);
+      // The invite that expired went with its role link; the live one kept its own.
+      expect(
+        (await db.select({ id: invite.id }).from(invite)).map((r) => r.id),
+      ).toEqual([liveInvite.id]);
+      expect(
+        (await db.select().from(inviteRole)).map((r) => r.inviteId),
+      ).toEqual([liveInvite.id]);
       const codes = await db.select().from(setupCode);
       expect(codes).toHaveLength(1);
       expect(codes[0]!.usedAt).toBeNull();

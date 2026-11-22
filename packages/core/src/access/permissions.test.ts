@@ -217,7 +217,8 @@ describe.each(testTargets)('permissions on $name', (target) => {
         expect(found.message).toContain('demo:wide-one');
         expect(found.message).toContain('admin');
         expect(found.message).toContain(organisationId);
-        expect(found.message).toContain('Remove those grants, then restart.');
+        expect(found.message).toContain('ship a migration that narrows');
+        expect(found.message).toContain('then restart.');
         // Nothing was written.
         expect(await stored('demo:wide-one')).toMatchObject({
           grantsSensitive: false,

@@ -1,6 +1,13 @@
-import { and, eq, getTableColumns, getTableName, sql } from 'drizzle-orm';
+import {
+  and,
+  eq,
+  getTableColumns,
+  getTableName,
+  isNull,
+  sql,
+} from 'drizzle-orm';
 import type { AnyPgColumn, PgTable } from 'drizzle-orm/pg-core';
-import type { ActorType } from './columns.js';
+import { isSecurityTableName, type ActorType } from './columns.js';
 import type { SchemaDb } from './client.js';
 import { newId } from './ids.js';
 import { parentKeysOf, resolveProjectId } from './project-resolver.js';
@@ -126,6 +133,29 @@ export type UpdatePatch<T extends TenantTable> = Partial<
 >;
 
 /**
+ * The write helper was given a security table, or the child table of one. Only the
+ * auth service writes those, directly, and audits instead of change-logging
+ * (CLAUDE.md, Data rules), so the helper refuses them even when they have an
+ * `organisation_id`, like `invite` and `invite_role`. Nothing was written. The
+ * message names the table and carries no row value. It is a bug in the caller, not
+ * in a request, so the API does not map it: it becomes a generic 500.
+ */
+export class SecurityTableWriteError extends Error {
+  constructor(readonly entityType: string) {
+    super(
+      `${entityType} is a security table: only the auth service writes it, never the write helper`,
+    );
+    this.name = 'SecurityTableWriteError';
+  }
+}
+
+/** Refuses a security table, or the child table of one, before anything is written. */
+function refuseSecurityTable(table: PgTable): void {
+  const name = getTableName(table);
+  if (isSecurityTableName(name)) throw new SecurityTableWriteError(name);
+}
+
+/**
  * `expectedVersion` did not match the stored version, so nothing was written.
  * Carries the ids and the two versions, never row values.
  */
@@ -249,6 +279,7 @@ async function guarded<R>(
       error instanceof RecordNotFoundError ||
       error instanceof RecordStateError ||
       error instanceof MissingActingUserError ||
+      error instanceof SecurityTableWriteError ||
       error instanceof RecordWriteError
     ) {
       throw error;
@@ -281,6 +312,31 @@ async function nextSeq(
 }
 
 /**
+ * Takes one change counter row, `projectId` null being the organisation's own,
+ * and keeps it until the transaction ends. The one place the lock is taken, so
+ * the two public functions below cannot drift apart. It numbers nothing: only
+ * `nextSeq` does.
+ */
+async function lockCounter(
+  tx: Tx,
+  organisationId: string,
+  projectId: string | null,
+): Promise<void> {
+  await tx
+    .select({ lastSeq: changeSeq.lastSeq })
+    .from(changeSeq)
+    .where(
+      and(
+        eq(changeSeq.organisationId, organisationId),
+        projectId === null
+          ? isNull(changeSeq.projectId)
+          : eq(changeSeq.projectId, projectId),
+      ),
+    )
+    .for('update');
+}
+
+/**
  * Takes the change counter of a project, and keeps it until the transaction
  * ends. Every write through this helper takes that counter before it locks the
  * record it changes (see the comment in `modifyRecord`), so all writers in a
@@ -290,7 +346,8 @@ async function nextSeq(
  * the other holds. So a service that reads something and then writes on the
  * strength of it, such as a guard that no live cost line points at an account,
  * or a price in the project's currency, calls this first, and takes any record
- * lock (`FOR UPDATE`, `FOR SHARE`) only after it.
+ * lock (`FOR UPDATE`, `FOR SHARE`) only after it. For a record that belongs to
+ * the organisation and not to a project, take `lockOrganisationChanges` instead.
  *
  * Takes the counter row if there is one. A project made through the helper has
  * one from the start; one made by direct inserts, which only tests do, has none
@@ -303,16 +360,33 @@ export async function lockProjectChanges(
   organisationId: string,
   projectId: string,
 ): Promise<void> {
-  await tx
-    .select({ lastSeq: changeSeq.lastSeq })
-    .from(changeSeq)
-    .where(
-      and(
-        eq(changeSeq.organisationId, organisationId),
-        eq(changeSeq.projectId, projectId),
-      ),
-    )
-    .for('update');
+  await lockCounter(tx, organisationId, projectId);
+}
+
+/**
+ * Takes the change counter of an organisation, the one its organisation-level
+ * records are numbered in (`project_id` NULL), and keeps it until the transaction
+ * ends. It is `lockProjectChanges` for a record that belongs to the organisation
+ * and to no project, such as a membership or a role: every write of such a record
+ * through this helper takes that counter before it locks the record, so a service
+ * that must lock a row first and write after calls this first, and takes the row
+ * lock only after it (CLAUDE.md, Data rules: counter before any row lock). It is
+ * a function of its own, not a project id of `null`, because a null that changes
+ * what a call means is easy to pass by mistake.
+ *
+ * The organisation's counter is not a project's: a project's writers do not queue
+ * on it, and it does not queue on theirs. Takes the counter row if there is one.
+ * An organisation made through the helper has one from the start; one made by
+ * direct inserts, which only tests do, has none until its first write, and then
+ * nothing is locked. Numbers nothing and writes nothing. Checks no permission,
+ * and is for services that have already checked it: a caller who holds the
+ * counter holds up every writer of an organisation-level record.
+ */
+export async function lockOrganisationChanges(
+  tx: Tx,
+  organisationId: string,
+): Promise<void> {
+  await lockCounter(tx, organisationId, null);
 }
 
 /**
@@ -438,6 +512,7 @@ export function insertRecord<T extends TenantTable>(
   return guarded(table, 'insert', () =>
     // A savepoint: a failed insert leaves no row, event or used `seq`.
     tx.transaction(async (inner) => {
+      refuseSecurityTable(table);
       attributedUserId(ctx); // refuses a missing acting user before any write
       const now = ctx.clock();
       const full = {
@@ -511,6 +586,7 @@ function modifyRecord<T extends TenantTable>(
   return guarded(table, action, () =>
     // A savepoint, as in `insertRecord`.
     tx.transaction(async (inner) => {
+      refuseSecurityTable(table);
       attributedUserId(ctx); // refuses a missing acting user before any write
       const before = await loadRow(inner, table, id);
       const entityType = getTableName(table);

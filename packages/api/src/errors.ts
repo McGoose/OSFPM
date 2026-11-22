@@ -7,6 +7,15 @@ import { PermissionSyncError } from '@osfpm/core/src/access/permission-sync.js';
 import { AccountInputError } from '@osfpm/core/src/accounts/service.js';
 import { AuthInputError, AuthStateError } from '@osfpm/core/src/auth/errors.js';
 import {
+  AccountExistsError,
+  AlreadyMemberError,
+  InviteEmailMismatchError,
+  InviteExceedsOwnAccessError,
+  InviteInvalidError,
+  InvitePasswordRefusedError,
+  InviteRefusedError,
+} from '@osfpm/core/src/auth/invite-errors.js';
+import {
   describePasswordRefusal,
   type PasswordRefusal,
 } from '@osfpm/core/src/auth/password-policy.js';
@@ -17,6 +26,7 @@ import {
   RecordNotFoundError,
   RecordStateError,
   RecordWriteError,
+  SecurityTableWriteError,
   VersionConflictError,
 } from '@osfpm/core/src/db/write.js';
 import { InstallationMissingError } from '@osfpm/core/src/installation/server-id.js';
@@ -340,6 +350,16 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
       'The setup code was not accepted. Use the code the server printed when it started.',
   },
   {
+    // The one answer to every invite token that does not work: unknown, expired,
+    // revoked or already used. The cause is in the audit trail alone.
+    errorClass: InviteInvalidError,
+    status: 401,
+    code: 'invite-invalid',
+    title: 'Invite not valid',
+    detail:
+      'This invite link does not work. Ask the person who sent it for a new one.',
+  },
+  {
     errorClass: AuthenticationRequiredError,
     status: 401,
     code: 'authentication-required',
@@ -415,8 +435,62 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
     ],
   },
   {
+    // The person opening an invite for a new account is owed the reason, as at any
+    // other password: only the field differs, `account.password` for this body.
+    errorClass: InvitePasswordRefusedError,
+    status: 422,
+    code: 'password-refused',
+    title: 'Password refused',
+    detail: null,
+    errors: (error: InvitePasswordRefusedError) => [
+      { in: 'body', path: 'account.password', code: error.refusal },
+    ],
+  },
+  {
+    // The invite names an address and the person has another. Neither is named.
+    errorClass: InviteEmailMismatchError,
+    status: 422,
+    code: 'invite-email-mismatch',
+    title: 'Invite is for another address',
+    detail:
+      'This invite is for a different email address. Use the address it was sent to.',
+  },
+  {
+    // The roles of an invite hold more than its maker holds. The keys are fixed
+    // catalogue names, not values a caller sent, so they are listed.
+    errorClass: InviteExceedsOwnAccessError,
+    status: 422,
+    code: 'invite-exceeds-own-access',
+    title: 'Invite gives more than you hold',
+    detail:
+      'The roles of this invite hold permissions you do not hold in this organisation, or hold only for the organisation and not for every project. The permissions are listed.',
+    errors: (error: InviteExceedsOwnAccessError) =>
+      error.permissions.map((key) => ({
+        in: 'body',
+        path: 'roleIds',
+        code: key,
+      })),
+  },
+  {
     errorClass: RouteNotFoundError,
     ...ROUTE_NOT_FOUND,
+  },
+  {
+    errorClass: AlreadyMemberError,
+    status: 409,
+    code: 'already-member',
+    title: 'Already a member',
+    detail: 'You already belong to this organisation. The invite was not used.',
+  },
+  {
+    // Tells someone holding a live invite that an account exists for the address:
+    // an accepted risk, documented in the API README.
+    errorClass: AccountExistsError,
+    status: 409,
+    code: 'account-exists',
+    title: 'Account exists',
+    detail:
+      'An account with this email address already exists. Sign in, then open the invite link again.',
   },
   {
     errorClass: TotpAlreadyEnrolledError,
@@ -602,6 +676,16 @@ export const INTERNAL_ERRORS: readonly {
     errorClass: MissingActingUserError,
     reason:
       'The types forbid it, so it is a bug in the server, not the request.',
+  },
+  {
+    errorClass: InviteRefusedError,
+    reason:
+      'The base of the invite refusals, never thrown itself: every refusal the API answers is one of its subclasses, which have rows of their own above.',
+  },
+  {
+    errorClass: SecurityTableWriteError,
+    reason:
+      'A service handed the write helper a security table, which only the auth service writes. A bug in the server, not the request; the message names the table and no row value.',
   },
   {
     errorClass: PermissionSyncError,

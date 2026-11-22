@@ -117,6 +117,29 @@ export async function seedFirstRun(
 /** An active user with an invented address. */
 export const seedActiveUser = seedUser;
 
+/**
+ * An active user with the address given, which must already be normalised (lower
+ * case). For a test that needs to know the address, such as one about an invite
+ * that names it.
+ */
+export async function seedActiveUserWithEmail(
+  database: Database,
+  email: string,
+): Promise<string> {
+  const [created] = await database.db
+    .insert(user)
+    .values({
+      originServer: ORIGIN,
+      email,
+      displayName: 'Fixture Person',
+      locale: 'en-GB',
+      timezone: 'Europe/London',
+      status: 'active',
+    })
+    .returning();
+  return created!.id;
+}
+
 /** A user in `status`, for the cases an active user does not cover. */
 export async function seedUserWithStatus(
   database: Database,

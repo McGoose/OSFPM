@@ -63,7 +63,7 @@ describe.each(testTargets)('the setup gate on $name', (target) => {
     headers: Record<string, string> = {},
   ) => ctx.app.inject({ method, url: path, headers });
 
-  /** Every route of the OpenAPI document, as `METHOD /path` with a value in place of each `{id}`. */
+  /** Every route of the OpenAPI document, as `METHOD /path` with a value in place of each `{placeholder}` of the path. */
   async function documentedRoutes() {
     const document = (await call('GET', `${API_PREFIX}/openapi.json`)).json<{
       paths: Record<string, Record<string, unknown>>;
@@ -72,7 +72,7 @@ describe.each(testTargets)('the setup gate on $name', (target) => {
       Object.keys(item).map((method) => ({
         method: method.toUpperCase() as
           'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
-        path: path.replaceAll('{id}', SOME_ID),
+        path: path.replace(/\{\w+\}/g, SOME_ID),
         key: `${method.toUpperCase()} ${path}`,
       })),
     );

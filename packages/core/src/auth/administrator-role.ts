@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
 import { withManagedRoleMaintenance } from '../access/managed-role.js';
 import { PERMISSION_LISTS } from '../access/permission-lists.js';
 import type { PermissionDefinition } from '../access/permission-sync.js';
@@ -7,7 +7,12 @@ import {
   rolePermission,
   type RolePermissionReach,
 } from '../db/schema/index.js';
-import { insertRecord, type Tx, type WriteContext } from '../db/write.js';
+import {
+  insertRecord,
+  updateRecord,
+  type Tx,
+  type WriteContext,
+} from '../db/write.js';
 import { AuthStateError } from './errors.js';
 import { lockInstallation } from './setup-code.js';
 import { AUTH_AUDIT, guardedAuth, recordAuthAudit } from './shared.js';
@@ -149,10 +154,8 @@ export type TopUpAdministratorOptions = {
  * It only adds: it grants what the role is meant to hold (maintainer decision of
  * 22 Nov, task P-03b4a) and changes nothing else. A permission the role already
  * holds is left as it is, whatever its reach, and one that left the lists is not
- * taken away. So a permission that a release newly flags as sensitive keeps the
- * `all-projects` grant the role had, which makes the permission sync refuse to
- * start (`PermissionSyncError`) until that release changes the grant itself; the
- * managed-role trigger refuses an operator who does it by hand.
+ * taken away. A permission that a release newly flags as sensitive is handled
+ * before the sync, by `narrowManagedSensitiveGrants`, which start-up runs first.
  *
  * Audited as `auth.administrator-role-topped-up` once for each organisation that
  * got any, from the system, naming the organisation and the role, with the count
@@ -247,6 +250,126 @@ export function topUpAdministratorRoles(
         added += missing.length;
       }
       return added;
+    }),
+  );
+}
+
+/** What `narrowManagedSensitiveGrants` is given. */
+export type NarrowManagedGrantsOptions = {
+  /** When it happens: the time of its events and of its change log. */
+  readonly now: Date;
+  /** The permission lists to read the sensitive flags from. `PERMISSION_LISTS`, the core's own, when left out. */
+  readonly lists?: readonly (readonly PermissionDefinition[])[];
+};
+
+/**
+ * Narrows every `all-projects` grant of a permission the lists flag sensitive, on
+ * a managed role, to `own-scope`, and answers how many it narrowed. The server runs
+ * it at start-up, in the transaction of the permission sync and before it, so that
+ * a release which flags an existing permission sensitive does not stop start-up on
+ * the Administrator role's own grant: a sensitive permission never reaches all
+ * projects, the database refuses the flag while such a grant exists
+ * (`role_permission_all_projects_not_sensitive`), and the managed-role trigger
+ * refuses an operator who narrows the grant by hand (CLAUDE.md, Privacy rule;
+ * decision D-55; maintainer decision of 22 Nov, task P-03b4b).
+ *
+ * Only managed roles: an organisation's own role is the organisation's to change,
+ * so its grant stays, the sync still stops with `PermissionSyncError` and that
+ * error says the release must ship a migration that narrows it. A grant that was
+ * removed counts too, as it does for the database. It is done the way the top-up
+ * writes, through the write helper with the system as the writer and the
+ * managed-role triggers off (`withManagedRoleMaintenance`), so each narrowing is a
+ * change event in its organisation's sequence, and it is audited as
+ * `role.grant-reach-reduced` from the system, once for each grant, naming the
+ * role, the permission and both reaches. A call that narrows nothing writes
+ * nothing: no event, no counter, so the second start-up does nothing.
+ *
+ * When any list flags a permission sensitive it takes the `installation` row
+ * lock first, the first lock of start-up, so two servers that start together take
+ * turns and the second finds nothing left to narrow; after that the lock order is
+ * the write helper's own (the organisation's change counter, then the rows).
+ * Before the `installation` row exists no managed role can, so it answers 0 and
+ * takes nothing. Only the server's start-up calls
+ * it, before any request is served, so it checks no permission.
+ *
+ * @throws RecordWriteError when the database refuses a write; it carries the
+ * SQLSTATE and constraint name only. Nothing is left behind.
+ */
+export function narrowManagedSensitiveGrants(
+  tx: Tx,
+  options: NarrowManagedGrantsOptions,
+): Promise<number> {
+  const sensitiveKeys = (options.lists ?? PERMISSION_LISTS)
+    .flatMap((list) => [...list])
+    .filter((permission) => permission.grantsSensitive === true)
+    .map((permission) => permission.key);
+  if (sensitiveKeys.length === 0) return Promise.resolve(0);
+  return guardedAuth('role_permission', 'update', () =>
+    // A savepoint: a failure leaves every grant as it was, and no event.
+    tx.transaction(async (inner) => {
+      const server = await lockInstallation(inner);
+      if (!server) return 0;
+      const wide = await inner
+        .select({
+          id: rolePermission.id,
+          version: rolePermission.version,
+          organisationId: rolePermission.organisationId,
+          roleId: rolePermission.roleId,
+          permissionKey: rolePermission.permissionKey,
+        })
+        .from(rolePermission)
+        .innerJoin(
+          role,
+          and(
+            eq(role.organisationId, rolePermission.organisationId),
+            eq(role.id, rolePermission.roleId),
+          ),
+        )
+        .where(
+          and(
+            inArray(rolePermission.permissionKey, sensitiveKeys),
+            eq(rolePermission.reach, 'all-projects'),
+            eq(role.managed, true),
+          ),
+        )
+        .orderBy(
+          asc(rolePermission.organisationId),
+          asc(rolePermission.roleId),
+          asc(rolePermission.permissionKey),
+        );
+      const ctx: WriteContext = {
+        originServer: server.id,
+        clock: () => options.now,
+        actor: { type: 'system', id: null },
+      };
+      for (const grant of wide) {
+        await withManagedRoleMaintenance(inner, (writer) =>
+          updateRecord(
+            writer,
+            rolePermission,
+            grant.id,
+            grant.version,
+            { reach: 'own-scope' },
+            ctx,
+          ),
+        );
+        await recordAuthAudit(inner, {
+          category: AUTH_AUDIT.grantReachReduced,
+          action: 'reduce-reach',
+          actor: { type: 'system', id: null },
+          targetType: 'role',
+          targetId: grant.roleId,
+          organisationId: grant.organisationId,
+          details: {
+            roleId: grant.roleId,
+            permissionKey: grant.permissionKey,
+            from: 'all-projects',
+            to: 'own-scope',
+          },
+          occurredAt: options.now,
+        });
+      }
+      return wide.length;
     }),
   );
 }

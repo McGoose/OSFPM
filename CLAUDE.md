@@ -34,6 +34,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Modules never read other modules' tables; they use core services and events.
 - Tenant records are written only through the write helper in `src/db/write.ts`.
 - Tables in `SECURITY_TABLES` are written only by the auth service, never through the write helper; their changes are audited, not change-logged.
+- A security table has no `organisation_id`, except one that declares `organisationScoped` in code (`invite`, and its child `invite_role`): the composite keys that keep an invite and its roles inside one organisation need the column. The write helper still refuses them.
 - `user` and `installation` are install-level tables, written only by the core services named for them in `SERVICE_WRITTEN_TABLES` (the auth service, which also does first-run setup), never through the write helper; their changes are audited, not change-logged.
 - The setup code is the only secret OSFPM prints; it goes to stderr outside the logger.
 - Test fixtures may insert rows directly to set up state. Code under test always writes through the write helper.
@@ -45,18 +46,20 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Tenant tables are defined with `tenantTable()`, never bare `pgTable`.
 - Permission checks run only on the server through the policy engine.
 - Organisation role grants reach projects only with `reach = 'all-projects'`, never for sensitive permissions.
+- A service that edits roles or grants calls `assertRoleEditable` / `assertGrantEditable` first; the managed-role triggers are the backstop, not the check.
 - Every permission-protected endpoint gets a test proving 403 without access and no sensitive fields without `sensitive:read`.
 - A self-service endpoint (it acts only on the signed-in user's own account, so there is no permission to lack) gets tests proving 401 without a session, 403 for a foreign `Origin` on a request that changes data, and 403 `account-recovery-required` for a recovery-scope session unless the route says `allowedInRecovery`.
 - Public endpoints (`auth: 'none'`) test identical failure answers and their rate limit.
 - A string from a caller never indexes a plain object and never goes through `in`. Use Object.hasOwn, a Map, or check it against the constant list first.
 - A guard that checks for live rows pointing at a record locks them (FOR UPDATE on the record, FOR SHARE on the reference) so a concurrent write can't slip past it.
-- Lock order: take the project's change counter (lockProjectChanges) before any row lock. Every writer follows this order, or concurrent writes can deadlock. A new organisation or project takes its own counter after its row exists.
+- Lock order: take the change counter before any row lock: `lockProjectChanges` for a record of a project, `lockOrganisationChanges` for a record of the organisation alone. Every writer follows this order, or concurrent writes can deadlock. A new organisation or project takes its own counter after its row exists.
 
 ## Code rules
 
 - Routes validate input with Zod schemas and never return core errors directly; the error table in `packages/api/src/errors.ts` maps them.
 - The API package never imports drizzle-orm; it calls core services.
 - Every new route declares `auth`; the default is `required`. Cookie requests that change data must pass the Origin check.
+- Every route that creates a session passes the Origin check, with or without a cookie.
 - Status codes: 401 = not signed in; 403 = signed in but not allowed; 404 for by-id lookups where existence must not leak.
 - Login failures always answer the same 401 `sign-in-failed`; never reveal which part failed.
 - Log lines use the logger's known keys (req, res, err) or plain scalar fields; never log whole objects or request data.

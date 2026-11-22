@@ -215,6 +215,69 @@ export function securityTableNames(): ReadonlySet<string> {
   return securityTableRegistry;
 }
 
+/** The security tables that carry `organisation_id` by declaration, with the reason each gave. */
+const organisationScopedSecurityRegistry = new Map<string, string>();
+
+/**
+ * The security tables that declared `organisationScoped` (see `securityTable`),
+ * by table name, with the reason each gave. A security table not listed here has
+ * no `organisation_id`; the structural tests compare the schema with this record,
+ * so an exception is a declaration in code and not a list kept in a test.
+ */
+export function organisationScopedSecurityTables(): ReadonlyMap<
+  string,
+  string
+> {
+  return organisationScopedSecurityRegistry;
+}
+
+/** What `securityChildTable` records about a table. */
+export type SecurityChildRecord = {
+  /** The security table whose rows this table's rows belong to, by name. */
+  readonly parent: string;
+  /** Why it exists in this form, in a sentence. */
+  readonly reason: string;
+};
+
+const securityChildRegistry = new Map<string, SecurityChildRecord>();
+
+/**
+ * The child tables of security tables declared through `securityChildTable`, by
+ * table name, with the parent and the reason each gave.
+ */
+export function securityChildTables(): ReadonlyMap<
+  string,
+  SecurityChildRecord
+> {
+  return securityChildRegistry;
+}
+
+/**
+ * True when `name` is a security table, or the child table of one. Only the auth
+ * service writes such a table, and the write helper refuses it even when it has an
+ * `organisation_id` (CLAUDE.md, Data rules).
+ */
+export function isSecurityTableName(name: string): boolean {
+  return securityTableRegistry.has(name) || securityChildRegistry.has(name);
+}
+
+/** Throws unless `columns` has an `organisationId` column and `reason` says something. */
+function checkDeclaration(
+  what: string,
+  name: string,
+  columns: object,
+  reason: string,
+): void {
+  if (!Object.hasOwn(columns, 'organisationId')) {
+    throw new Error(
+      `${name} declares ${what} but has no organisationId column`,
+    );
+  }
+  if (reason.trim() === '') {
+    throw new Error(`${name} declares ${what} without a reason`);
+  }
+}
+
 /**
  * Defines a security table: an install-level table of login state (sessions,
  * credentials, one-time codes) built from `baseColumns`. It adds the
@@ -228,6 +291,19 @@ export function securityTableNames(): ReadonlySet<string> {
  * it. Only the auth service writes it, directly, and records each
  * security-relevant change as an `audit_event` instead of a `change_event`
  * (CLAUDE.md, Data rules). Add every new one to `SECURITY_TABLES`.
+ *
+ * The one exception is declared with `options.organisationScoped`: a table whose
+ * rows belong to one organisation, and which other tables point at through a
+ * composite key (`organisation_id`, `id`), so that a row of one organisation can
+ * never be tied to a record of another. Its columns then include
+ * `organisationId`, and this adds the foreign key to the organisation, named
+ * `<table>_organisation_fk` like every other table's, and records the table and the
+ * `reason` (see `organisationScopedSecurityTables`). It gets no `owner_org_id` and
+ * no `visibility`, and it is still only the auth service that writes it: the write
+ * helper refuses it though it has an `organisation_id`.
+ *
+ * @throws Error when `organisationScoped` is given and the columns have no
+ * `organisationId`, or the reason is empty.
  */
 export function securityTable<
   TName extends string,
@@ -238,16 +314,93 @@ export function securityTable<
   extraConfig?: (
     self: BuildExtraConfigColumns<TName, TColumns, 'pg'>,
   ) => PgTableExtraConfigValue[],
+  options: {
+    readonly organisationScoped?: {
+      readonly organisationId: OrganisationIdRef;
+      readonly reason: string;
+    };
+  } = {},
 ) {
+  const scoped = options.organisationScoped;
+  if (scoped !== undefined) {
+    checkDeclaration('organisationScoped', name, columns, scoped.reason);
+  }
   securityTableRegistry.add(name);
+  if (scoped !== undefined) {
+    organisationScopedSecurityRegistry.set(name, scoped.reason);
+  }
   const declaredClass = declaredByColumn.get(columns.retentionClass);
   if (declaredClass !== undefined) declaredByTable.set(name, declaredClass);
-  // The cast is safe because `SecurityColumns` requires `retentionClass`.
+  // The casts are safe because `SecurityColumns` requires `retentionClass`, and
+  // `checkDeclaration` has checked `organisationId` when it is used.
   return pgTable(name, columns, (self) => [
     retentionClassForeignKey(
       name,
       (self as unknown as { retentionClass: AnyPgColumn }).retentionClass,
     ),
+    ...(scoped === undefined
+      ? []
+      : [
+          foreignKey({
+            name: organisationForeignKeyName(name),
+            columns: [
+              (self as unknown as { organisationId: AnyPgColumn })
+                .organisationId,
+            ],
+            foreignColumns: [scoped.organisationId()],
+          }),
+        ]),
+    ...(extraConfig?.(self) ?? []),
+  ]);
+}
+
+/**
+ * Defines the child table of a security table: rows that belong to one row of
+ * `options.parent` and are deleted with it (`ON DELETE CASCADE`), so they have no
+ * columns of the standard set and no retention class of their own: the parent's
+ * cleanup removes both. Its columns include `organisationId`, which this ties to
+ * the organisation with the foreign key `<table>_organisation_fk`; the table adds
+ * its composite keys (`organisation_id` with the parent's id, `organisation_id` with
+ * any tenant record it points at) in `extraConfig`, so a row can never join two
+ * organisations. It records the name, the parent and the `reason` (see
+ * `securityChildTables`), so the structural tests and the write helper know it.
+ *
+ * Like a security table it is written only by the auth service, directly, and the
+ * write helper refuses it though it has an `organisation_id`. Add every new one to
+ * `SECURITY_CHILD_TABLES`.
+ *
+ * @throws Error when the columns have no `organisationId`, or the reason is empty.
+ */
+export function securityChildTable<
+  TName extends string,
+  TColumns extends Record<string, PgColumnBuilderBase>,
+>(
+  name: TName,
+  columns: TColumns,
+  extraConfig:
+    | ((
+        self: BuildExtraConfigColumns<TName, TColumns, 'pg'>,
+      ) => PgTableExtraConfigValue[])
+    | undefined,
+  options: {
+    readonly organisationId: OrganisationIdRef;
+    readonly parent: string;
+    readonly reason: string;
+  },
+) {
+  checkDeclaration('a security child table', name, columns, options.reason);
+  securityChildRegistry.set(name, {
+    parent: options.parent,
+    reason: options.reason,
+  });
+  return pgTable(name, columns, (self) => [
+    foreignKey({
+      name: organisationForeignKeyName(name),
+      columns: [
+        (self as unknown as { organisationId: AnyPgColumn }).organisationId,
+      ],
+      foreignColumns: [options.organisationId()],
+    }),
     ...(extraConfig?.(self) ?? []),
   ]);
 }

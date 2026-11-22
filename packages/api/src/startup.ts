@@ -1,4 +1,5 @@
 import { PERMISSION_LISTS } from '@osfpm/core/src/access/permission-lists.js';
+import { narrowManagedSensitiveGrants } from '@osfpm/core/src/auth/administrator-role.js';
 import {
   syncPermissions,
   type PermissionDefinition,
@@ -15,6 +16,14 @@ import { issueFirstRunCode, setupCodeBlock } from './setup/first-run.js';
 export type StartupSteps = {
   /** Applies pending migrations (the core's `migrate`). */
   readonly migrate: (database: Database) => Promise<void>;
+  /**
+   * Narrows the `all-projects` grants of managed roles to a permission the lists
+   * now flag sensitive, and answers how many it narrowed
+   * (`narrowManagedSensitiveGrants`). Runs in the transaction of the sync, before
+   * any list is synced, so a refused sync takes it back. Left out, nothing is
+   * done, for the reason `issueSetupCode` gives.
+   */
+  readonly narrowManagedGrants?: (tx: Tx) => Promise<number>;
   /** Upserts one permission list (the core's `syncPermissions`). */
   readonly syncPermissions: (
     tx: Tx,
@@ -38,6 +47,8 @@ export type StartupSteps = {
 
 const REAL_STEPS: StartupSteps = {
   migrate,
+  narrowManagedGrants: (tx) =>
+    narrowManagedSensitiveGrants(tx, { now: new Date() }),
   syncPermissions,
   issueSetupCode: issueFirstRunCode,
   topUpAdministrator,
@@ -189,15 +200,22 @@ export type StartupControl = {
 
 /**
  * What the server does to its database once it is listening, in this order:
- * apply pending migrations (unless `autoMigrate` is false), then sync every
- * list in the core's `PERMISSION_LISTS`, then make sure the `installation` row
- * exists and, until first-run setup is complete, issue a setup code, then give the
+ * apply pending migrations (unless `autoMigrate` is false), then narrow the
+ * managed roles' grants of any permission that is now flagged sensitive and sync
+ * every list in the core's `PERMISSION_LISTS`, then make sure the `installation`
+ * row exists and, until first-run setup is complete, issue a setup code, then give the
  * Administrator role of every organisation the permissions added since it was
  * made, then mark the app ready so `/health/ready` stops answering 503 and the
  * other routes stop answering a 503 problem `starting`.
  *
- * The lists are synced in one transaction: all of them or none, so a refused
- * list does not leave the catalogue half updated. Migrations run first because
+ * The narrowing and the lists are in one transaction: all of it or none, so a
+ * refused list does not leave the catalogue half updated or a grant narrowed for a
+ * flag that was not set. The narrowing comes first and holds the `installation`
+ * row lock, which the server takes before everything else (nothing is narrowed on
+ * a database with no such row yet, where no managed role exists). A release that
+ * flags an existing permission sensitive thus starts: the Administrator role's own
+ * `all-projects` grant of it becomes `own-scope`, audited as
+ * `role.grant-reach-reduced`. Migrations run first because
  * the catalogue table is one of the things they create. With `autoMigrate` off
  * the database must already be migrated, or the sync fails. The Administrator
  * role is topped up after the sync, which makes the catalogue rows its grants
@@ -222,8 +240,9 @@ export type StartupControl = {
  * Only the server entry calls this, once, after it listens.
  *
  * @throws PermissionSyncError when a permission is flagged sensitive while
- * organisation roles hold `all-projects` grants of it. Its message names the
- * permission and the roles, and says how to fix it.
+ * roles an organisation made hold `all-projects` grants of it. Its message names
+ * the permission and the roles, and says the release must ship a migration that
+ * narrows them.
  * @throws The driver's error when a migration or the sync fails for a reason
  * that waiting does not cure. Its message can hold SQL, so the entry prints the
  * class name only.
@@ -293,11 +312,23 @@ async function attemptOnce(
   } else {
     app.log.info('migrations skipped: OSFPM_AUTO_MIGRATE is false');
   }
-  await app.db.db.transaction(async (tx) => {
+  const narrowed = await app.db.db.transaction(async (tx) => {
+    // Before the sync, which would refuse to flag a permission while a managed
+    // role still reaches every project with it.
+    const count = (await steps.narrowManagedGrants?.(tx)) ?? 0;
     for (const list of PERMISSION_LISTS) {
       await steps.syncPermissions(tx, list);
     }
+    return count;
   });
+  // After the commit, so the line is never about a change that was taken back.
+  // A count only: each grant is in the audit trail and the change log.
+  if (narrowed > 0) {
+    app.log.info(
+      { narrowed },
+      'managed roles lost the all-projects reach of permissions that are now sensitive',
+    );
+  }
   app.log.info('the permission catalogue is up to date');
   const setupCode = (await steps.issueSetupCode?.(app)) ?? null;
   // The line says where to look, never what the code is.

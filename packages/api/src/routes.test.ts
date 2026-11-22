@@ -299,6 +299,16 @@ describe.each(testTargets)('the routes on $name', (target) => {
         [`${API_PREFIX}/auth/passkeys/register/verify`]: ['post'],
         [`${API_PREFIX}/auth/passkeys`]: ['get'],
         [`${API_PREFIX}/auth/passkeys/{id}`]: ['patch', 'delete'],
+        [`${API_PREFIX}/organisations/{organisationId}/members`]: ['get'],
+        [`${API_PREFIX}/organisations/{organisationId}/invites`]: [
+          'post',
+          'get',
+        ],
+        [`${API_PREFIX}/organisations/{organisationId}/invites/{inviteId}`]: [
+          'delete',
+        ],
+        [`${API_PREFIX}/invites/inspect`]: ['post'],
+        [`${API_PREFIX}/invites/accept`]: ['post'],
       };
       expect(Object.keys(paths).sort()).toEqual(
         Object.keys(methodsByPath).sort(),
