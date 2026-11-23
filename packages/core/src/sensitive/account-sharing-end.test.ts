@@ -487,9 +487,12 @@ describe.each(testTargets)(
       const ines = await newHolder('Ines Kovac');
       await grant(ines, scene.roles.production, ['stepFreeRequired']);
       await markUserDeleted(database, ines.userId);
-      // The grant is still live but a deleted account's profile is not found, so it opens
-      // nothing: the read finds no data, which is not a denial.
-      expect(await producerSees(ines.personId, 'accessibility')).toBeNull();
+      // The grant is not revoked, but it is not live while the account is deleted, so it
+      // opens nothing: a denial (`account-deleted-grants.test.ts` pins the rule).
+      expect(await producerSees(ines.personId, 'accessibility')).toBe('denied');
+      expect(await grantsOf(ines.personId)).toMatchObject([
+        { revokedAt: null },
+      ]);
 
       await markUserRestored(database, ines.userId);
 

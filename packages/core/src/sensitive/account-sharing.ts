@@ -40,9 +40,9 @@ export type AccountSharingEnded = {
  *
  * Restoring the account afterwards reopens nothing: there is no profile, and no grant is
  * live, so the person has to make a profile and grant again, which they never agreed to
- * before. Without this call a deleted account's grants stay live (they open nothing while
- * the account is deleted, because a deleted account's profile is not found) and its profile
- * and grants would open again the moment the account were restored.
+ * before. Without this call a deleted account's grants are not revoked: they open nothing
+ * while the account is deleted (a grant is not live for a deleted account, `liveGrants`),
+ * but they and the profile would open again the moment the account were restored.
  *
  * It checks no permission and takes the account as the system: the caller is the
  * account-deletion service and has decided who may delete an account. It runs in the
@@ -60,10 +60,11 @@ export type AccountSharingEnded = {
  * When that service is written, it must call this in the transaction that marks the account
  * deleted, under the user row taken `FOR UPDATE` (`lockUser` with `strength: 'update'`, as
  * every service that ends a user's sessions does; CLAUDE.md, Data rules). The lock order
- * is the user row, then the profile row, then the grants (CLAUDE.md, Data rules), and a share
- * with the usual roles follows it: `holdAccount` takes the user row `FOR KEY SHARE` first, so
- * the two queue on the user row and cannot deadlock or leave a grant of a deleted account
- * behind. `createAccessGrant`, `revokeAccessGrant`, `createAccessProfile`,
+ * is the user row, then the profile row, then the grants (CLAUDE.md, Data rules), and the
+ * writers of grants follow it: `createAccessGrant` and a share with the usual roles take the
+ * user row `FOR KEY SHARE` first (`holdAccount`), so each queues with the deletion on that
+ * row, cannot deadlock with it and leaves no live grant of a deleted account behind (a
+ * deleted account is refused, or shares nothing). `revokeAccessGrant`, `createAccessProfile`,
  * `updateAccessProfile` and `deleteAccessProfile` do not take the user row first yet.
  *
  * @throws RangeError when `reason` is not on the closed list or `userId` is not an id (a

@@ -19,6 +19,7 @@ import { ACCESS_AUDIT, auditActor, tokenMark } from './audit.js';
 import {
   AccessGrantBusyError,
   AccessGrantRefusedError,
+  AccountDeletedError,
   RoleNotAvailableError,
   SensitiveAccessDeniedError,
   type AccessRefusalReason,
@@ -54,6 +55,14 @@ import {
  * for a grant that was recorded on someone's behalf. A personal API token never takes the
  * person's own way in, so it can only act as the holder of the permission, through its
  * sensitive scope.
+ *
+ * A grant is derived from the account of the person who makes it, so a call that writes one
+ * for a person with an account holds that account's user row `FOR KEY SHARE`
+ * (`holdAccount`) before it writes, and a deleted account is refused
+ * (`AccountDeletedError`) or, for the shortcut, shares nothing. The deletion of an account
+ * takes the same row `FOR UPDATE` and ends the account's grants, so a grant is either made
+ * before it and ended by it, or refused after it, and the lock order is the user row, then
+ * the profile row, then the grants (CLAUDE.md, Data rules).
  *
  * A denial is audited as `sensitive.denied` and thrown; a rule that refuses a call is
  * audited as `access.refused` with a reason code from a closed list and thrown; both are
@@ -152,9 +161,10 @@ async function refuse(
     requestId: ctx.requestId ?? null,
     occurredAt: ctx.clock(),
   });
-  throw reason === 'role-not-available'
-    ? new RoleNotAvailableError()
-    : new AccessGrantRefusedError(reason);
+  // The reasons that have an error class of their own, then the rest.
+  if (reason === 'role-not-available') throw new RoleNotAvailableError();
+  if (reason === 'account-deleted') throw new AccountDeletedError();
+  throw new AccessGrantRefusedError(reason);
 }
 
 /**
@@ -356,6 +366,33 @@ async function requireLiveProject(
   }
 }
 
+/**
+ * For a person with an account, holds the account's user row `FOR KEY SHARE` until the
+ * transaction ends (`holdAccount`) and refuses a grant when the account is deleted: it
+ * would be live for an account whose sharing the deletion has ended, and for a medical
+ * grant it would open the organisation's record, which the deletion leaves in place. It runs
+ * after the other refusals and before anything is written, and takes nothing else of the
+ * person's first, so a call that waits on a deletion in progress holds no other lock and
+ * cannot deadlock with it. A person without an account has no row to hold.
+ */
+async function requireLiveAccount(
+  tx: Tx,
+  ctx: SensitiveContext,
+  subject: Subject,
+  category: AccessGrantCategory,
+): Promise<void> {
+  if (subject.person.userId === null) return;
+  if (!(await holdAccount(tx, subject.person.userId))) {
+    await refuse(
+      tx,
+      ctx,
+      { person: subject.person, project: subject.project },
+      category,
+      'account-deleted',
+    );
+  }
+}
+
 /** The `category` of a call, checked against the constant lists. A category that is not one is a bug in the caller, not a request. */
 async function grantableCategory(
   tx: Tx,
@@ -388,10 +425,10 @@ type GrantToWrite = {
  * `AccessGrantBusyError`, whatever else happens. The `FOR UPDATE` on the earlier grant
  * only orders the work, so that two changes of one role queue behind each other instead
  * of racing to the index. Grants are not written through the write helper, so no change
- * counter is taken, and the rows a confirmed share locks before this one are the person's
- * user row (`FOR KEY SHARE`) and then the profile row (`FOR SHARE`;
- * `shareWithSuggestedRoles`), so the order is user row, then profile row, then grants
- * (CLAUDE.md, Data rules).
+ * counter is taken, and the rows a call locks before this one are the person's user row
+ * (`FOR KEY SHARE`, for an account holder: `createAccessGrant` and a confirmed
+ * `shareWithSuggestedRoles`) and, for the share, then the profile row (`FOR SHARE`), so the
+ * order is user row, then profile row, then grants (CLAUDE.md, Data rules).
  */
 async function writeGrant(
   tx: Tx,
@@ -539,9 +576,18 @@ async function writeGrant(
  * (a live proposed or confirmed engagement), and the project must not be wrapped or
  * closed.
  *
+ * For a person with an account it then holds the account's user row `FOR KEY SHARE` until
+ * the transaction ends and refuses an account that is deleted (`holdAccount`). Deleting the
+ * account takes that row `FOR UPDATE` and then ends every grant of the account, so a grant
+ * made first is ended by the deletion and one that meets it waits, finds the account
+ * deleted and writes nothing; and it takes the user row before the earlier grant it
+ * replaces, so the two cannot wait for each other (CLAUDE.md, Data rules: lock order).
+ *
  * @throws SensitiveAccessDeniedError (after auditing it) when the caller may not; the same
  * for a person or project that does not exist or is another organisation's.
  * @throws RoleNotAvailableError, one error for a role that is missing, deleted or foreign.
+ * @throws AccountDeletedError (after auditing the refusal) when the person's account is
+ * deleted. Only the holder of the account reaches this, since nobody else grants for them.
  * @throws AccessGrantRefusedError for a field that is not one a grant can name, a consent
  * record that is missing, not allowed or not valid, a person who is not on the project and
  * a project that is wrapped or closed. It carries a reason code only.
@@ -591,6 +637,7 @@ export async function createAccessGrant(
     return refuse(tx, ctx, where, category, 'role-not-available');
   }
   await requireLiveProject(tx, ctx, subject, category, now);
+  await requireLiveAccount(tx, ctx, subject, category);
   return writeGrant(
     tx,
     ctx,

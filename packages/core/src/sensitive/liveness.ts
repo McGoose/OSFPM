@@ -3,8 +3,10 @@ import type { ProjectStatus } from '../db/schema/index.js';
 /**
  * Whether an access grant is live is worked out when it is read, from the state of the
  * project and the person, so nothing needs a job to end one (decision D-69). A grant is
- * live while it is not revoked, the project is open (`projectIsOpen`) and the person
- * still has an engagement on the project that is live (`LIVE_ENGAGEMENT_STATUSES`).
+ * live while it is not revoked, the project is open (`projectIsOpen`), the person still
+ * has an engagement on the project that is live (`LIVE_ENGAGEMENT_STATUSES`) and the
+ * person's account, if they have one, is not deleted (`liveGrants`, in `grant-reads.ts`,
+ * which reads the rows for the last two).
  */
 
 /**

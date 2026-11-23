@@ -67,6 +67,7 @@ import {
   AccessGrantBusyError,
   AccessGrantRefusedError,
   AccessProfileExistsError,
+  AccountDeletedError,
   RoleNotAvailableError,
   UseAccessProfileError,
 } from '@osfpm/core/src/sensitive/errors.js';
@@ -247,6 +248,7 @@ const fixtures = new Map<abstract new (...args: never[]) => Error, () => Error>(
         ]),
     ],
     [RoleNotAvailableError, () => new RoleNotAvailableError()],
+    [AccountDeletedError, () => new AccountDeletedError()],
     [
       AccessGrantRefusedError,
       () => new AccessGrantRefusedError('invalid-fields'),
@@ -420,6 +422,7 @@ describe.each(testTargets)('problem responses on $name', (target) => {
       const rows = [
         [UseAccessProfileError, 422, 'use-access-profile'],
         [RoleNotAvailableError, 422, 'role-not-available'],
+        [AccountDeletedError, 422, 'account-deleted'],
         [AccessGrantRefusedError, 422, 'access-grant-refused'],
         [AccessProfileExistsError, 409, 'access-profile-exists'],
         [AccessGrantBusyError, 409, 'access-grant-busy'],

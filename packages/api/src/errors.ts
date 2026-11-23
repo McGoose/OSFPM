@@ -61,6 +61,7 @@ import {
   AccessGrantBusyError,
   AccessGrantRefusedError,
   AccessProfileExistsError,
+  AccountDeletedError,
   RoleNotAvailableError,
   UseAccessProfileError,
   type AccessGrantRefusal,
@@ -724,6 +725,15 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
         path: issue.path,
         code: issue.code,
       })),
+  },
+  {
+    // The account a grant is for is deleted (decision D-69, P-02l2). Only the account's own
+    // holder makes a grant for it, so only they are told; it names no person and no project.
+    errorClass: AccountDeletedError,
+    status: 422,
+    code: 'account-deleted',
+    title: 'Account deleted',
+    detail: 'This account is deleted, so nothing can be shared from it.',
   },
   {
     // One body for a role that does not exist, was deleted, or belongs to another
