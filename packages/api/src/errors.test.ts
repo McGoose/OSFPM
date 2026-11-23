@@ -24,6 +24,14 @@ import {
   UserInOtherOrganisationsError,
   UserNotActiveError,
 } from '@osfpm/core/src/auth/access-reset-errors.js';
+import {
+  ApiSensitiveTokensDisabledError,
+  ApiTokenInvalidError,
+  ApiTokenRefusedError,
+  ApiTokensDisabledError,
+  NotASensitivePermissionError,
+  TokenExceedsOwnAccessError,
+} from '@osfpm/core/src/auth/api-token-errors.js';
 import { AuthInputError, AuthStateError } from '@osfpm/core/src/auth/errors.js';
 import {
   AccountExistsError,
@@ -158,6 +166,20 @@ const fixtures = new Map<abstract new (...args: never[]) => Error, () => Error>(
       () => new InviteExceedsOwnAccessError(['accounts:edit']),
     ],
     [AccessResetInvalidError, () => new AccessResetInvalidError('expired')],
+    [ApiTokenInvalidError, () => new ApiTokenInvalidError('expired')],
+    [ApiTokensDisabledError, () => new ApiTokensDisabledError()],
+    [
+      ApiSensitiveTokensDisabledError,
+      () => new ApiSensitiveTokensDisabledError(),
+    ],
+    [
+      NotASensitivePermissionError,
+      () => new NotASensitivePermissionError([0, 2]),
+    ],
+    [
+      TokenExceedsOwnAccessError,
+      () => new TokenExceedsOwnAccessError(['sensitive:read:medical']),
+    ],
     [CannotResetSelfError, () => new CannotResetSelfError()],
     [UserInOtherOrganisationsError, () => new UserInOtherOrganisationsError()],
     [OwnerResetNeedsOwnerError, () => new OwnerResetNeedsOwnerError()],
@@ -201,6 +223,7 @@ const internalFixtures = new Map<
   [MissingActingUserError, () => new MissingActingUserError('token')],
   [InviteRefusedError, () => new InviteRefusedError('unknown', SECRET)],
   [ResetNotAllowedError, () => new ResetNotAllowedError(SECRET)],
+  [ApiTokenRefusedError, () => new ApiTokenRefusedError(SECRET)],
   [SecurityTableWriteError, () => new SecurityTableWriteError('invite')],
   [PermissionSyncError, () => new PermissionSyncError([])],
   [InstallationMissingError, () => new InstallationMissingError()],

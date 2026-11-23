@@ -22,6 +22,14 @@ import {
   revokeAccessReset,
   useAccessReset,
 } from './access-reset.js';
+import { ApiTokenInvalidError } from './api-token-errors.js';
+import {
+  authenticateApiToken,
+  createApiToken,
+  recordApiTokenCall,
+  revokeOwnApiToken,
+  setApiTokenSwitches,
+} from './api-tokens.js';
 import { ensureInstallation } from './ensure-installation.js';
 import {
   InviteInvalidError,
@@ -99,6 +107,11 @@ const LATER_LISTS = [...PERMISSION_LISTS, LATER_PERMISSIONS];
 const INVITED_EMAIL = 'sam.demo@demopictures.example';
 
 /** The release after that flags the same permission sensitive. */
+/** The name of the personal API token the flow makes: free text, which no audit event may hold. */
+const API_TOKEN_NAME = 'Call sheet export for the camera department';
+/** A token shaped like one and never made, so its use is refused as unknown. */
+const NEVER_MADE_API_TOKEN = `osfpm_pat_${'Zz0'.repeat(14)}Z`;
+
 const LATER_SENSITIVE_LISTS = [
   ...PERMISSION_LISTS,
   LATER_PERMISSIONS.map((entry) => ({ ...entry, grantsSensitive: true })),
@@ -121,7 +134,8 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
   });
 
   const db = () => database.db;
-  // The auth services' events: `auth.*`, and the one about a role's grant.
+  // The auth services' events: `auth.*`, the one about a role's grant, and the one
+  // about an outside call made with a personal API token.
   const authEvents = () =>
     db()
       .select()
@@ -130,6 +144,7 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
         or(
           like(auditEvent.category, 'auth.%'),
           eq(auditEvent.category, AUTH_AUDIT.grantReachReduced),
+          eq(auditEvent.category, AUTH_AUDIT.apiCall),
         ),
       );
   const byCategory = async (category: string) =>
@@ -160,6 +175,8 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
   let firstResetId: string;
   let secondResetId: string;
   let thirdResetId: string;
+  let apiTokenId: string;
+  let apiTokenPrefix: string;
 
   beforeAll(async () => {
     userId = await seedActiveUser(database);
@@ -539,6 +556,70 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
       useAccessReset(db(), firstReset.token, at(53 * MINUTE)),
     ).rejects.toBeInstanceOf(AccessResetInvalidError);
     await useAccessReset(db(), thirdReset.token, at(54 * MINUTE));
+    // The administrator then allows personal API tokens, with a sensitive scope, makes
+    // one for themself, uses it, is refused with one that was never made, records an
+    // outside call, revokes it, and turns both switches off again.
+    await setApiTokenSwitches(
+      db(),
+      inviter,
+      setupOrganisationId,
+      { personalTokens: true, sensitive: true },
+      at(55 * MINUTE),
+    );
+    const apiTokenMade = await createApiToken(
+      db(),
+      inviter,
+      setupOrganisationId,
+      {
+        name: API_TOKEN_NAME,
+        access: 'read',
+        sensitivePermissions: ['sensitive:read:medical'],
+        expiresInDays: 30,
+      },
+      at(56 * MINUTE),
+    );
+    apiTokenId = apiTokenMade.apiToken.id;
+    apiTokenPrefix = apiTokenMade.apiToken.prefix;
+    const apiTokenUsed = await authenticateApiToken(
+      db(),
+      apiTokenMade.token,
+      at(57 * MINUTE),
+    );
+    await recordApiTokenCall(
+      db(),
+      apiTokenUsed.credential,
+      {
+        userId: setup.user.id,
+        method: 'GET',
+        route: '/api/v1/organisations/:organisationId/members',
+        status: 200,
+        requestId: '0199a3c4-0000-7000-8000-000000000002',
+      },
+      at(58 * MINUTE),
+    );
+    await expect(
+      authenticateApiToken(db(), NEVER_MADE_API_TOKEN, at(59 * MINUTE)),
+    ).rejects.toBeInstanceOf(ApiTokenInvalidError);
+    await revokeOwnApiToken(
+      db(),
+      inviter,
+      setupOrganisationId,
+      apiTokenId,
+      at(60 * MINUTE),
+    );
+    await setApiTokenSwitches(
+      db(),
+      inviter,
+      setupOrganisationId,
+      { personalTokens: false, sensitive: false },
+      at(61 * MINUTE),
+    );
+    secrets.push(
+      apiTokenMade.token,
+      hashToken(apiTokenMade.token),
+      NEVER_MADE_API_TOKEN,
+      hashToken(NEVER_MADE_API_TOKEN),
+    );
     firstResetId = firstReset.reset.id;
     secondResetId = secondReset.reset.id;
     thirdResetId = thirdReset.reset.id;
@@ -913,6 +994,7 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
       details: {
         userId: inviteeId,
         sessionsRevoked: 0,
+        tokensRevoked: 0,
         passwordCleared: true,
         totpRemoved: false,
         recoveryCodesRemoved: 0,
@@ -920,6 +1002,105 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
       },
     });
     expect(used[0]!.occurredAt).toEqual(at(54 * MINUTE));
+  });
+
+  it('records a personal API token as made, used, refused, revoked and its switches turned, and an outside call, with no token, hash or name', async () => {
+    const created = await byCategory(AUTH_AUDIT.apiTokenCreated);
+    expect(created).toHaveLength(1);
+    expect(created[0]).toMatchObject({
+      action: 'create',
+      actorType: 'user',
+      actorId: setupAdminId,
+      targetType: 'api_token',
+      targetId: apiTokenId,
+      organisationId: setupOrganisationId,
+      details: {
+        userId: setupAdminId,
+        projectId: null,
+        access: 'read',
+        sensitivePermissions: 'sensitive:read:medical',
+        expiresAt: new Date(
+          at(56 * MINUTE).getTime() + 30 * 24 * 60 * MINUTE,
+        ).toISOString(),
+        prefix: apiTokenPrefix,
+      },
+    });
+    expect(created[0]!.occurredAt).toEqual(at(56 * MINUTE));
+
+    const [failed] = await byCategory(AUTH_AUDIT.apiTokenAuthFailed);
+    expect(failed).toMatchObject({
+      action: 'authenticate',
+      actorType: 'system',
+      actorId: null,
+      targetType: null,
+      targetId: null,
+      organisationId: null,
+      details: { reason: 'unknown' },
+    });
+    expect(await byCategory(AUTH_AUDIT.apiTokenAuthFailed)).toHaveLength(1);
+
+    const [revoked] = await byCategory(AUTH_AUDIT.apiTokenRevoked);
+    expect(revoked).toMatchObject({
+      action: 'revoke',
+      actorType: 'user',
+      actorId: setupAdminId,
+      targetType: 'api_token',
+      targetId: apiTokenId,
+      organisationId: setupOrganisationId,
+      details: { reason: 'manual', userId: setupAdminId },
+    });
+
+    // Two switches turned on at one moment and off at another, each once.
+    const turned = (await byCategory(AUTH_AUDIT.apiTokenSwitchChanged)).sort(
+      (a, b) =>
+        a.occurredAt.getTime() - b.occurredAt.getTime() ||
+        String(a.details?.switch).localeCompare(String(b.details?.switch)),
+    );
+    expect(turned.map((event) => [event.occurredAt, event.details])).toEqual([
+      [
+        at(55 * MINUTE),
+        { switch: 'personal-tokens', enabled: true, revoked: 0 },
+      ],
+      [at(55 * MINUTE), { switch: 'sensitive', enabled: true, revoked: 0 }],
+      [
+        at(61 * MINUTE),
+        { switch: 'personal-tokens', enabled: false, revoked: 0 },
+      ],
+      [at(61 * MINUTE), { switch: 'sensitive', enabled: false, revoked: 0 }],
+    ]);
+    for (const event of turned) {
+      expect(event).toMatchObject({
+        actorType: 'user',
+        actorId: setupAdminId,
+        organisationId: setupOrganisationId,
+      });
+    }
+
+    const calls = await byCategory(AUTH_AUDIT.apiCall);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      action: 'call',
+      actorType: 'token',
+      actorId: apiTokenId,
+      targetType: 'api_token',
+      targetId: apiTokenId,
+      organisationId: setupOrganisationId,
+      requestId: '0199a3c4-0000-7000-8000-000000000002',
+      details: {
+        userId: setupAdminId,
+        method: 'GET',
+        route: '/api/v1/organisations/:organisationId/members',
+        status: 200,
+      },
+    });
+    expect(calls[0]!.occurredAt).toEqual(at(58 * MINUTE));
+
+    // Nothing of the token, and nothing the person typed to name it.
+    const text = JSON.stringify(
+      (await authEvents()).filter((event) => event.category.includes('api')),
+    );
+    expect(text).not.toContain(API_TOKEN_NAME);
+    expect(text).not.toContain('Call sheet export');
   });
 
   it('records each passkey registration started and finished, for its user, with the passkey as the target of the second', async () => {
@@ -1066,7 +1247,7 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
     }
   });
 
-  it('keeps all of this out of the change log: the only changes in it are the tenant records the first-run setup made', async () => {
+  it('keeps all of this out of the change log: the only changes in it are tenant records, the first-run setup’s and the two settings that switch personal API tokens', async () => {
     const found = await rowsOf(
       database,
       sql`select distinct entity_type from change_event`,

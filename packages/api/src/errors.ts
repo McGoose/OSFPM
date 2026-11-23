@@ -16,6 +16,14 @@ import {
   UserInOtherOrganisationsError,
   UserNotActiveError,
 } from '@osfpm/core/src/auth/access-reset-errors.js';
+import {
+  ApiSensitiveTokensDisabledError,
+  ApiTokenInvalidError,
+  ApiTokenRefusedError,
+  ApiTokensDisabledError,
+  NotASensitivePermissionError,
+  TokenExceedsOwnAccessError,
+} from '@osfpm/core/src/auth/api-token-errors.js';
 import { AuthInputError, AuthStateError } from '@osfpm/core/src/auth/errors.js';
 import {
   AccountExistsError,
@@ -385,6 +393,17 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
       'This reset link does not work. Ask the administrator who sent it for a new one.',
   },
   {
+    // The one answer to every personal API token that does not work: unknown, expired,
+    // revoked, refused because a switch is off, or its owner's account or membership is
+    // not active. The cause is in the audit trail alone.
+    errorClass: ApiTokenInvalidError,
+    status: 401,
+    code: 'invalid-token',
+    title: 'Token not valid',
+    detail:
+      'This API token was not accepted. Make a new one in your account, or ask an administrator.',
+  },
+  {
     errorClass: AuthenticationRequiredError,
     status: 401,
     code: 'authentication-required',
@@ -493,6 +512,52 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
       error.permissions.map((key) => ({
         in: 'body',
         path: 'roleIds',
+        code: key,
+      })),
+  },
+  {
+    errorClass: ApiTokensDisabledError,
+    status: 422,
+    code: 'api-tokens-disabled',
+    title: 'API tokens are off',
+    detail:
+      'API tokens are switched off for this organisation. An administrator can switch them on.',
+  },
+  {
+    errorClass: ApiSensitiveTokensDisabledError,
+    status: 422,
+    code: 'api-sensitive-tokens-disabled',
+    title: 'Sensitive API tokens are off',
+    detail:
+      'This organisation does not let an API token carry sensitive access. An administrator can switch that on.',
+  },
+  {
+    // The positions in the list, never the keys: a key is what the caller sent.
+    errorClass: NotASensitivePermissionError,
+    status: 422,
+    code: 'not-a-sensitive-permission',
+    title: 'Not a sensitive permission',
+    detail:
+      'Some permissions in the sensitive scope do not expose sensitive data, or are not permissions at all. Their places in the list are given.',
+    errors: (error: NotASensitivePermissionError) =>
+      error.indexes.map((index) => ({
+        in: 'body',
+        path: `sensitivePermissions.${index}`,
+        code: 'not-a-sensitive-permission',
+      })),
+  },
+  {
+    // The keys are fixed catalogue names, not values a caller sent, so they are listed.
+    errorClass: TokenExceedsOwnAccessError,
+    status: 422,
+    code: 'token-exceeds-own-access',
+    title: 'Token gives more than you hold',
+    detail:
+      'The sensitive scope names permissions you do not hold where the token would work: in the organisation, or on its project. The permissions are listed.',
+    errors: (error: TokenExceedsOwnAccessError) =>
+      error.permissions.map((key) => ({
+        in: 'body',
+        path: 'sensitivePermissions',
         code: key,
       })),
   },
@@ -780,6 +845,11 @@ export const INTERNAL_ERRORS: readonly {
     errorClass: ResetNotAllowedError,
     reason:
       'The base of the reset link rule refusals, never thrown itself: every refusal the API answers is one of its subclasses, which have rows of their own above.',
+  },
+  {
+    errorClass: ApiTokenRefusedError,
+    reason:
+      'The base of the personal API token refusals, never thrown itself: every refusal the API answers is one of its subclasses, which have rows of their own above.',
   },
   {
     errorClass: SecurityTableWriteError,

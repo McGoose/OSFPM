@@ -16,6 +16,7 @@ import {
   AccessResetInvalidError,
   ResetNotAllowedError,
 } from './access-reset-errors.js';
+import { ApiTokenRefusedError } from './api-token-errors.js';
 import { AuthInputError, AuthStateError } from './errors.js';
 import {
   InviteExceedsOwnAccessError,
@@ -87,6 +88,18 @@ export const AUTH_AUDIT = {
   accessResetInspectFailed: 'auth.access-reset-inspect-failed',
   accessResetUsed: 'auth.access-reset-used',
   accessResetUseRefused: 'auth.access-reset-use-refused',
+  apiTokenCreated: 'auth.api-token-created',
+  apiTokenRevoked: 'auth.api-token-revoked',
+  /** One of the organisation's two switches for personal API tokens was turned on or off. */
+  apiTokenSwitchChanged: 'auth.api-token-switch-changed',
+  /** A request carried a token that does not work. Never holds any part of the token. */
+  apiTokenAuthFailed: 'auth.api-token-auth-failed',
+  /**
+   * One outside call made with a personal API token (SC-10, decision D-68: every
+   * outside call is written to the audit log). The second category that is not under
+   * `auth.`: it is about a request, not about a login.
+   */
+  apiCall: 'api.call',
 } as const;
 
 /** Details of an auth audit event: scalar values only, so nothing nested can hide a secret. */
@@ -109,6 +122,8 @@ export function recordAuthAudit(
     targetId: string | null;
     organisationId?: string | null;
     details?: AuthAuditDetails;
+    /** The request this was done for, when there is one (the outside-call event). */
+    requestId?: string | null;
     occurredAt: Date;
   },
 ) {
@@ -120,6 +135,7 @@ export function recordAuthAudit(
     targetId: event.targetId,
     organisationId: event.organisationId ?? null,
     details: event.details ?? null,
+    requestId: event.requestId ?? null,
     occurredAt: event.occurredAt,
   });
 }
@@ -232,7 +248,8 @@ export async function guardedAuth<R>(
       error instanceof InviteRefusedError ||
       error instanceof InviteExceedsOwnAccessError ||
       error instanceof AccessResetInvalidError ||
-      error instanceof ResetNotAllowedError
+      error instanceof ResetNotAllowedError ||
+      error instanceof ApiTokenRefusedError
     ) {
       throw error;
     }
