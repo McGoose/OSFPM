@@ -802,7 +802,7 @@ export function revokePasskey(
     // A savepoint: a refusal leaves the passkey and the trail as they were.
     tx.transaction(async (inner) => {
       // FOR UPDATE: this ends the sessions the passkey opened (see `setPassword`).
-      await lockUser(inner, userId, { strength: 'update' });
+      await lockUser(inner, userId);
       const [target] = await inner
         .select({ id: passkeyCredential.id })
         .from(passkeyCredential)
