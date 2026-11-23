@@ -16,7 +16,8 @@ import type { SensitiveContext } from './service.js';
 /**
  * A person's access profile (decision D-69): the structured adjustments they ask for,
  * kept on their account and owned by them. Only the person themselves creates, reads,
- * changes or deletes it, through these four functions; nobody else can reach it, not an
+ * changes or deletes it, through these four functions (when their account is deleted,
+ * `endAccountAccessSharing` erases it for them); nobody else can reach it, not an
  * organisation owner and not an administrator. What a production sees of it is only what
  * the person has granted to a role of that project (`createAccessGrant`), and the profile
  * itself stays when a project wraps.
