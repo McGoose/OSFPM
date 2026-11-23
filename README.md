@@ -6,7 +6,7 @@ OSFPM is a self-hosted, API-first film production management system that one org
 
 ## Status
 
-Phase 1. The core data model is done: the database schema and its services in `packages/core`. The API skeleton has started in `packages/api`: configuration, logging, error responses and health, meta and OpenAPI routes. It has no authentication and no data routes yet.
+Phase 1. The core data model is done: the database schema and its services in `packages/core`. The API in `packages/api` has configuration, logging, error responses and health, meta and OpenAPI routes, and the routes for access: authentication (first-run setup, sign-in and sessions), invite links, admin reset links and personal API tokens. It has no routes for production data yet.
 
 Nothing is usable by productions yet.
 

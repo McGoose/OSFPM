@@ -948,7 +948,7 @@ describe.each(testTargets)(
         expect(text).not.toContain(made.token);
       });
 
-      it('writes none for a request with no token, a session, a refused token or a request that did not name a route', async () => {
+      it('writes none for a request with no token, a refused token or a request that did not name a route', async () => {
         const made = await makeToken(scene.tokensId);
         const before = (await auditRows()).filter(
           (event) => event.category === 'api.call',
