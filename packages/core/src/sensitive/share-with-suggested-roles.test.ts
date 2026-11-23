@@ -61,6 +61,17 @@ const CREW_MEDICAL = {
   medication: 'Prescribed, kept in a bag',
   notes: 'Needs a dark room',
 };
+/**
+ * What a call answers when the organisation suggests no role for the groups asked about: an
+ * empty preview with the reason, whether or not the call asked for a preview, and not a
+ * success that shared with nobody.
+ */
+const NOTHING_SUGGESTED = {
+  preview: true,
+  shares: [],
+  granted: 0,
+  reason: 'no-suggested-roles',
+};
 
 describe.each(testTargets)(
   'sharing with the usual roles on $name',
@@ -362,7 +373,7 @@ describe.each(testTargets)(
         expect(await liveRows()).toEqual([]);
       });
 
-      it('skips a suggested role the project cannot give, and a setting that is wrong in any way shares nothing', async () => {
+      it('skips a suggested role the project cannot give, and a setting that is wrong in any way shares nothing and says why', async () => {
         const foreign = await seedOrganisation(database);
         const foreignRole = await seedRole(
           database,
@@ -393,14 +404,12 @@ describe.each(testTargets)(
         });
         await suggest('not an object');
         expect(
-          (await share(holder().userId, holder().personId, 'accessibility'))
-            .shares,
-        ).toEqual([]);
+          await share(holder().userId, holder().personId, 'accessibility'),
+        ).toEqual(NOTHING_SUGGESTED);
         await suggest(undefined);
         expect(
-          (await share(holder().userId, holder().personId, 'accessibility'))
-            .shares,
-        ).toEqual([]);
+          await share(holder().userId, holder().personId, 'accessibility'),
+        ).toEqual(NOTHING_SUGGESTED);
       });
 
       it('replaces the live grant of a role it covers, and leaves a role it does not cover alone', async () => {
@@ -435,12 +444,115 @@ describe.each(testTargets)(
         });
       });
 
-      it('audits a call that shared nothing as a use with a count of none', async () => {
-        await suggest(undefined);
+      it('audits a call that shared nothing because the person had filled nothing in as a use with a count of none', async () => {
+        await suggest(USUAL());
+        const nobody = await seedPerson(database, scene.organisationId, {
+          displayName: 'Ines Kovac',
+        });
+        await engagePerson(
+          database,
+          scene.organisationId,
+          scene.projectId,
+          nobody,
+        );
         const seen = (await events('access.shortcut-used')).length;
-        await share(holder().userId, holder().personId, 'accessibility');
+        const result = await share(
+          scene.users.coordinator,
+          nobody,
+          'accessibility',
+          { consent: CONSENT },
+        );
+        // Roles are suggested, so this is a call that ran and found nothing to share.
+        expect(result).toEqual({ preview: false, shares: [], granted: 0 });
         const [used] = (await events('access.shortcut-used')).slice(seen);
         expect(used?.details).toMatchObject({ count: 0 });
+      });
+    });
+
+    describe('when no role is suggested', () => {
+      it('answers an empty preview with the reason, for a confirmed call as for a preview, and reads and writes nothing', async () => {
+        await suggest(undefined);
+        const reads = (await events('sensitive.read')).length;
+        const uses = (await events('access.shortcut-used')).length;
+        for (const preview of [true, false]) {
+          expect(
+            await share(holder().userId, holder().personId, 'accessibility', {
+              preview,
+            }),
+            `preview: ${preview}`,
+          ).toEqual(NOTHING_SUGGESTED);
+        }
+        expect(await db().select().from(accessGrant)).toEqual([]);
+        // Nothing was shared, so no use is recorded, and the person's data was not read.
+        expect((await events('access.shortcut-used')).length).toBe(uses);
+        expect((await events('sensitive.read')).length).toBe(reads);
+      });
+
+      it('is the same for a setting that holds nothing usable: not an object, no groups, empty lists, and lists of what is not an id', async () => {
+        for (const value of [
+          'not an object',
+          {},
+          { schedule: [] },
+          { schedule: ['not an id'] },
+          { schedule: 'everyone' },
+          [production],
+        ]) {
+          await suggest(value);
+          expect(
+            await share(holder().userId, holder().personId, 'accessibility', {
+              preview: true,
+            }),
+            JSON.stringify(value),
+          ).toEqual(NOTHING_SUGGESTED);
+        }
+      });
+
+      it('is about the groups asked for: roles suggested for other groups are none', async () => {
+        await suggest({ medical: [production] });
+        expect(
+          await share(holder().userId, holder().personId, 'accessibility', {
+            preview: true,
+          }),
+        ).toEqual(NOTHING_SUGGESTED);
+        // The usual roles name nothing for the support group.
+        await suggest(USUAL());
+        expect(
+          await share(holder().userId, holder().personId, 'accessibility', {
+            groups: ['support'],
+            preview: true,
+          }),
+        ).toEqual(NOTHING_SUGGESTED);
+        await suggest({ schedule: [production] });
+        expect(
+          await share(holder().userId, holder().personId, 'medical', {
+            preview: true,
+          }),
+        ).toEqual(NOTHING_SUGGESTED);
+      });
+
+      it('does not hide a refusal: a group that does not exist and a closed project are refused as before, and a stranger is denied', async () => {
+        await suggest(undefined);
+        const bad = await errorOf(
+          share(holder().userId, holder().personId, 'accessibility', {
+            groups: ['notes'],
+            preview: true,
+          }),
+        );
+        expect((bad as AccessGrantRefusedError).reason).toBe('invalid-groups');
+        await updateProject(database, scene.projectId, { status: 'delivered' });
+        const closed = await errorOf(
+          share(holder().userId, holder().personId, 'accessibility', {
+            preview: true,
+          }),
+        );
+        expect((closed as AccessGrantRefusedError).reason).toBe(
+          'project-closed',
+        );
+        await expect(
+          share(scene.users.stranger, holder().personId, 'accessibility', {
+            preview: true,
+          }),
+        ).rejects.toBeInstanceOf(SensitiveAccessDeniedError);
       });
     });
 

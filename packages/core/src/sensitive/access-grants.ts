@@ -696,6 +696,13 @@ export type ShareItem = {
   readonly fields: readonly string[];
 };
 
+/**
+ * Why `shareWithSuggestedRoles` answered an empty preview to a call that was not asked to
+ * preview: `no-suggested-roles`, the organisation suggests no role for the groups asked
+ * about, so there is nobody to share with.
+ */
+export type ShareReason = 'no-suggested-roles';
+
 /** What `shareWithSuggestedRoles` worked out, or did. */
 export type ShareResult = {
   /** True when nothing was written. */
@@ -704,6 +711,13 @@ export type ShareResult = {
   readonly shares: readonly ShareItem[];
   /** How many grants were made: none for a preview. */
   readonly granted: number;
+  /**
+   * Set when the answer is an empty preview because no role is suggested, which a client
+   * tells the person (the organisation has not chosen the usual roles) instead of showing
+   * a share that reached nobody. It is there whether or not the call asked for a preview;
+   * absent otherwise.
+   */
+  readonly reason?: ShareReason;
 };
 
 /** The groups of adjustments the shortcut may share: all of them but `notes`. */
@@ -744,6 +758,13 @@ function filledKeys(
  * that suggest it, in one step. A group the person has left empty is skipped, a suggested
  * role that is not available to this project is skipped, and `notes` is never included,
  * in either category: free text goes only by an explicit grant (`createAccessGrant`).
+ *
+ * When the organisation suggests no role for any group asked about (it has no such setting,
+ * or its setting holds nothing usable for those groups) there is nobody to share with, and
+ * the answer is an empty preview with `reason: 'no-suggested-roles'`, whether or not the
+ * call asked for a preview. It reads none of the person's data and writes nothing, not even
+ * the `access.shortcut-used` event, and a client tells the person that the usual roles have
+ * not been chosen. The refusals below still come first.
  *
  * With `preview: true` it writes nothing and says who would see what, so a client can show
  * the person before they confirm. What a confirmed call makes is what the preview said at
@@ -814,6 +835,24 @@ export async function shareWithSuggestedRoles(
       );
   await requireLiveProject(tx, ctx, subject, checkedCategory, now);
 
+  // When the organisation suggests no role for the groups asked about, there is nobody to
+  // share with: say so, as an empty preview, and neither read the person's data nor write
+  // anything. The refusals above come first, so a bad request is still refused. The
+  // setting is read once, and what is shared below is what this read says.
+  const suggested = await readSuggestedRoles(tx, subject.person.organisationId);
+  if (
+    !SUGGESTED_ROLE_GROUPS.some(
+      (group) => groups.includes(group) && suggested.has(group),
+    )
+  ) {
+    return {
+      preview: true,
+      shares: [],
+      granted: 0,
+      reason: 'no-suggested-roles',
+    };
+  }
+
   // The caller is allowed to see all of it: the person, or staff who edit it. A call that
   // will write holds the profile `FOR SHARE` from this read to its commit: deleting the
   // profile ends the person's accessibility grants, and without the lock it could commit
@@ -838,7 +877,6 @@ export async function shareWithSuggestedRoles(
     occurredAt: now,
   });
 
-  const suggested = await readSuggestedRoles(tx, subject.person.organisationId);
   const byRole = new Map<string, Set<string>>();
   for (const group of groups) {
     const filled = filledKeys(checkedCategory, group, payload);
