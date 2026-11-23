@@ -93,7 +93,7 @@ export async function endAccountAccessSharing(
       const revoked = await revokeAccountGrants(
         inner,
         userId,
-        ['accessibility'],
+        ['accessibility', 'medical'],
         userId,
         now,
       );
