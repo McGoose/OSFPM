@@ -23,8 +23,13 @@ export const VALID_PAYLOADS: Record<
     notes: 'Carries it',
   },
   accessibility: {
-    needs: 'Step-free access to trailer',
-    notes: 'Ground floor',
+    noEarlierThan: '08:30',
+    maxWorkingHours: 10,
+    stepFreeRequired: true,
+    maxWalkMetres: 100,
+    quietSpace: true,
+    signLanguageInterpreter: 'hr-HR-SL',
+    notes: 'Prefers the ground-floor trailer',
   },
   emergency: {
     contacts: [
