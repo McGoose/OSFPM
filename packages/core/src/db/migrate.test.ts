@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { PostgresDb } from './client.js';
 import { MIGRATION_LOCK_KEY, MIGRATIONS_FOLDER, migrate } from './migrate.js';
 import * as schema from './schema/index.js';
-import { testTargets } from './test-support.js';
+import { guardTeardown, testTargets } from './test-support.js';
 
 /** The PostgreSQL target, when `DATABASE_URL` names a server. PGlite has one connection, so it cannot run this. */
 const postgres = testTargets.find((target) => target.name === 'postgres');
@@ -182,6 +182,9 @@ describe.skipIf(postgres === undefined)(
         connectionString: world.pool.options.connectionString,
         max: 1,
       });
+      // This pool is the test's own, so it gets the handler the test target's pool has: a
+      // 57P01 (the shutdown error of a forced drop) at teardown must not fail the run.
+      const beginTeardown = guardTeardown(single);
       try {
         await migrate({
           driver: 'postgres',
@@ -192,6 +195,7 @@ describe.skipIf(postgres === undefined)(
         expect(await world.tableExists('session')).toBe(true);
         expect(await world.lockIsFree()).toBe(true);
       } finally {
+        beginTeardown();
         await single.end();
         await world.cleanup();
       }

@@ -27,6 +27,7 @@ import {
   UserNotActiveError,
   type AccessResetRefusalReason,
 } from './access-reset-errors.js';
+import { revokeApiTokensOfUser } from './api-tokens.js';
 import { AuthInputError, AuthStateError } from './errors.js';
 import { grantsOfMember, uncoveredPermissions } from './escalation.js';
 import {
@@ -87,7 +88,11 @@ import { generateToken, hashToken } from './tokens.js';
  * the lock, so it either finishes before a second membership exists or sees it and
  * is refused. `FOR UPDATE` also holds off every other insert that points at the
  * user, which a foreign key check blocks, so the exclusion does not rest on one
- * writer. A revoke takes only the link rows.
+ * writer. After the user row a use revokes the person's sessions and their personal API
+ * tokens (the token rows, in id order); the writers of tokens (`api-tokens.ts`) take the
+ * acting person's row `FOR KEY SHARE` before any token row, in that same order, so they
+ * cannot deadlock with a use, and a token is never made by a session the use ended. A
+ * revoke takes only the link rows.
  *
  * Making a link takes the person's user row `FOR UPDATE` too: what it decides
  * depends on rows that point at the person (their memberships), and two links made
@@ -825,9 +830,11 @@ class UseRolledBack extends Error {
  * locks: the link row is locked and judged (`FOR UPDATE`, found by the hash of the
  * token), then the person's user row (`FOR UPDATE`, last), then the rules for who
  * may reset whom are checked again with the creator as the actor, and only then does
- * anything change: every session of the person is revoked, the password, the
- * authenticator and the recovery codes are deleted, the passkeys are revoked when
- * the link says so, and the link is marked used.
+ * anything change: every session of the person is revoked, every live personal API
+ * token of the person is revoked (reason `access-reset`, with the rows locked in id order
+ * so it cannot deadlock with a switch being turned off), the password, the authenticator
+ * and the recovery codes are deleted, the passkeys are revoked when the link says so, and
+ * the link is marked used.
  *
  * The passkeys are revoked, not deleted, as `revokePasskey` does it: a session may
  * point at the passkey that opened it, the credential id must stay taken, and the
@@ -893,6 +900,14 @@ async function runUse(
     reason: 'access-reset',
     now,
   });
+  // A person whose access was reset must not keep a script that still works: every
+  // live personal API token of theirs ends with their sessions (SC-10, decision D-68).
+  const tokensRevoked = await revokeApiTokensOfUser(
+    tx,
+    found.userId,
+    'access-reset',
+    now,
+  );
   const passwordCleared =
     (
       await tx
@@ -952,6 +967,7 @@ async function runUse(
     details: {
       userId: found.userId,
       sessionsRevoked,
+      tokensRevoked,
       passwordCleared,
       totpRemoved,
       recoveryCodesRemoved,
@@ -999,10 +1015,10 @@ async function runUse(
  * there is one, a reason code and never the token), which is written after the
  * savepoint is undone and before the error is thrown: the caller catches it inside
  * its transaction and commits, so the event survives. Success is
- * `auth.access-reset-used` with the person's id, the number of sessions revoked,
- * whether a password was cleared and an authenticator removed, the number of
- * recovery codes and of passkeys removed. Never the token, a hash, a password or an
- * address.
+ * `auth.access-reset-used` with the person's id, the number of sessions revoked, the
+ * number of personal API tokens revoked, whether a password was cleared and an
+ * authenticator removed, the number of recovery codes and of passkeys removed. Never the
+ * token, a hash, a password or an address.
  *
  * @throws AccessResetInvalidError for a token that is no good or a rule that no
  * longer holds: one error for all, whatever the cause.

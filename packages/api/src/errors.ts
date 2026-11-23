@@ -16,6 +16,16 @@ import {
   UserInOtherOrganisationsError,
   UserNotActiveError,
 } from '@osfpm/core/src/auth/access-reset-errors.js';
+import {
+  ApiSensitiveTokensDisabledError,
+  ApiTokenInvalidError,
+  ApiTokenRefusedError,
+  ApiTokensDisabledError,
+  NotASensitivePermissionError,
+  ProjectNotAvailableError,
+  TokenExceedsOwnAccessError,
+  TokenReadOnlyScopeError,
+} from '@osfpm/core/src/auth/api-token-errors.js';
 import { AuthInputError, AuthStateError } from '@osfpm/core/src/auth/errors.js';
 import {
   AccountExistsError,
@@ -145,6 +155,46 @@ export class AuthenticationRequiredError extends Error {
   constructor() {
     super('The request has no valid session');
     this.name = 'AuthenticationRequiredError';
+  }
+}
+
+/**
+ * The request carries a session cookie and a personal API token. Which of the two is
+ * meant is not for the server to guess, and a request that mixes them is more likely a
+ * client that is confused than one that is right, so it is refused whole. Maps to a 400
+ * `ambiguous-credentials`. The message and the response name neither credential.
+ */
+export class AmbiguousCredentialsError extends Error {
+  constructor() {
+    super('The request carries two credentials');
+    this.name = 'AmbiguousCredentialsError';
+  }
+}
+
+/**
+ * The request carries a personal API token and the route does not accept tokens. A route
+ * refuses them unless it declares `tokenAccess` (CLAUDE.md, Code rules), and the routes
+ * that sign people in, secure an account, hand out access or manage tokens never do. It is
+ * refused before the token is looked up, so the answer says nothing about the token. Maps
+ * to a 403 `token-not-accepted`. The message and the response name no route.
+ */
+export class TokenNotAcceptedError extends Error {
+  constructor() {
+    super('The route does not take API tokens');
+    this.name = 'TokenNotAcceptedError';
+  }
+}
+
+/**
+ * The request carries a personal API token that can only read, and the route changes
+ * data (it says `tokenAccess: 'write'`). Maps to a 403 `token-read-only`. Said only after
+ * the token was accepted, so it tells nobody anything about a token that does not work.
+ * The message and the response name no route.
+ */
+export class TokenReadOnlyError extends Error {
+  constructor() {
+    super('The token can only read');
+    this.name = 'TokenReadOnlyError';
   }
 }
 
@@ -385,6 +435,18 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
       'This reset link does not work. Ask the administrator who sent it for a new one.',
   },
   {
+    // The one answer to every personal API token that does not work: unknown, expired,
+    // revoked, refused because a switch is off, its owner's account or membership is not
+    // active, or its owner no longer holds `api:tokens`. The cause is in the audit trail
+    // alone.
+    errorClass: ApiTokenInvalidError,
+    status: 401,
+    code: 'invalid-token',
+    title: 'Token not valid',
+    detail:
+      'This API token was not accepted. Make a new one in your account, or ask an administrator.',
+  },
+  {
     errorClass: AuthenticationRequiredError,
     status: 401,
     code: 'authentication-required',
@@ -411,6 +473,29 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
     code: 'bad-request',
     title: 'Bad request',
     detail: 'A value in the request is not accepted.',
+  },
+  {
+    errorClass: AmbiguousCredentialsError,
+    status: 400,
+    code: 'ambiguous-credentials',
+    title: 'Two credentials',
+    detail: 'Send either a session cookie or an API token, not both.',
+  },
+  {
+    errorClass: TokenNotAcceptedError,
+    status: 403,
+    code: 'token-not-accepted',
+    title: 'API tokens not accepted here',
+    detail:
+      'This endpoint cannot be used with an API token. Sign in to use it.',
+  },
+  {
+    errorClass: TokenReadOnlyError,
+    status: 403,
+    code: 'token-read-only',
+    title: 'Token can only read',
+    detail:
+      'This endpoint changes data, and this API token can only read. Make a token that can write.',
   },
   {
     errorClass: OriginMismatchError,
@@ -495,6 +580,85 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
         path: 'roleIds',
         code: key,
       })),
+  },
+  {
+    errorClass: ApiTokensDisabledError,
+    status: 422,
+    code: 'api-tokens-disabled',
+    title: 'API tokens are off',
+    detail:
+      'API tokens are switched off for this organisation. An administrator can switch them on.',
+  },
+  {
+    errorClass: ApiSensitiveTokensDisabledError,
+    status: 422,
+    code: 'api-sensitive-tokens-disabled',
+    title: 'Sensitive API tokens are off',
+    detail:
+      'This organisation does not let an API token carry sensitive access. An administrator can switch that on.',
+  },
+  {
+    // The positions in the list, never the keys: a key is what the caller sent.
+    errorClass: NotASensitivePermissionError,
+    status: 422,
+    code: 'not-a-sensitive-permission',
+    title: 'Not a sensitive permission',
+    detail:
+      'Some permissions in the sensitive scope do not expose sensitive data, or are not permissions at all. Their places in the list are given.',
+    errors: (error: NotASensitivePermissionError) =>
+      error.indexes.map((index) => ({
+        in: 'body',
+        path: `sensitivePermissions.${index}`,
+        code: 'not-a-sensitive-permission',
+      })),
+  },
+  {
+    // The keys are fixed catalogue names, not values a caller sent, so they are listed.
+    errorClass: TokenExceedsOwnAccessError,
+    status: 422,
+    code: 'token-exceeds-own-access',
+    title: 'Token gives more than you hold',
+    detail:
+      'The sensitive scope names permissions you do not hold where the token would work: in the organisation, or on its project. The permissions are listed.',
+    errors: (error: TokenExceedsOwnAccessError) =>
+      error.permissions.map((key) => ({
+        in: 'body',
+        path: 'sensitivePermissions',
+        code: key,
+      })),
+  },
+  {
+    // The positions in the list, never the keys: a key is what the caller sent.
+    errorClass: TokenReadOnlyScopeError,
+    status: 422,
+    code: 'token-read-only-scope',
+    title: 'Read token with a permission that writes',
+    detail:
+      'A token that can only read cannot hold a sensitive permission that changes data. Make a token that can write, or leave those permissions out. Their places in the list are given.',
+    errors: (error: TokenReadOnlyScopeError) =>
+      error.indexes.map((index) => ({
+        in: 'body',
+        path: `sensitivePermissions.${index}`,
+        code: 'token-read-only-scope',
+      })),
+  },
+  {
+    // One body for a project that does not exist, is another organisation's or cannot
+    // be reached, so a person learns nothing about projects that are not theirs. It names
+    // no project: not the one that was asked for, and not why it is not available.
+    errorClass: ProjectNotAvailableError,
+    status: 422,
+    code: 'project-not-available',
+    title: 'Project not available',
+    detail:
+      'This project is not available to you in this organisation. Choose a project you can reach, or leave the project out for a token of the whole organisation.',
+    errors: () => [
+      {
+        in: 'body',
+        path: 'projectId',
+        code: 'project-not-available',
+      },
+    ],
   },
   {
     // People reset themselves with their recovery codes (SC-10).
@@ -780,6 +944,11 @@ export const INTERNAL_ERRORS: readonly {
     errorClass: ResetNotAllowedError,
     reason:
       'The base of the reset link rule refusals, never thrown itself: every refusal the API answers is one of its subclasses, which have rows of their own above.',
+  },
+  {
+    errorClass: ApiTokenRefusedError,
+    reason:
+      'The base of the personal API token refusals, never thrown itself: every refusal the API answers is one of its subclasses, which have rows of their own above.',
   },
   {
     errorClass: SecurityTableWriteError,

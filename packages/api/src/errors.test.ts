@@ -24,6 +24,16 @@ import {
   UserInOtherOrganisationsError,
   UserNotActiveError,
 } from '@osfpm/core/src/auth/access-reset-errors.js';
+import {
+  ApiSensitiveTokensDisabledError,
+  ApiTokenInvalidError,
+  ApiTokenRefusedError,
+  ApiTokensDisabledError,
+  NotASensitivePermissionError,
+  ProjectNotAvailableError,
+  TokenExceedsOwnAccessError,
+  TokenReadOnlyScopeError,
+} from '@osfpm/core/src/auth/api-token-errors.js';
 import { AuthInputError, AuthStateError } from '@osfpm/core/src/auth/errors.js';
 import {
   AccountExistsError,
@@ -55,6 +65,7 @@ import {
 } from '@osfpm/core/src/sensitive/service.js';
 import { API_PREFIX } from './api-version.js';
 import {
+  AmbiguousCredentialsError,
   AuthenticationRequiredError,
   CurrentPasswordRejectedError,
   INTERNAL_ERRORS,
@@ -72,6 +83,8 @@ import {
   SetupRequiredError,
   SignInFailedError,
   StartingError,
+  TokenNotAcceptedError,
+  TokenReadOnlyError,
   TotpAlreadyEnrolledError,
   TotpCodeIncorrectError,
   TotpNotSetUpError,
@@ -158,6 +171,22 @@ const fixtures = new Map<abstract new (...args: never[]) => Error, () => Error>(
       () => new InviteExceedsOwnAccessError(['accounts:edit']),
     ],
     [AccessResetInvalidError, () => new AccessResetInvalidError('expired')],
+    [ApiTokenInvalidError, () => new ApiTokenInvalidError('expired')],
+    [ApiTokensDisabledError, () => new ApiTokensDisabledError()],
+    [
+      ApiSensitiveTokensDisabledError,
+      () => new ApiSensitiveTokensDisabledError(),
+    ],
+    [
+      NotASensitivePermissionError,
+      () => new NotASensitivePermissionError([0, 2]),
+    ],
+    [
+      TokenExceedsOwnAccessError,
+      () => new TokenExceedsOwnAccessError(['sensitive:read:medical']),
+    ],
+    [TokenReadOnlyScopeError, () => new TokenReadOnlyScopeError([0, 2])],
+    [ProjectNotAvailableError, () => new ProjectNotAvailableError()],
     [CannotResetSelfError, () => new CannotResetSelfError()],
     [UserInOtherOrganisationsError, () => new UserInOtherOrganisationsError()],
     [OwnerResetNeedsOwnerError, () => new OwnerResetNeedsOwnerError()],
@@ -168,6 +197,9 @@ const fixtures = new Map<abstract new (...args: never[]) => Error, () => Error>(
     [UserNotActiveError, () => new UserNotActiveError()],
     [MembershipNotActiveError, () => new MembershipNotActiveError()],
     [ResetLinkBusyError, () => new ResetLinkBusyError(ID)],
+    [AmbiguousCredentialsError, () => new AmbiguousCredentialsError()],
+    [TokenNotAcceptedError, () => new TokenNotAcceptedError()],
+    [TokenReadOnlyError, () => new TokenReadOnlyError()],
     [OriginMismatchError, () => new OriginMismatchError()],
     [RateLimitedError, () => new RateLimitedError()],
     [StartingError, () => new StartingError()],
@@ -201,6 +233,7 @@ const internalFixtures = new Map<
   [MissingActingUserError, () => new MissingActingUserError('token')],
   [InviteRefusedError, () => new InviteRefusedError('unknown', SECRET)],
   [ResetNotAllowedError, () => new ResetNotAllowedError(SECRET)],
+  [ApiTokenRefusedError, () => new ApiTokenRefusedError(SECRET)],
   [SecurityTableWriteError, () => new SecurityTableWriteError('invite')],
   [PermissionSyncError, () => new PermissionSyncError([])],
   [InstallationMissingError, () => new InstallationMissingError()],

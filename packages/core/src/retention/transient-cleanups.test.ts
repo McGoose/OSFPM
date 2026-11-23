@@ -17,6 +17,7 @@ import type { Database } from '../db/client.js';
 import { declaredRetentionClasses } from '../db/columns.js';
 import {
   accessReset,
+  apiToken,
   invite,
   inviteRole,
   loginChallenge,
@@ -218,12 +219,39 @@ describe.each(testTargets)(
         ago(HOUR),
         new Date(now.getTime() + 23 * HOUR),
       );
+      // Personal API tokens: one that expired, and one that never expires. Written
+      // directly, as above, for a member of the organisation.
+      const seedToken = async (
+        name: string,
+        createdAt: Date,
+        expiresAt: Date | null,
+      ) => {
+        const [row] = await db
+          .insert(apiToken)
+          .values({
+            originServer: base(organisationId).originServer,
+            organisationId,
+            userId: otherId,
+            name,
+            prefix: `osfpm_pat_cleanup-${name}`,
+            tokenHash: `cleanup-token-${name}`,
+            access: 'read',
+            createdAt,
+            createdBy: otherId,
+            expiresAt,
+          })
+          .returning();
+        return row!;
+      };
+      await seedToken('expired', ago(60 * DAY), ago(59 * DAY));
+      const liveToken = await seedToken('live', ago(HOUR), null);
       expect(await db.select().from(session)).toHaveLength(2);
       expect(await db.select().from(loginChallenge)).toHaveLength(2);
       expect(await db.select().from(setupCode)).toHaveLength(2);
       expect(await db.select().from(invite)).toHaveLength(2);
       expect(await db.select().from(inviteRole)).toHaveLength(2);
       expect(await db.select().from(accessReset)).toHaveLength(2);
+      expect(await db.select().from(apiToken)).toHaveLength(2);
 
       // What the worker does: every cleanup, with the same time. The name an
       // entry is listed under must be the table its cleanup empties, so each
@@ -268,6 +296,10 @@ describe.each(testTargets)(
           (r) => r.id,
         ),
       ).toEqual([liveReset.id]);
+      // The token that expired is gone; the one that never expires stays.
+      expect(
+        (await db.select({ id: apiToken.id }).from(apiToken)).map((r) => r.id),
+      ).toEqual([liveToken.id]);
       const codes = await db.select().from(setupCode);
       expect(codes).toHaveLength(1);
       expect(codes[0]!.usedAt).toBeNull();

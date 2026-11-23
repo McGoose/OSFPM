@@ -313,6 +313,17 @@ describe.each(testTargets)('the routes on $name', (target) => {
           ['post', 'delete'],
         [`${API_PREFIX}/access-reset/inspect`]: ['post'],
         [`${API_PREFIX}/access-reset`]: ['post'],
+        [`${API_PREFIX}/organisations/{organisationId}/api-settings`]: [
+          'get',
+          'put',
+        ],
+        [`${API_PREFIX}/organisations/{organisationId}/api-tokens`]: [
+          'post',
+          'get',
+        ],
+        [`${API_PREFIX}/organisations/{organisationId}/api-tokens/{tokenId}`]: [
+          'delete',
+        ],
       };
       expect(Object.keys(paths).sort()).toEqual(
         Object.keys(methodsByPath).sort(),

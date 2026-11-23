@@ -1,5 +1,6 @@
 import { and, asc, eq, isNull } from 'drizzle-orm';
 import { AccessDeniedError } from '../access/access-denied-error.js';
+import type { AccessCredential } from '../access/credential.js';
 import { hasOrganisationPermission } from '../access/organisation-permission.js';
 import {
   orgMembership,
@@ -12,9 +13,16 @@ import {
 import type { Tx } from '../db/write.js';
 import { MEMBERS_READ_PERMISSION } from './permissions.js';
 
-/** The person listing members: the signed-in user, whose permission is checked in the organisation. */
+/**
+ * The person listing members: the signed-in user, whose permission is checked in the
+ * organisation. When the request came in with a personal API token, `credential` is that
+ * token's, and the check is narrowed by it (`hasOrganisationPermission`): a token lists
+ * members only for the whole organisation it belongs to, as its owner could. Left out, the
+ * check is not narrowed, as for a session.
+ */
 export type MemberActor = {
   readonly userId: string;
+  readonly credential?: AccessCredential;
 };
 
 /**
@@ -61,6 +69,7 @@ export async function listMembers(
       actor.userId,
       organisationId,
       MEMBERS_READ_PERMISSION,
+      actor.credential,
     ))
   ) {
     throw new AccessDeniedError(MEMBERS_READ_PERMISSION);

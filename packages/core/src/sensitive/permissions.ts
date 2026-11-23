@@ -21,18 +21,20 @@ export function editPermissionKey(category: SensitiveCategory): string {
  * (CLAUDE.md, Privacy rule).
  */
 export const SENSITIVE_PERMISSIONS: readonly PermissionDefinition[] = [
-  ...SENSITIVE_CATEGORIES.flatMap((category) => [
+  ...SENSITIVE_CATEGORIES.flatMap((category): PermissionDefinition[] => [
     {
       key: readPermissionKey(category),
       module: 'sensitive',
       description: `Read ${category} data of people on the project`,
       grantsSensitive: true,
+      access: 'read',
     },
     {
       key: editPermissionKey(category),
       module: 'sensitive',
       description: `Enter and change ${category} data of people on the project`,
       grantsSensitive: true,
+      access: 'write',
     },
   ]),
   {
@@ -40,5 +42,6 @@ export const SENSITIVE_PERMISSIONS: readonly PermissionDefinition[] = [
     module: 'compliance',
     description: 'See count-only compliance reports for the project',
     grantsSensitive: false,
+    access: 'read',
   },
 ];

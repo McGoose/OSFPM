@@ -14,5 +14,6 @@ export const LEGAL_HOLD_PERMISSIONS: readonly PermissionDefinition[] = [
     module: 'legal-hold',
     description: 'Place and release legal holds',
     grantsSensitive: false,
+    access: 'write',
   },
 ];

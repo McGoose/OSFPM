@@ -23,6 +23,29 @@ export type TestTarget = {
   }>;
 };
 
+/**
+ * Handles the errors of a pool a test owns, for a test that drops its database with
+ * `drop database ... with (force)`. That statement closes every connection to the
+ * database, and PostgreSQL tells a connection that is still closing so (57P01, "terminating
+ * connection due to administrator command"), which a pool with no handler turns into an
+ * unhandled error that fails the whole run. Call the function this returns when the test
+ * starts to tear down: from then on that one error is expected and let pass, on the pool
+ * and on each of its connections. Any other error, and that one before teardown, is
+ * rethrown and fails the run, as it would without a handler.
+ */
+export function guardTeardown(pool: pg.Pool): () => void {
+  let tearingDown = false;
+  const onError = (error: Error & { code?: string }) => {
+    if (tearingDown && error.code === '57P01') return;
+    throw error;
+  };
+  pool.on('error', onError);
+  pool.on('connect', (client) => client.on('error', onError));
+  return () => {
+    tearingDown = true;
+  };
+}
+
 const pgliteTarget: TestTarget = {
   name: 'pglite',
   create: () => {
@@ -49,13 +72,7 @@ function postgresTarget(adminUrl: string): TestTarget {
       // closing (57P01). During teardown only, that one error is expected;
       // any other error is rethrown and fails the run, as before.
       const pool = new pg.Pool({ connectionString: url.toString() });
-      let tearingDown = false;
-      const onError = (error: Error & { code?: string }) => {
-        if (tearingDown && error.code === '57P01') return;
-        throw error;
-      };
-      pool.on('error', onError);
-      pool.on('connect', (client) => client.on('error', onError));
+      const beginTeardown = guardTeardown(pool);
       const database: Database = {
         driver: 'postgres',
         db: drizzlePg({ client: pool, schema }),
@@ -64,7 +81,7 @@ function postgresTarget(adminUrl: string): TestTarget {
       return {
         database,
         cleanup: async () => {
-          tearingDown = true;
+          beginTeardown();
           // Close every connection to the test database before dropping it.
           await pool.end();
           await admin.query(`drop database ${name} with (force)`);
@@ -164,11 +181,18 @@ export async function lockWaiters(db: SchemaDb): Promise<number> {
  * waiter is blocked on a lock, which proves the two overlap, and only then lets
  * the holder commit. Returns both outcomes. If the waiter finishes while the
  * holder is still open, the lock did not do its job and the call throws.
+ *
+ * `whileBlocked`, when given, runs at the moment between those two, with the waiter
+ * blocked and the holder still open, on connections of its own: for a test that has to
+ * look at what the waiter holds while it waits (for instance, that it holds no row lock
+ * yet, which is what keeps it from deadlocking with the holder). If it throws, both
+ * transactions are finished first and the error is thrown after.
  */
 export async function interleave(
   db: SchemaDb,
   holder: (tx: Tx) => Promise<unknown>,
   waiter: (tx: Tx) => Promise<unknown>,
+  whileBlocked?: () => Promise<unknown>,
 ) {
   const holderDone = deferred();
   const commit = deferred();
@@ -190,6 +214,7 @@ export async function interleave(
       secondSettled = true;
     },
   );
+  let observed: { error: unknown } | undefined;
   try {
     for (let waited = 0; ; waited += 25) {
       if (secondSettled) {
@@ -203,10 +228,19 @@ export async function interleave(
       }
       await sleep(25);
     }
+    if (whileBlocked !== undefined) {
+      try {
+        await whileBlocked();
+      } catch (error) {
+        observed = { error };
+      }
+    }
   } finally {
     commit.resolve();
   }
-  return Promise.allSettled([first, second]);
+  const outcomes = await Promise.allSettled([first, second]);
+  if (observed !== undefined) throw observed.error;
+  return outcomes;
 }
 
 /** How many of `outcomes` (from `interleave` or `Promise.allSettled`) succeeded. */

@@ -15,14 +15,24 @@ import {
  * before setup is complete (`availableBeforeSetup`), for that reason. Nothing
  * secret and nothing about the install: no host names, no paths, no connection
  * details.
+ *
+ * It accepts a personal API token (`tokenAccess: 'read'`): it answers the same with or
+ * without one, but a token that is sent is checked, so a script can find out cheaply
+ * whether its token still works. A bad one is a 401 `invalid-token`.
  */
 export const metaRoutes: FastifyPluginAsyncZod = (app) => {
   app.get(
     '/meta',
     {
-      config: { auth: 'none', availableBeforeSetup: true },
+      config: {
+        auth: 'none',
+        availableBeforeSetup: true,
+        tokenAccess: 'read',
+      },
       schema: {
         summary: 'Server information',
+        description:
+          'Answers without a credential. A personal API token sent as `Authorization: Bearer <token>` is checked, and a token that does not work is a 401 `invalid-token`, so a script can test its token here.',
         response: {
           200: z.object({
             name: z.string().describe('The name of the product.'),

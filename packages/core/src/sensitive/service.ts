@@ -1,4 +1,5 @@
 import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
+import type { AccessCredential } from '../access/credential.js';
 import { hasProjectPermission } from '../access/project-permission.js';
 import {
   department,
@@ -41,8 +42,17 @@ import {
  * the person has a confirmed or released `project_person` engagement. Org
  * owners and admins get nothing automatically.
  *
+ * A personal API token (SC-10, decision D-68) reaches the same data only through its
+ * explicit sensitive scope: the token must list the permission's key, the organisation's
+ * sensitive switch must be on, and the token's owner must hold the permission on a shared
+ * project at that moment (`SensitiveContext.credential`, which `hasProjectPermission`
+ * narrows by). A token never takes the person's own way in: the owner of the account
+ * the data is about reads it by signing in, not through a token.
+ *
  * Audit: every allowed read writes one `sensitive.read` event and every denial
- * one `sensitive.denied` event, with the category and never a value. A denial
+ * one `sensitive.denied` event, with the category and never a value. A request made
+ * with a token is marked with the token's id: the event's actor is the token, and its
+ * details carry the token's id and its owner's. A denial
  * throws after its event is written, so a caller that rolls its transaction
  * back on the error loses the event: catch the error inside the transaction
  * and let it commit (CLAUDE.md, Data rules).
@@ -61,6 +71,12 @@ export type SensitiveContext = {
   readonly clock: () => Date;
   /** Queues notices of staff changes. Defaults to a no-op until the email module exists. */
   readonly notifier?: SensitiveChangeNotifier;
+  /**
+   * How the request was authenticated. A personal API token narrows every check by its
+   * scope and marks every audit event and change event with its id; left out, or a
+   * session's, nothing is narrowed or marked.
+   */
+  readonly credential?: AccessCredential;
 };
 
 /**
@@ -177,12 +193,29 @@ function assertCategory(
   }
 }
 
+/**
+ * Who an event names as the actor: the token when a personal API token made the request,
+ * which is who really did it, and the user otherwise (as `WriteContext` has it).
+ */
+function auditActor(ctx: SensitiveContext) {
+  return ctx.credential?.kind === 'token'
+    ? ({ type: 'token', id: ctx.credential.tokenId } as const)
+    : ({ type: 'user', id: ctx.userId } as const);
+}
+
+/** What a token adds to the details of an event: its id, and the owner it acted for. Nothing for a session. */
+function tokenMark(ctx: SensitiveContext): Record<string, string> {
+  return ctx.credential?.kind === 'token'
+    ? { tokenId: ctx.credential.tokenId, userId: ctx.userId }
+    : {};
+}
+
 function auditBase(ctx: SensitiveContext, personId: string, category: string) {
   return {
-    actor: { type: 'user', id: ctx.userId } as const,
+    actor: auditActor(ctx),
     targetType: 'person',
     targetId: personId,
-    details: { category },
+    details: { category, ...tokenMark(ctx) },
     requestId: ctx.requestId ?? null,
     occurredAt: ctx.clock(),
   };
@@ -208,10 +241,16 @@ async function authorise(
 
   let via: 'self' | 'staff' | null = null;
   if (found) {
-    if (found.userId !== null && found.userId === ctx.userId) {
+    // A token never takes the person's own way in: it has no permission to name,
+    // and sensitive data goes through an explicit scope or not at all (decision D-68).
+    if (
+      found.userId !== null &&
+      found.userId === ctx.userId &&
+      ctx.credential?.kind !== 'token'
+    ) {
       via = 'self';
     } else if (
-      await holdsOnSharedProject(tx, ctx.userId, found, category, operation)
+      await holdsOnSharedProject(tx, ctx, found, category, operation)
     ) {
       via = 'staff';
     }
@@ -231,11 +270,12 @@ async function authorise(
 
 /**
  * True when the user holds the category's read or edit permission on any
- * project where the person is engaged (status `confirmed` or `released`).
+ * project where the person is engaged (status `confirmed` or `released`). A personal API
+ * token in `ctx.credential` narrows the check on each project.
  */
 async function holdsOnSharedProject(
   tx: Tx,
-  userId: string,
+  ctx: SensitiveContext,
   subject: PersonRow,
   category: SensitiveCategory,
   operation: Operation,
@@ -256,7 +296,11 @@ async function holdsOnSharedProject(
       ),
     );
   for (const { projectId } of projects) {
-    if (await hasProjectPermission(tx, userId, projectId, key)) return true;
+    if (
+      await hasProjectPermission(tx, ctx.userId, projectId, key, ctx.credential)
+    ) {
+      return true;
+    }
   }
   return false;
 }
@@ -278,12 +322,19 @@ function metaOf(row: typeof personSensitive.$inferSelect): SensitiveRecordMeta {
 }
 
 function writeContext(ctx: SensitiveContext): WriteContext {
-  return {
-    actor: { type: 'user', id: ctx.userId },
+  const shared = {
     originServer: ctx.originServer,
     clock: ctx.clock,
     requestId: ctx.requestId ?? null,
   };
+  // A token's write is the token's in the change log, made for its owner.
+  return ctx.credential?.kind === 'token'
+    ? {
+        ...shared,
+        actor: { type: 'token', id: ctx.credential.tokenId },
+        onBehalfOfUserId: ctx.userId,
+      }
+    : { ...shared, actor: { type: 'user', id: ctx.userId } };
 }
 
 async function findRow(
@@ -586,14 +637,15 @@ export async function complianceReport(
       ctx.userId,
       projectId,
       COMPLIANCE_REPORT_PERMISSION,
+      ctx.credential,
     ));
   const audit = {
-    actor: { type: 'user', id: ctx.userId } as const,
+    actor: auditActor(ctx),
     organisationId: found?.organisationId ?? null,
     projectId: found ? projectId : null,
     targetType: 'project',
     targetId: projectId,
-    details: { report: 'compliance' },
+    details: { report: 'compliance', ...tokenMark(ctx) },
     requestId: ctx.requestId ?? null,
     occurredAt: ctx.clock(),
   };

@@ -23,6 +23,7 @@ export const ACCOUNT_PERMISSIONS: readonly PermissionDefinition[] = [
     module: 'accounts',
     description: 'Read charts of accounts and their accounts',
     grantsSensitive: false,
+    access: 'read',
   },
   {
     key: ACCOUNTS_EDIT_PERMISSION,
@@ -30,5 +31,6 @@ export const ACCOUNT_PERMISSIONS: readonly PermissionDefinition[] = [
     description:
       'Create, copy and change charts of accounts and their accounts',
     grantsSensitive: false,
+    access: 'write',
   },
 ];

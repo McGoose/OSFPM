@@ -1,5 +1,6 @@
 import { and, eq, isNull, or } from 'drizzle-orm';
 import type { Tx } from '../db/write.js';
+import { credentialPermits, type AccessCredential } from './credential.js';
 import {
   orgMembership,
   orgMembershipRole,
@@ -33,6 +34,14 @@ import {
  * tier grants nothing, only roles do. Invited and removed members hold nothing,
  * and neither do members of other organisations.
  *
+ * With a `credential` that is a personal API token, the answer is narrowed first
+ * (`credentialPermits`, with the organisation the project belongs to): a token passes
+ * only on a project of its own organisation, and for a project token only on its
+ * project, never a write permission if it can only read, and a sensitive permission
+ * only through its explicit sensitive scope with the organisation's sensitive switch
+ * on. It is then the owner's own answer, so a token never passes what its owner does
+ * not hold. Without a credential, or with a session's, the answer is not narrowed.
+ *
  * Server-side only: permission checks never run on a client (CLAUDE.md, Data
  * rules). The general policy engine comes later and may reuse this.
  */
@@ -41,7 +50,28 @@ export async function hasProjectPermission(
   userId: string,
   projectId: string,
   key: string,
+  credential?: AccessCredential,
 ): Promise<boolean> {
+  if (credential?.kind === 'token') {
+    // The project's organisation, to hold the token to its own. A project that is not
+    // there is nobody's.
+    const [found] = await tx
+      .select({ organisationId: project.organisationId })
+      .from(project)
+      .where(eq(project.id, projectId))
+      .limit(1);
+    if (
+      found === undefined ||
+      !(await credentialPermits(
+        tx,
+        credential,
+        { organisationId: found.organisationId, projectId },
+        key,
+      ))
+    ) {
+      return false;
+    }
+  }
   const [viaProject] = await tx
     .select({ id: rolePermission.id })
     .from(projectMembership)

@@ -73,14 +73,27 @@ const SESSION_COOKIE_PAIR = new RegExp(
   'gi',
 );
 
+/**
+ * A personal API token as text, `osfpm_pat_` and the base64url characters that follow,
+ * wherever it sits in a string: an `Authorization` header pasted into a message, a
+ * request someone logged by hand. The fixed start is what makes it recognisable here, as
+ * it is for the secret scanners it was chosen for. The whole of it is masked, the
+ * stored prefix too.
+ */
+const API_TOKEN_TEXT = /osfpm_pat_[A-Za-z0-9_-]*/gi;
+
 /** How deep a logged object is searched. Deeper than this is cut off, which also ends a cycle. */
 const MAX_DEPTH = 8;
 
-/** Masks the value of every token-named query parameter and of the session cookie in `text`. */
+/**
+ * Masks the value of every token-named query parameter, of the session cookie and of a
+ * personal API token in `text`.
+ */
 function maskTokenParameters(text: string): string {
   return text
     .replace(TOKEN_PARAMETER, `$1${REDACTED}`)
-    .replace(SESSION_COOKIE_PAIR, `$1${REDACTED}`);
+    .replace(SESSION_COOKIE_PAIR, `$1${REDACTED}`)
+    .replace(API_TOKEN_TEXT, REDACTED);
 }
 
 /** Top-level keys that the serialisers below already reduce to safe fields. */

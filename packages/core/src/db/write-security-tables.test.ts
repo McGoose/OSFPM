@@ -8,6 +8,7 @@ import type { Database } from './client.js';
 import { newId } from './ids.js';
 import {
   accessReset,
+  apiToken,
   changeEvent,
   changeSeq,
   invite,
@@ -27,7 +28,7 @@ import {
 
 /**
  * The write helper refuses every security table, and the child table of one,
- * even `invite`, `invite_role` and `access_reset`, which carry an
+ * even `invite`, `invite_role`, `access_reset` and `api_token`, which carry an
  * `organisation_id` by declaration (CLAUDE.md, Data rules): only the auth service writes them,
  * directly, and audits instead of change-logging. A table with an
  * `organisation_id` is otherwise one the helper would take, so the refusal is
@@ -75,6 +76,7 @@ describe.each(testTargets)(
       invites: (await database.db.select().from(invite)).length,
       links: (await database.db.select().from(inviteRole)).length,
       resets: (await database.db.select().from(accessReset)).length,
+      tokens: (await database.db.select().from(apiToken)).length,
       events: (await database.db.select().from(changeEvent)).length,
       counters: (await database.db.select().from(changeSeq)).length,
     });
@@ -207,6 +209,66 @@ describe.each(testTargets)(
         (candidate) => candidate.id === row!.id,
       );
       expect(found).toMatchObject({ version: 1, removePasskeys: false });
+      expect(found!.deletedAt).toBeNull();
+    });
+
+    it('refuses an api_token too, which carries an organisation_id and composite keys to a membership and a project, and writes nothing', async () => {
+      const owner = await seedUser(database);
+      await grantOnOrganisation(database, organisationId, owner, 'member', []);
+      const values = {
+        organisationId,
+        userId: owner,
+        name: 'Call sheet export',
+        prefix: `osfpm_pat_wh${newId().slice(0, 8)}`,
+        tokenHash: `write-helper-token-${newId()}`,
+        access: 'read' as const,
+      };
+      // A row the way the auth service makes one: directly.
+      const [row] = await database.db
+        .insert(apiToken)
+        .values({ ...values, originServer: ORIGIN, createdBy: owner })
+        .returning();
+      const before = await untouched();
+      const refused = await database.db
+        .transaction((tx) =>
+          insertRecord(
+            tx,
+            apiToken,
+            {
+              ...values,
+              prefix: `osfpm_pat_wi${newId().slice(0, 8)}`,
+              tokenHash: `write-helper-token-${newId()}`,
+            },
+            ctx(),
+          ),
+        )
+        .then(
+          () => undefined,
+          (caught: unknown) => caught,
+        );
+      expect(refused).toBeInstanceOf(SecurityTableWriteError);
+      expect((refused as Error).message).toContain('api_token');
+      expect((refused as Error).message).not.toContain(values.tokenHash);
+      await expect(
+        database.db.transaction((tx) =>
+          updateRecord(tx, apiToken, row!.id, 1, { access: 'write' }, ctx()),
+        ),
+      ).rejects.toBeInstanceOf(SecurityTableWriteError);
+      await expect(
+        database.db.transaction((tx) =>
+          softDeleteRecord(tx, apiToken, row!.id, 1, ctx()),
+        ),
+      ).rejects.toBeInstanceOf(SecurityTableWriteError);
+      await expect(
+        database.db.transaction((tx) =>
+          restoreRecord(tx, apiToken, row!.id, 1, ctx()),
+        ),
+      ).rejects.toBeInstanceOf(SecurityTableWriteError);
+      expect(await untouched()).toEqual(before);
+      const found = (await database.db.select().from(apiToken)).find(
+        (candidate) => candidate.id === row!.id,
+      );
+      expect(found).toMatchObject({ version: 1, access: 'read' });
       expect(found!.deletedAt).toBeNull();
     });
 

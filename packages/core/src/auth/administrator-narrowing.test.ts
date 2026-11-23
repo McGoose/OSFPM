@@ -41,9 +41,24 @@ const at = (ms: number) => new Date(T0.getTime() + ms);
  * each with `all-projects` reach, as the top-up gives an ordinary permission.
  */
 const ORDINARY: readonly PermissionDefinition[] = [
-  { key: 'later:read', module: 'later', description: 'Read what it adds' },
-  { key: 'later:org', module: 'later', description: 'Another it adds' },
-  { key: 'later:mixed', module: 'later', description: 'A third it adds' },
+  {
+    key: 'later:read',
+    module: 'later',
+    description: 'Read what it adds',
+    access: 'read',
+  },
+  {
+    key: 'later:org',
+    module: 'later',
+    description: 'Another it adds',
+    access: 'read',
+  },
+  {
+    key: 'later:mixed',
+    module: 'later',
+    description: 'A third it adds',
+    access: 'read',
+  },
 ];
 
 /** The next release flags one of them sensitive. */

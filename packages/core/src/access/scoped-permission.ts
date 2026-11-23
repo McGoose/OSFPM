@@ -1,4 +1,5 @@
 import type { Tx } from '../db/write.js';
+import type { AccessCredential } from './credential.js';
 import { hasOrganisationPermission } from './organisation-permission.js';
 import { hasProjectPermission } from './project-permission.js';
 
@@ -17,15 +18,23 @@ export type PermissionScope = {
  * True when `userId` holds `key` in `scope`: `hasProjectPermission` when the
  * scope has a project, `hasOrganisationPermission` when it has none. For
  * modules whose records may belong to a project or to the organisation alone,
- * such as legal holds and contracts. Server-side only, like both of them.
+ * such as legal holds and contracts. A `credential` that is a personal API token
+ * narrows the answer, as it does in both of them. Server-side only, like both of them.
  */
 export function hasScopedPermission(
   tx: Tx,
   userId: string,
   scope: PermissionScope,
   key: string,
+  credential?: AccessCredential,
 ): Promise<boolean> {
   return scope.projectId !== null
-    ? hasProjectPermission(tx, userId, scope.projectId, key)
-    : hasOrganisationPermission(tx, userId, scope.organisationId, key);
+    ? hasProjectPermission(tx, userId, scope.projectId, key, credential)
+    : hasOrganisationPermission(
+        tx,
+        userId,
+        scope.organisationId,
+        key,
+        credential,
+      );
 }

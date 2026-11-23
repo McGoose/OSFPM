@@ -51,6 +51,7 @@ describe('legal hold permission', () => {
         module: 'legal-hold',
         description: 'Place and release legal holds',
         grantsSensitive: false,
+        access: 'write',
       },
     ]);
     expect(LEGAL_HOLD_MANAGE_PERMISSION).toBe('legal-hold:manage');

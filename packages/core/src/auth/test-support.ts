@@ -5,7 +5,7 @@ import {
   randomBytes,
   sign,
 } from 'node:crypto';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { Secret, TOTP } from 'otpauth';
 import type {
   AuthenticationResponseJSON,
@@ -18,14 +18,17 @@ import { PERMISSION_LISTS } from '../access/permission-lists.js';
 import { syncPermissions } from '../access/permission-sync.js';
 import {
   base,
+  grantOnProject,
   ORIGIN,
   seedDepartment,
   seedOrganisation,
+  seedProject,
   seedUser,
 } from '../access/test-fixtures.js';
 import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
 import {
+  apiToken,
   installation,
   orgMembership,
   orgMembershipRole,
@@ -33,6 +36,7 @@ import {
   passwordCredential,
   role,
   rolePermission,
+  session,
   totpCredential,
   user,
   type OrgMembershipStatus,
@@ -869,4 +873,196 @@ export async function setMembershipStatus(
         eq(orgMembership.userId, userId),
       ),
     );
+}
+
+/**
+ * Ends the organisation roles a member holds (`ended: true`), or puts them back
+ * (`ended: false`), by marking their `org_membership_role` rows deleted or not, as a
+ * later release's own role service would. The membership stays active. So a test can show
+ * what happens to a token when its owner stops holding a permission they held when it was
+ * made, and what happens when they hold it again.
+ */
+export async function setMemberRolesEnded(
+  database: Database,
+  organisationId: string,
+  userId: string,
+  ended: boolean,
+): Promise<void> {
+  const memberships = database.db
+    .select({ id: orgMembership.id })
+    .from(orgMembership)
+    .where(
+      and(
+        eq(orgMembership.organisationId, organisationId),
+        eq(orgMembership.userId, userId),
+      ),
+    );
+  await database.db
+    .update(orgMembershipRole)
+    .set({ deletedAt: ended ? new Date() : null })
+    .where(
+      and(
+        eq(orgMembershipRole.organisationId, organisationId),
+        inArray(orgMembershipRole.membershipId, memberships),
+      ),
+    );
+}
+
+/** What `seedTokenScene` made. */
+export type TokenScene = {
+  readonly organisationId: string;
+  /** The first administrator: tier `owner`, the Administrator role (every permission). */
+  readonly ownerId: string;
+  /** A member whose role holds only `api:tokens`, in the organisation. */
+  readonly tokensId: string;
+  /** A member whose role holds only `api:manage`, in the organisation. */
+  readonly managerId: string;
+  /**
+   * A member who holds `api:tokens` and the medical read and edit permissions in the
+   * organisation, and the medical read permission on `projectId` through a project role.
+   */
+  readonly medicalId: string;
+  /** A member who holds none of the API permissions. */
+  readonly plainId: string;
+  /** A member of the other organisation only. */
+  readonly strangerId: string;
+  readonly otherOrganisationId: string;
+  /** A project of the organisation. */
+  readonly projectId: string;
+  /** A second project of the organisation. */
+  readonly otherProjectId: string;
+  /** A project of the other organisation. */
+  readonly foreignProjectId: string;
+};
+
+/**
+ * An organisation made by first-run setup, with the people personal API token tests
+ * need: the owner (every permission), one member who may only make tokens, one who may
+ * only manage them, one who may make tokens and holds medical data permissions, one who
+ * holds none of it, and a stranger in another organisation, plus two projects of the
+ * organisation and one of the other. Direct inserts for the extras, as fixtures do.
+ * Invented people only.
+ */
+export async function seedTokenScene(
+  database: Database,
+  now: Date,
+): Promise<TokenScene> {
+  const reset = await seedResetScene(database, now);
+  const { organisationId } = reset;
+  const roles = {
+    tokens: await seedOrganisationRole(database, organisationId, 'tokens', [
+      ['api:tokens', 'own-scope'],
+    ]),
+    manager: await seedOrganisationRole(database, organisationId, 'manager', [
+      ['api:manage', 'own-scope'],
+    ]),
+    medical: await seedOrganisationRole(database, organisationId, 'medical', [
+      ['api:tokens', 'own-scope'],
+      ['sensitive:read:medical', 'own-scope'],
+      ['sensitive:edit:medical', 'own-scope'],
+    ]),
+  };
+  const member = async (roleId: string) => {
+    const id = await seedUser(database);
+    await seedMembership(database, organisationId, id, 'member', [roleId]);
+    return id;
+  };
+  const tokensId = await member(roles.tokens);
+  const managerId = await member(roles.manager);
+  const medicalId = await member(roles.medical);
+  const projectId = await seedProject(database, organisationId);
+  const otherProjectId = await seedProject(database, organisationId);
+  // A project role on `projectId` that holds the medical read permission, so the
+  // member holds it there and not only in the organisation.
+  await grantOnProject(
+    database,
+    organisationId,
+    projectId,
+    medicalId,
+    ['sensitive:read:medical'],
+    { roleProjectId: projectId },
+  );
+  const foreign = await seedOrganisation(database);
+  return {
+    organisationId,
+    ownerId: reset.ownerId,
+    tokensId,
+    managerId,
+    medicalId,
+    plainId: reset.plainId,
+    strangerId: reset.strangerId,
+    otherOrganisationId: reset.otherOrganisationId,
+    projectId,
+    otherProjectId,
+    foreignProjectId: foreign.projectId,
+  };
+}
+
+let apiTokenCounter = 0;
+
+/**
+ * A personal API token row, written directly as fixtures do (the service that makes
+ * one is under test elsewhere). A `read` token for `userId`, with no project and no
+ * sensitive scope, that never expires, with a fixture hash and prefix, made on 1
+ * January 2026 so that an `expiresAt` any test sets after that day is valid.
+ * `overrides` change any column. `userId` must be a member of `organisationId`.
+ * Answers the row.
+ */
+export async function seedApiToken(
+  database: Database,
+  organisationId: string,
+  userId: string,
+  overrides: Partial<typeof apiToken.$inferInsert> = {},
+): Promise<typeof apiToken.$inferSelect> {
+  apiTokenCounter += 1;
+  const n = apiTokenCounter;
+  const [row] = await database.db
+    .insert(apiToken)
+    .values({
+      originServer: ORIGIN,
+      organisationId,
+      userId,
+      name: `Fixture token ${n}`,
+      prefix: `osfpm_pat_fx${String(n).padStart(6, '0')}`,
+      tokenHash: `fixture-token-hash-${n}-${newId()}`,
+      access: 'read',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      createdBy: userId,
+      ...overrides,
+    })
+    .returning();
+  return row!;
+}
+
+let sessionCounter = 0;
+
+/**
+ * A session row written directly as fixtures do (the service that makes one is under test
+ * elsewhere): live, of method `password` and scope `full`, for `userId`, and ending in
+ * the year 2100 unless `overrides` say otherwise, so a test that moves its clock does not
+ * end it. Its token hash is a fixture value, so it cannot be presented to a route: it is
+ * for the services that are told which session a call is made from. Answers the row's id.
+ */
+export async function seedSession(
+  database: Database,
+  userId: string,
+  overrides: Partial<typeof session.$inferInsert> = {},
+): Promise<string> {
+  sessionCounter += 1;
+  const [row] = await database.db
+    .insert(session)
+    .values({
+      originServer: ORIGIN,
+      userId,
+      tokenHash: `fixture-session-hash-${sessionCounter}-${newId()}`,
+      method: 'password',
+      scope: 'full',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      lastSeenAt: new Date('2026-01-01T00:00:00.000Z'),
+      idleExpiresAt: new Date('2100-01-01T00:00:00.000Z'),
+      absoluteExpiresAt: new Date('2100-01-01T00:00:00.000Z'),
+      ...overrides,
+    })
+    .returning({ id: session.id });
+  return row!.id;
 }

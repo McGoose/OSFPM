@@ -31,17 +31,20 @@ export const COST_PERMISSIONS: readonly PermissionDefinition[] = [
     description:
       'Read cost lines and their scheme tags, including amounts and payees',
     grantsSensitive: true,
+    access: 'read',
   },
   {
     key: COSTS_EDIT_PERMISSION,
     module: 'costs',
     description: 'Create, change and remove cost lines',
     grantsSensitive: false,
+    access: 'write',
   },
   {
     key: COSTS_TAG_SCHEMES_PERMISSION,
     module: 'costs',
     description: 'Tag cost lines as qualifying or not for incentive schemes',
     grantsSensitive: false,
+    access: 'write',
   },
 ];

@@ -117,6 +117,7 @@ describe.each(testTargets)('permissions on $name', (target) => {
           module: 'demo',
           description: 'Old text',
           grantsSensitive: false,
+          access: 'write',
         },
       ]);
       await grantOnProject(database, s.organisationId, s.projectId, u, [
@@ -128,6 +129,7 @@ describe.each(testTargets)('permissions on $name', (target) => {
           module: 'demo',
           description: 'New text',
           grantsSensitive: true,
+          access: 'write',
         },
       ]);
       const [row] = await database.db
@@ -154,7 +156,7 @@ describe.each(testTargets)('permissions on $name', (target) => {
     it('rejects a malformed key with the database’s own error, not a PermissionSyncError', async () => {
       const error = await errorOf(
         syncPermissions(database.db, [
-          { key: 'Bad Key', module: 'demo', description: 'x' },
+          { key: 'Bad Key', module: 'demo', description: 'x', access: 'write' },
         ]),
       );
       expect(error).toBeInstanceOf(Error);
@@ -191,6 +193,7 @@ describe.each(testTargets)('permissions on $name', (target) => {
         module: 'demo',
         description: 'Now sensitive',
         grantsSensitive: true,
+        access: 'read',
       });
 
       const stored = async (key: string) => {
@@ -290,7 +293,12 @@ describe.each(testTargets)('permissions on $name', (target) => {
             .where(eq(permission.key, 'demo:wide-five'));
           expect(row).toMatchObject({ grantsSensitive: false });
           await syncPermissions(tx, [
-            { key: 'demo:after-refusal', module: 'demo', description: 'x' },
+            {
+              key: 'demo:after-refusal',
+              module: 'demo',
+              description: 'x',
+              access: 'write',
+            },
           ]);
         });
         expect(await stored('demo:after-refusal')).toBeDefined();

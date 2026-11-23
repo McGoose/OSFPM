@@ -22,6 +22,12 @@ export type AuthStateReason =
   /** Setup is complete, so no setup code can be issued. */
   | 'setup-complete'
   /**
+   * The session a call was made from has ended since the request was let in: revoked
+   * (an admin reset link was used for the person, they signed out everywhere) or past
+   * its end. What the call asked for was not done.
+   */
+  | 'session-ended'
+  /**
    * The passkey is the user's last way to sign in: they have no password and no
    * other live passkey, so revoking it would lock them out (SC-10, decision D-56).
    */

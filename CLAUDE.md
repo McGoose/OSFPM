@@ -52,7 +52,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Public endpoints (`auth: 'none'`) test identical failure answers and their rate limit.
 - A string from a caller never indexes a plain object and never goes through `in`. Use Object.hasOwn, a Map, or check it against the constant list first.
 - A guard that checks for live rows pointing at a record locks them (FOR UPDATE on the record, FOR SHARE on the reference) so a concurrent write can't slip past it.
-- Lock order: take the change counter before any row lock: `lockProjectChanges` for a record of a project, `lockOrganisationChanges` for a record of the organisation alone. Every writer follows this order, or concurrent writes can deadlock. A new organisation or project takes its own counter after its row exists. Lock order: counter first, then invite or reset rows, then the user row. A writer that already holds a user row never waits for an invite or reset row: it reads them with SKIP LOCKED. Take the user row FOR UPDATE when the decision depends on rows that reference the user (memberships, sign-in methods): only FOR UPDATE blocks the foreign-key lock their inserts take. Otherwise lockUser's default.
+- Lock order: take the change counter before any row lock: `lockProjectChanges` for a record of a project, `lockOrganisationChanges` for a record of the organisation alone. Every writer follows this order, or concurrent writes can deadlock. A new organisation or project takes its own counter after its row exists. Lock order: counter first, then invite or reset rows, then the user row, then that user's token rows. A writer that already holds a user row never waits for an invite or reset row: it reads them with SKIP LOCKED. Take the user row FOR UPDATE when the decision depends on rows that reference the user (memberships, sign-in methods): only FOR UPDATE blocks the foreign-key lock their inserts take. Otherwise lockUser's default.
 
 ## Code rules
 
@@ -60,9 +60,11 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - The API package never imports drizzle-orm; it calls core services.
 - Every new route declares `auth`; the default is `required`. Cookie requests that change data must pass the Origin check.
 - Every route that creates a session passes the Origin check, with or without a cookie.
+- Routes refuse API tokens unless they declare `tokenAccess`; credential, account and token-management routes never do. A token passes a sensitive permission check only through its explicit sensitive scope, with the organisation's sensitive-token switch on.
 - Status codes: 401 = not signed in; 403 = signed in but not allowed; 404 for by-id lookups where existence must not leak.
 - Login failures always answer the same 401 `sign-in-failed`; never reveal which part failed.
 - Log lines use the logger's known keys (req, res, err) or plain scalar fields; never log whole objects or request data.
+- Don't run regexes with nested or overlapping quantifiers on request data; parse headers with plain string operations. Zod's built-in formats are fine.
 
 ## Comments and docs
 

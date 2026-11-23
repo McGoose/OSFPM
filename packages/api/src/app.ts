@@ -13,6 +13,7 @@ import { API_PREFIX } from './api-version.js';
 import { relyingPartyFor } from '@osfpm/core/src/auth/passkeys.js';
 import { memberResetRoutes } from './access-reset/member-routes.js';
 import { publicAccessResetRoutes } from './access-reset/public-routes.js';
+import { apiTokenRoutes } from './api-tokens/routes.js';
 import { accountRoutes } from './auth/account-routes.js';
 import { loginRoutes } from './auth/login-routes.js';
 import { passkeyRoutes } from './auth/passkey-routes.js';
@@ -250,6 +251,9 @@ export function buildApp(options: BuildAppOptions) {
   });
   void app.register(publicAccessResetRoutes, {
     prefix: `${API_PREFIX}/access-reset`,
+  });
+  void app.register(apiTokenRoutes, {
+    prefix: `${API_PREFIX}/organisations`,
   });
 
   return app;

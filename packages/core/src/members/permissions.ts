@@ -36,17 +36,20 @@ export const MEMBER_PERMISSIONS: readonly PermissionDefinition[] = [
     module: 'members',
     description: 'List the members of the organisation',
     grantsSensitive: false,
+    access: 'read',
   },
   {
     key: MEMBERS_INVITE_PERMISSION,
     module: 'members',
     description: 'Create, list and revoke invite links',
     grantsSensitive: false,
+    access: 'write',
   },
   {
     key: MEMBERS_RESET_ACCESS_PERMISSION,
     module: 'members',
     description: 'Create and revoke reset links for members who are locked out',
     grantsSensitive: false,
+    access: 'write',
   },
 ];
