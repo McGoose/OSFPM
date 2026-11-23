@@ -58,6 +58,7 @@ import {
 import { testTargets } from '@osfpm/core/src/db/test-support.js';
 import { InstallationMissingError } from '@osfpm/core/src/installation/server-id.js';
 import { LegalHoldInputError } from '@osfpm/core/src/legal-hold/service.js';
+import { LibraryInputError } from '@osfpm/core/src/library/errors.js';
 import {
   PreferencesInvalidError,
   UseAccountPreferencesError,
@@ -149,6 +150,13 @@ const fixtures = new Map<abstract new (...args: never[]) => Error, () => Error>(
     [
       LegalHoldInputError,
       () => new LegalHoldInputError('A hold needs a reason'),
+    ],
+    [
+      LibraryInputError,
+      () =>
+        new LibraryInputError(
+          'The distance to an accessible toilet needs the toilet answered yes',
+        ),
     ],
     [
       ServiceUnavailableError,

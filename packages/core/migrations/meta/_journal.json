@@ -267,6 +267,13 @@
       "when": 1795463244942,
       "tag": "0037_delivery_preferences",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1795464725516,
+      "tag": "0038_location_access",
+      "breakpoints": true
     }
   ]
 }

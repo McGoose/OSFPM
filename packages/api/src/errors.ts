@@ -52,6 +52,7 @@ import {
 } from '@osfpm/core/src/db/write.js';
 import { InstallationMissingError } from '@osfpm/core/src/installation/server-id.js';
 import { LegalHoldInputError } from '@osfpm/core/src/legal-hold/service.js';
+import { LibraryInputError } from '@osfpm/core/src/library/errors.js';
 import {
   PreferencesInvalidError,
   UseAccountPreferencesError,
@@ -988,6 +989,15 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
     code: 'invalid-input',
     title: 'Invalid input',
     detail: 'The legal hold needs a reason, and its scope must be complete.',
+  },
+  {
+    // Its message names the field and the rule and never a value or an id (its JSDoc says
+    // so): a location's access answers that break a rule.
+    errorClass: LibraryInputError,
+    status: 422,
+    code: 'invalid-input',
+    title: 'Invalid input',
+    detail: null,
   },
   {
     // Its message lists where the payload is wrong and never what is in it.
