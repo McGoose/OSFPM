@@ -34,7 +34,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Modules never read other modules' tables; they use core services and events.
 - Tenant records are written only through the write helper in `src/db/write.ts`.
 - Tables in `SECURITY_TABLES` are written only by the auth service, never through the write helper; their changes are audited, not change-logged.
-- A security table has no `organisation_id`, except one that declares `organisationScoped` in code (`invite`, and its child `invite_role`): the composite keys that keep an invite and its roles inside one organisation need the column. The write helper still refuses them.
+- A security table has no `organisation_id`, except one that declares `organisationScoped` in code (`invite` and `access_reset`, and the child of `invite`, `invite_role`): the composite keys that keep an invite and its roles, or a reset link and its person's membership, inside one organisation need the column. The write helper still refuses them.
 - `user` and `installation` are install-level tables, written only by the core services named for them in `SERVICE_WRITTEN_TABLES` (the auth service, which also does first-run setup), never through the write helper; their changes are audited, not change-logged.
 - The setup code is the only secret OSFPM prints; it goes to stderr outside the logger.
 - Test fixtures may insert rows directly to set up state. Code under test always writes through the write helper.
@@ -52,7 +52,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Public endpoints (`auth: 'none'`) test identical failure answers and their rate limit.
 - A string from a caller never indexes a plain object and never goes through `in`. Use Object.hasOwn, a Map, or check it against the constant list first.
 - A guard that checks for live rows pointing at a record locks them (FOR UPDATE on the record, FOR SHARE on the reference) so a concurrent write can't slip past it.
-- Lock order: take the change counter before any row lock: `lockProjectChanges` for a record of a project, `lockOrganisationChanges` for a record of the organisation alone. Every writer follows this order, or concurrent writes can deadlock. A new organisation or project takes its own counter after its row exists. A `user` row is locked last, after any counter and any invite or reset row.
+- Lock order: take the change counter before any row lock: `lockProjectChanges` for a record of a project, `lockOrganisationChanges` for a record of the organisation alone. Every writer follows this order, or concurrent writes can deadlock. A new organisation or project takes its own counter after its row exists. A `user` row is locked last, after any counter and any invite or reset row. Take the user row FOR UPDATE when the decision depends on rows that reference the user (memberships, sign-in methods): only FOR UPDATE blocks the foreign-key lock their inserts take. Otherwise lockUser's default.
 
 ## Code rules
 
