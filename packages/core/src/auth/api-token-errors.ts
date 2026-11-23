@@ -112,3 +112,36 @@ export class TokenExceedsOwnAccessError extends ApiTokenRefusedError {
     this.name = 'TokenExceedsOwnAccessError';
   }
 }
+
+/**
+ * A token that can only read lists a permission that changes data in its sensitive scope
+ * (a permission classed `write`, which includes one that does both). A read token passes
+ * no such permission, so listing one would promise what it can never do: the person makes
+ * a `write` token, or leaves the key out. A rule refusal and not a malformed request, so
+ * the API answers a 422 `token-read-only-scope`. `indexes` says where in the list (after
+ * repeated keys are dropped, as for `NotASensitivePermissionError`) the keys are, and
+ * never what they are, because a key is a value the caller sent. Nothing was written.
+ */
+export class TokenReadOnlyScopeError extends ApiTokenRefusedError {
+  constructor(readonly indexes: readonly number[]) {
+    super('A read token cannot hold a permission that changes data');
+    this.name = 'TokenReadOnlyScopeError';
+  }
+}
+
+/**
+ * The project the token was asked for is not available to the person making it: it does
+ * not exist, it was deleted, it belongs to another organisation, or the person cannot
+ * reach it (no membership of it and no grant for every project). One error for all of
+ * them, carrying nothing, so what is said is the same whichever it was and a person learns
+ * nothing about projects that are not theirs (CLAUDE.md, Code rules: where existence must
+ * not leak, the answer is one). A rule refusal and not a malformed request, so the API
+ * answers a 422 `project-not-available`. A value that is not an id at all is still an
+ * `AuthInputError`. Nothing was written.
+ */
+export class ProjectNotAvailableError extends ApiTokenRefusedError {
+  constructor() {
+    super('The project is not available to this person');
+    this.name = 'ProjectNotAvailableError';
+  }
+}

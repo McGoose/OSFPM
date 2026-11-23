@@ -525,18 +525,42 @@ describe.each(testTargets)(
         });
       });
 
-      it('says a project that the person cannot reach, or that is not the organisation’s, is a bad request', async () => {
+      it('says a project that the person cannot reach, that is not the organisation’s or that does not exist is a 422 project-not-available, with one body', async () => {
         await switchesNow(true, false);
+        const bodies = new Set<string>();
         for (const projectId of [
+          // Another organisation’s.
           scene.foreignProjectId,
+          // The organisation’s own, but the member holds no membership of it and no
+          // grant for all of them.
           scene.projectId,
+          // Not there at all.
           '00000000-0000-7000-8000-000000000000',
         ]) {
-          // The member holds no membership of the project and no grant for all of them.
           const response = await createToken(tokensUser, { projectId });
-          expect(response.statusCode, projectId).toBe(400);
-          expect(response.json<{ code: string }>().code).toBe('bad-request');
+          expect(response.statusCode, projectId).toBe(422);
+          expect(response.json()).toMatchObject({
+            code: 'project-not-available',
+            errors: [
+              {
+                in: 'body',
+                path: 'projectId',
+                code: 'project-not-available',
+              },
+            ],
+          });
+          // Nothing in the answer names the project the caller asked about.
+          expect(response.body).not.toContain(projectId);
+          bodies.add(sameness(response.json()));
         }
+        // The same answer whichever it was, so a caller learns nothing about projects
+        // that are not theirs.
+        expect(bodies.size).toBe(1);
+        // A value that is not an id never reaches the service: a plain bad request.
+        const malformed = await createToken(tokensUser, {
+          projectId: 'not-an-id',
+        });
+        expect(malformed.statusCode).toBe(400);
         // The owner holds ordinary permissions for every project of the organisation.
         const own = await createToken(owner, { projectId: scene.projectId });
         expect(own.statusCode).toBe(201);
@@ -546,7 +570,7 @@ describe.each(testTargets)(
         ).toBe(scene.projectId);
       });
 
-      it('answers the sensitive scope with its own codes: switch off, not sensitive, more than you hold, and a read token asking to write', async () => {
+      it('answers the sensitive scope with its own codes: switch off, not sensitive, more than you hold, and a read token asking for a permission that writes', async () => {
         await switchesNow(true, false);
         const off = await createToken(medical, {
           sensitivePermissions: ['sensitive:read:medical'],
@@ -588,9 +612,24 @@ describe.each(testTargets)(
         });
         const write = await createToken(medical, {
           access: 'read',
-          sensitivePermissions: ['sensitive:edit:medical'],
+          sensitivePermissions: [
+            'sensitive:read:medical',
+            'sensitive:edit:medical',
+          ],
         });
-        expect(write.statusCode).toBe(400);
+        expect(write.statusCode).toBe(422);
+        expect(write.json()).toMatchObject({
+          code: 'token-read-only-scope',
+          errors: [
+            {
+              in: 'body',
+              path: 'sensitivePermissions.1',
+              code: 'token-read-only-scope',
+            },
+          ],
+        });
+        // The place in the list, not the key the caller sent.
+        expect(write.body).not.toContain('sensitive:edit:medical');
         const ok = await createToken(medical, {
           access: 'write',
           sensitivePermissions: [

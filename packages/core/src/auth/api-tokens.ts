@@ -56,7 +56,9 @@ import {
   ApiTokenInvalidError,
   ApiTokensDisabledError,
   NotASensitivePermissionError,
+  ProjectNotAvailableError,
   TokenExceedsOwnAccessError,
+  TokenReadOnlyScopeError,
   type ApiTokenFailureReason,
 } from './api-token-errors.js';
 import { AuthInputError } from './errors.js';
@@ -436,7 +438,8 @@ function checkedCreate(input: CreateApiTokenInput): CheckedCreate {
  * holds, in that order, and throws at the first that fails (nothing is written). Every key
  * must be a permission flagged `grants_sensitive` (`NotASensitivePermissionError`, naming
  * where in the list); a `read` token may list only `read` permissions, so a key that
- * changes data is a bad request; and the owner must hold each key where the token works:
+ * changes data is a `TokenReadOnlyScopeError` (naming where in the list); and the owner
+ * must hold each key where the token works:
  * in the organisation for a token of the whole organisation, with the rule against
  * escalation that invites and reset links share, and on the project for a project token
  * (`TokenExceedsOwnAccessError`). A sensitive permission is never held for all projects,
@@ -466,11 +469,11 @@ async function checkSensitiveScope(
   if (notSensitive.length > 0)
     throw new NotASensitivePermissionError(notSensitive);
 
-  if (
-    checked.access === 'read' &&
-    keys.some((key) => permissionAccess(key) === 'write')
-  ) {
-    throw new AuthInputError('sensitivePermissions');
+  if (checked.access === 'read') {
+    const writes = keys.flatMap((key, index) =>
+      permissionAccess(key) === 'write' ? [index] : [],
+    );
+    if (writes.length > 0) throw new TokenReadOnlyScopeError(writes);
   }
 
   let missing: string[];
@@ -546,7 +549,9 @@ async function insertWithFreshToken(
  * token lasts `expiresInDays` (1 to 3650, 365 when left out) from `now`, or never when
  * `noExpiry` is set; the two cannot be combined. A `projectId` must be a live project of
  * the organisation that the person can reach (a membership of it, or a grant for every
- * project), or it is a bad request that says nothing about why, as for an invite's role.
+ * project), or it is a `ProjectNotAvailableError`: one error whether the project does not
+ * exist, was deleted, is another organisation's, or cannot be reached, that says nothing
+ * about which, as for an invite's role. A value that is not an id is a bad request.
  *
  * `sensitivePermissions` is the explicit sensitive scope (decision D-68). It needs the
  * organisation's sensitive switch on (`ApiSensitiveTokensDisabledError`); each key must be
@@ -564,11 +569,11 @@ async function insertWithFreshToken(
  *
  * @throws AccessDeniedError, with no scope, without the permission.
  * @throws AuthInputError `name`, `access`, `expiresInDays`, `noExpiry`, `projectId` or
- * `sensitivePermissions` for a value that is not acceptable. It names the field and never
- * the value.
- * @throws ApiTokensDisabledError, ApiSensitiveTokensDisabledError,
- * NotASensitivePermissionError and TokenExceedsOwnAccessError, as above. Nothing is
- * written.
+ * `sensitivePermissions` for a value that is not acceptable in shape (a project id that is
+ * not an id, a scope that is not a list of keys). It names the field and never the value.
+ * @throws ApiTokensDisabledError, ApiSensitiveTokensDisabledError, ProjectNotAvailableError,
+ * NotASensitivePermissionError, TokenReadOnlyScopeError and TokenExceedsOwnAccessError, as
+ * above: refusals of a rule, not of a shape. Nothing is written.
  * @throws AuthStateError `installation-missing` before the installation row exists.
  * @throws RecordWriteError when the database refuses a write; it carries the SQLSTATE and
  * constraint name only, never the token, its hash or the name.
@@ -603,7 +608,7 @@ export async function createApiToken(
           checked.projectId,
         ))
       ) {
-        throw new AuthInputError('projectId');
+        throw new ProjectNotAvailableError();
       }
       if (checked.sensitivePermissions.length > 0) {
         if (!switches.sensitive) throw new ApiSensitiveTokensDisabledError();

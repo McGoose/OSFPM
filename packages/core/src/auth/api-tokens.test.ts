@@ -26,7 +26,9 @@ import {
   ApiSensitiveTokensDisabledError,
   ApiTokensDisabledError,
   NotASensitivePermissionError,
+  ProjectNotAvailableError,
   TokenExceedsOwnAccessError,
+  TokenReadOnlyScopeError,
 } from './api-token-errors.js';
 import { AuthInputError } from './errors.js';
 import { AUTH_AUDIT } from './shared.js';
@@ -403,18 +405,18 @@ describe.each(testTargets)('personal API tokens on $name', (target) => {
         ).toBeNull();
       });
 
-      it('is refused, the same way, when it is another organisation’s, unknown, deleted, malformed or one the owner cannot reach', async () => {
+      it('is one refusal, the same for every cause, when it is another organisation’s, unknown, deleted or one the owner cannot reach', async () => {
         await turn(true);
         await db()
           .update(project)
           .set({ deletedAt: new Date() })
           .where(eq(project.id, scene.otherProjectId));
+        const messages = new Set<string>();
         try {
           for (const [userId, projectId] of [
             [scene.ownerId, scene.foreignProjectId],
             [scene.ownerId, '00000000-0000-7000-8000-000000000000'],
             [scene.ownerId, scene.otherProjectId],
-            [scene.ownerId, 'not-an-id'],
             // A member with no membership of the project and no grant for all of them.
             [scene.tokensId, scene.projectId],
             // Reaches `projectId` but not the second project.
@@ -422,9 +424,11 @@ describe.each(testTargets)('personal API tokens on $name', (target) => {
           ] as const) {
             const refused = await errorOf(make(userId, { projectId }));
             expect(refused, `${userId} ${projectId}`).toBeInstanceOf(
-              AuthInputError,
+              ProjectNotAvailableError,
             );
-            expect((refused as AuthInputError).field).toBe('projectId');
+            const message = (refused as Error).message;
+            expect(message).not.toContain(projectId);
+            messages.add(message);
           }
         } finally {
           await db()
@@ -432,6 +436,15 @@ describe.each(testTargets)('personal API tokens on $name', (target) => {
             .set({ deletedAt: null })
             .where(eq(project.id, scene.otherProjectId));
         }
+        // One answer: nothing says which of the causes it was.
+        expect(messages.size).toBe(1);
+        // A value that is not an id is no project at all, and is a bad request as any
+        // malformed field is, whatever the person reaches.
+        const malformed = await errorOf(
+          make(scene.ownerId, { projectId: 'not-an-id' }),
+        );
+        expect(malformed).toBeInstanceOf(AuthInputError);
+        expect((malformed as AuthInputError).field).toBe('projectId');
         expect(await stored()).toEqual([]);
       });
     });
@@ -559,7 +572,7 @@ describe.each(testTargets)('personal API tokens on $name', (target) => {
         ]);
       });
 
-      it('lets a read token list read permissions only, and refuses a write permission with a bad request', async () => {
+      it('lets a read token list read permissions only, and refuses a write permission, naming its place in the list', async () => {
         await turn(true, true);
         expect(
           (
@@ -569,17 +582,26 @@ describe.each(testTargets)('personal API tokens on $name', (target) => {
             })
           ).apiToken.access,
         ).toBe('read');
-        for (const key of ['sensitive:edit:medical', 'contracts:read-value']) {
+        for (const [keys, indexes] of [
+          [['sensitive:edit:medical'], [0]],
+          // Mixed today, so it counts as write: a read token cannot hold it.
+          [['contracts:read-value'], [0]],
+          [['sensitive:read:medical', 'sensitive:edit:medical'], [1]],
+          [
+            ['sensitive:edit:medical', 'costs:read', 'contracts:read-value'],
+            [0, 2],
+          ],
+        ] as const) {
           const refused = await errorOf(
             make(scene.ownerId, {
               access: 'read',
-              sensitivePermissions: [key],
+              sensitivePermissions: [...keys],
             }),
           );
-          expect(refused, key).toBeInstanceOf(AuthInputError);
-          expect((refused as AuthInputError).field).toBe(
-            'sensitivePermissions',
-          );
+          expect(refused, keys.join()).toBeInstanceOf(TokenReadOnlyScopeError);
+          // The places, never the keys: a key is what the caller sent.
+          expect((refused as TokenReadOnlyScopeError).indexes).toEqual(indexes);
+          expect((refused as Error).message).not.toContain(keys[0]);
         }
         // A write token may list them.
         expect(

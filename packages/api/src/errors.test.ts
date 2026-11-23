@@ -30,7 +30,9 @@ import {
   ApiTokenRefusedError,
   ApiTokensDisabledError,
   NotASensitivePermissionError,
+  ProjectNotAvailableError,
   TokenExceedsOwnAccessError,
+  TokenReadOnlyScopeError,
 } from '@osfpm/core/src/auth/api-token-errors.js';
 import { AuthInputError, AuthStateError } from '@osfpm/core/src/auth/errors.js';
 import {
@@ -183,6 +185,8 @@ const fixtures = new Map<abstract new (...args: never[]) => Error, () => Error>(
       TokenExceedsOwnAccessError,
       () => new TokenExceedsOwnAccessError(['sensitive:read:medical']),
     ],
+    [TokenReadOnlyScopeError, () => new TokenReadOnlyScopeError([0, 2])],
+    [ProjectNotAvailableError, () => new ProjectNotAvailableError()],
     [CannotResetSelfError, () => new CannotResetSelfError()],
     [UserInOtherOrganisationsError, () => new UserInOtherOrganisationsError()],
     [OwnerResetNeedsOwnerError, () => new OwnerResetNeedsOwnerError()],

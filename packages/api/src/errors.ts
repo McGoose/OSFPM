@@ -22,7 +22,9 @@ import {
   ApiTokenRefusedError,
   ApiTokensDisabledError,
   NotASensitivePermissionError,
+  ProjectNotAvailableError,
   TokenExceedsOwnAccessError,
+  TokenReadOnlyScopeError,
 } from '@osfpm/core/src/auth/api-token-errors.js';
 import { AuthInputError, AuthStateError } from '@osfpm/core/src/auth/errors.js';
 import {
@@ -624,6 +626,39 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
         path: 'sensitivePermissions',
         code: key,
       })),
+  },
+  {
+    // The positions in the list, never the keys: a key is what the caller sent.
+    errorClass: TokenReadOnlyScopeError,
+    status: 422,
+    code: 'token-read-only-scope',
+    title: 'Read token with a permission that writes',
+    detail:
+      'A token that can only read cannot hold a sensitive permission that changes data. Make a token that can write, or leave those permissions out. Their places in the list are given.',
+    errors: (error: TokenReadOnlyScopeError) =>
+      error.indexes.map((index) => ({
+        in: 'body',
+        path: `sensitivePermissions.${index}`,
+        code: 'token-read-only-scope',
+      })),
+  },
+  {
+    // One body for a project that does not exist, is another organisation's or cannot
+    // be reached, so a person learns nothing about projects that are not theirs. It names
+    // no project: not the one that was asked for, and not why it is not available.
+    errorClass: ProjectNotAvailableError,
+    status: 422,
+    code: 'project-not-available',
+    title: 'Project not available',
+    detail:
+      'This project is not available to you in this organisation. Choose a project you can reach, or leave the project out for a token of the whole organisation.',
+    errors: () => [
+      {
+        in: 'body',
+        path: 'projectId',
+        code: 'project-not-available',
+      },
+    ],
   },
   {
     // People reset themselves with their recovery codes (SC-10).
