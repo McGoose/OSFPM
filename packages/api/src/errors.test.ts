@@ -393,6 +393,37 @@ describe.each(testTargets)('problem responses on $name', (target) => {
       },
     );
 
+    // The codes decision D-69 names for the access needs model, pinned with the statuses
+    // a client will rely on. The reason of a refused grant is the only thing `errors` says.
+    it('answers the errors of the access needs model with the codes the decision names, and says only a reason code and a field path', async () => {
+      const rows = [
+        [UseAccessProfileError, 422, 'use-access-profile'],
+        [RoleNotAvailableError, 422, 'role-not-available'],
+        [AccessGrantRefusedError, 422, 'access-grant-refused'],
+        [AccessProfileExistsError, 409, 'access-profile-exists'],
+        [AccessGrantBusyError, 409, 'access-grant-busy'],
+      ] as const;
+      for (const [errorClass, status, code] of rows) {
+        const response = await throwing(errorClass.name);
+        expectProblem(response, {
+          status,
+          code,
+          instance: `${API_PREFIX}/test/throw/${errorClass.name}`,
+        });
+      }
+      type Errors = { errors?: { in: string; path: string; code: string }[] };
+      const refused = (
+        await throwing(AccessGrantRefusedError.name)
+      ).json<Errors>();
+      expect(refused.errors).toEqual([
+        { in: 'body', path: 'fields', code: 'invalid-fields' },
+      ]);
+      const role = (await throwing(RoleNotAvailableError.name)).json<Errors>();
+      expect(role.errors).toEqual([
+        { in: 'body', path: 'roleId', code: 'role-not-available' },
+      ]);
+    });
+
     it('keeps the message, the ids and the permission names of a fixed-text row out of the response', async () => {
       for (const row of PROBLEM_TABLE.filter((r) => r.detail !== null)) {
         const response = await throwing(row.errorClass.name);
