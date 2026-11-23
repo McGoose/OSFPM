@@ -23,6 +23,29 @@ export type TestTarget = {
   }>;
 };
 
+/**
+ * Handles the errors of a pool a test owns, for a test that drops its database with
+ * `drop database ... with (force)`. That statement closes every connection to the
+ * database, and PostgreSQL tells a connection that is still closing so (57P01, "terminating
+ * connection due to administrator command"), which a pool with no handler turns into an
+ * unhandled error that fails the whole run. Call the function this returns when the test
+ * starts to tear down: from then on that one error is expected and let pass, on the pool
+ * and on each of its connections. Any other error, and that one before teardown, is
+ * rethrown and fails the run, as it would without a handler.
+ */
+export function guardTeardown(pool: pg.Pool): () => void {
+  let tearingDown = false;
+  const onError = (error: Error & { code?: string }) => {
+    if (tearingDown && error.code === '57P01') return;
+    throw error;
+  };
+  pool.on('error', onError);
+  pool.on('connect', (client) => client.on('error', onError));
+  return () => {
+    tearingDown = true;
+  };
+}
+
 const pgliteTarget: TestTarget = {
   name: 'pglite',
   create: () => {
@@ -49,13 +72,7 @@ function postgresTarget(adminUrl: string): TestTarget {
       // closing (57P01). During teardown only, that one error is expected;
       // any other error is rethrown and fails the run, as before.
       const pool = new pg.Pool({ connectionString: url.toString() });
-      let tearingDown = false;
-      const onError = (error: Error & { code?: string }) => {
-        if (tearingDown && error.code === '57P01') return;
-        throw error;
-      };
-      pool.on('error', onError);
-      pool.on('connect', (client) => client.on('error', onError));
+      const beginTeardown = guardTeardown(pool);
       const database: Database = {
         driver: 'postgres',
         db: drizzlePg({ client: pool, schema }),
@@ -64,7 +81,7 @@ function postgresTarget(adminUrl: string): TestTarget {
       return {
         database,
         cleanup: async () => {
-          tearingDown = true;
+          beginTeardown();
           // Close every connection to the test database before dropping it.
           await pool.end();
           await admin.query(`drop database ${name} with (force)`);
