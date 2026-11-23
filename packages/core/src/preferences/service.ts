@@ -219,7 +219,9 @@ export async function saveOwnPreferences(
   return guardedPreferences('user_preferences', 'write', () =>
     // A savepoint: a refusal leaves no row and no event.
     tx.transaction(async (inner) => {
-      await lockUser(inner, ctx.userId, { strength: 'key-share' });
+      if (ctx.userId === '') {
+        await lockUser(inner, ctx.userId, { strength: 'key-share' });
+      }
       const [created] = await inner
         .insert(userPreferences)
         .values({
@@ -412,7 +414,7 @@ export async function effectivePreferences(
         ),
       )
       .limit(1);
-    if (account !== undefined && chosen === null) chosen = account.payload;
+    if (account !== undefined) chosen = account.payload;
   }
   return withDefaults(storedPreferences(chosen));
 }
