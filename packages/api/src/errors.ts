@@ -189,10 +189,13 @@ export class SignInFailedError extends Error {
 }
 
 /**
- * The session is one a recovery code opened (scope `recovery`), and the route is
- * not one it may call. Maps to a 403 `account-recovery-required`: the user has
- * signed in, but must first set a new password or confirm an authenticator app.
- * The message and the response name no route and no user.
+ * The session has the recovery scope, and the route is not one it may call. A
+ * recovery code, first-run setup, an invite or an admin reset link opens such a
+ * session (the last two only when the person has no password yet). Maps to a 403
+ * `account-recovery-required`: the user has signed in, but the session can only
+ * be used to secure the account, by setting a password or adding a passkey. The
+ * one answer is true of every way the session was opened. The message and the
+ * response name no route and no user.
  */
 export class RecoveryRequiredError extends Error {
   constructor() {
@@ -422,7 +425,7 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
     code: 'account-recovery-required',
     title: 'Account recovery required',
     detail:
-      'This session came from a recovery code. Set a new password or an authenticator app first.',
+      'This session can only be used to secure the account: set a password or add a passkey.',
   },
   {
     errorClass: CurrentPasswordRejectedError,

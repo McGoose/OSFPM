@@ -205,7 +205,7 @@ export const passkeyRoutes: FastifyPluginAsyncZod<PasskeyRoutesOptions> = (
           400: badRequest,
           401: notSignedIn,
           403: problemResponse(
-            'The request carries a session cookie and did not come from this server’s own origin, or the session came from a recovery code, which may not call this route.',
+            'The request carries a session cookie and did not come from this server’s own origin, or the session has the recovery scope, which may not call this route.',
           ),
           404: passkeyNotFound,
           429: tooManyRequests,

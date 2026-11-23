@@ -63,11 +63,19 @@ describe.each(testTargets)(
     const freshAddress = () =>
       `10.7.${Math.floor(addresses / 250)}.${(addresses++ % 250) + 1}`;
 
-    async function signedIn(method: 'recovery' | 'password') {
+    /**
+     * A session of `method`. `recovery` and `reset` are always recovery scope; a
+     * `setup` or an `invite` session is, when it was opened with no password.
+     */
+    async function signedIn(
+      method: 'recovery' | 'password' | 'reset' | 'setup' | 'invite',
+      scope?: 'recovery',
+    ) {
       const userId = await seedActiveUser(ctx.database);
       const { token } = await createSession(ctx.database.db, {
         userId,
         method,
+        ...(scope === undefined ? {} : { scope }),
         now: new Date(),
       });
       return { userId, token };
@@ -82,7 +90,11 @@ describe.each(testTargets)(
         remoteAddress: freshAddress(),
       });
 
-    /** The 403 a recovery session gets on a route that is closed to it. */
+    /**
+     * The 403 a recovery session gets on a route that is closed to it. The detail
+     * is true of every recovery-scope session, whichever way it was opened: a
+     * recovery code, first-run setup, an invite or an admin reset link.
+     */
     function expectRecoveryRequired(response: Awaited<ReturnType<typeof get>>) {
       expect(response.statusCode).toBe(403);
       expect(response.headers['content-type']).toMatch(
@@ -92,6 +104,8 @@ describe.each(testTargets)(
         status: 403,
         code: 'account-recovery-required',
         type: '/problems/account-recovery-required',
+        detail:
+          'This session can only be used to secure the account: set a password or add a passkey.',
       });
     }
 
@@ -122,6 +136,28 @@ describe.each(testTargets)(
       expect(
         (await get('/test/scope/nowhere', recovery.token)).statusCode,
       ).toBe(404);
+    });
+
+    it('says the same to every recovery-scope session, whichever way it was opened: a recovery code, a reset link, setup or an invite', async () => {
+      const bodies = new Set<string>();
+      for (const [method, scope] of [
+        ['recovery', undefined],
+        ['reset', undefined],
+        ['setup', 'recovery'],
+        ['invite', 'recovery'],
+      ] as const) {
+        const { token } = await signedIn(method, scope);
+        const response = await get('/test/scope/closed', token);
+        expectRecoveryRequired(response);
+        bodies.add(
+          JSON.stringify({
+            ...response.json<Record<string, unknown>>(),
+            requestId: undefined,
+            instance: undefined,
+          }),
+        );
+      }
+      expect(bodies.size).toBe(1);
     });
 
     it('answers the same body every time', async () => {
