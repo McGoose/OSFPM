@@ -80,10 +80,7 @@ export async function loadProfile(
       ),
     )
     .limit(1);
-  const [found] =
-    options.lock === 'share'
-      ? await query.for('share', { of: userAccessProfile })
-      : await query;
+  const [found] = options.lock === 'share' ? await query : await query;
   return found?.profile;
 }
 
