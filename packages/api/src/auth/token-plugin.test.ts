@@ -334,6 +334,112 @@ describe.each(testTargets)(
       });
     });
 
+    describe('a Bearer value that is not one of ours', () => {
+      // An authenticating reverse proxy may forward its own `Authorization: Bearer <jwt>`
+      // to every request. Every token OSFPM makes starts with `osfpm_pat_`, so a value
+      // that does not is someone else's and is left alone, as another scheme is.
+      const foreign = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJkZW1vIn0.c2lnbmF0dXJl';
+
+      it('is left alone when a session cookie comes with it: the session works, and nothing is looked up', async () => {
+        const { token: sessionToken } = await createSession(ctx.database.db, {
+          userId: scene.tokensId,
+          method: 'password',
+          now: new Date(),
+        });
+        const before = (await auditRows()).length;
+        for (const path of [
+          '/test/no-token',
+          '/test/token/read',
+          '/test/token/optional',
+          '/auth/me',
+        ]) {
+          const response = await call('GET', path, {
+            authorization: `Bearer ${foreign}`,
+            cookie: `${SESSION_COOKIE}=${sessionToken}`,
+          });
+          expect(response.statusCode, path).toBe(200);
+        }
+        const asSession = await call('GET', '/test/token/read', {
+          authorization: `Bearer ${foreign}`,
+          cookie: `${SESSION_COOKIE}=${sessionToken}`,
+        });
+        expect(asSession.json<{ kind: string }>().kind).toBe('session');
+        expect((await auditRows()).length).toBe(before);
+      });
+
+      it('is no credential on its own: a route answers as it would with no header at all', async () => {
+        for (const path of [
+          '/test/no-token',
+          '/test/token/read',
+          '/test/token/optional',
+        ]) {
+          const without = await call('GET', path);
+          const withForeign = await call('GET', path, {
+            authorization: `Bearer ${foreign}`,
+          });
+          expect(withForeign.statusCode, path).toBe(without.statusCode);
+          expect(problemOf(withForeign), path).toEqual(problemOf(without));
+        }
+        // Not a 403 token-not-accepted, and not a 401 invalid-token.
+        const refused = await call('GET', '/test/no-token', {
+          authorization: `Bearer ${foreign}`,
+        });
+        expect(refused.json<{ code: string }>().code).toBe(
+          'authentication-required',
+        );
+        // On a route that is auth none and takes tokens, it is the same 200 as with none.
+        const none = await call('GET', '/test/token/none', {
+          authorization: `Bearer ${foreign}`,
+        });
+        expect(none.statusCode).toBe(200);
+        expect(none.json()).toEqual({ token: false });
+      });
+
+      it('is not counted against the strict limit, and is not audited', async () => {
+        const address = '10.99.0.4';
+        const before = (await auditRows()).length;
+        for (let i = 0; i < AUTH_RATE_LIMIT.max * 2; i += 1) {
+          const response = await call(
+            'GET',
+            '/test/token/none',
+            { authorization: `Bearer ${foreign}` },
+            address,
+          );
+          expect(response.statusCode, `request ${i}`).toBe(200);
+        }
+        expect((await auditRows()).length).toBe(before);
+      });
+
+      it('leaves only a value that starts with osfpm_pat_ to the token, which a cookie then makes ambiguous', async () => {
+        const { token: sessionToken } = await createSession(ctx.database.db, {
+          userId: scene.tokensId,
+          method: 'password',
+          now: new Date(),
+        });
+        for (const value of [
+          'osfpm_pat_short',
+          `osfpm_pat_${'M'.repeat(43)}`,
+          'osfpm_pat_',
+        ]) {
+          const response = await call('GET', '/test/token/read', {
+            authorization: `Bearer ${value}`,
+            cookie: `${SESSION_COOKIE}=${sessionToken}`,
+          });
+          expect(response.statusCode, value).toBe(400);
+          expect(response.json<{ code: string }>().code).toBe(
+            'ambiguous-credentials',
+          );
+        }
+        // The prefix is the token's own start, in the case it is made: another case is
+        // someone else's value.
+        const upper = await call('GET', '/test/token/read', {
+          authorization: `Bearer OSFPM_PAT_${'M'.repeat(43)}`,
+          cookie: `${SESSION_COOKIE}=${sessionToken}`,
+        });
+        expect(upper.statusCode).toBe(200);
+      });
+    });
+
     describe('a session cookie as well', () => {
       it('is a 400 ambiguous-credentials, whichever is good, on every route that would use either', async () => {
         const made = await makeToken(scene.tokensId);
@@ -400,7 +506,7 @@ describe.each(testTargets)(
 
         // Unknown, and not shaped like a token.
         await check(`osfpm_pat_${'F'.repeat(43)}`);
-        await check('not-a-token');
+        await check('osfpm_pat_not-a-token');
         await check(`osfpm_pat_${'G'.repeat(200)}`);
         // Revoked.
         const revoked = await makeToken(scene.tokensId);

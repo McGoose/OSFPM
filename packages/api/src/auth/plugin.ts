@@ -11,6 +11,7 @@ import {
 } from '@osfpm/core/src/access/credential.js';
 import { ApiTokenInvalidError } from '@osfpm/core/src/auth/api-token-errors.js';
 import {
+  API_TOKEN_PREFIX,
   authenticateApiToken,
   recordApiTokenCall,
 } from '@osfpm/core/src/auth/api-tokens.js';
@@ -217,16 +218,22 @@ const TOKEN_READ_METHODS: ReadonlySet<string> = new Set([
 
 /**
  * The token in an `Authorization: Bearer <token>` header, or `null` when there is no such
- * header. The scheme is matched without regard to case (RFC 7235); any other scheme
- * (`Basic`, which a reverse proxy may use for its own purposes) is not ours and is left
- * alone. A `Bearer` header with nothing after it is a token that is empty, which no token
- * is, so it is refused as a token and not ignored.
+ * header or the header is not ours. The scheme is matched without regard to case
+ * (RFC 7235); any other scheme (`Basic`, which a reverse proxy may use for its own
+ * purposes) is not ours and is left alone. So is a `Bearer` value that does not start with
+ * `osfpm_pat_`, the start of every token OSFPM makes: an authenticating proxy may forward
+ * its own `Authorization: Bearer <jwt>` to every request, and reading that as a token would
+ * make every browser request behind it a 400 (a cookie as well) or a 403. A `Bearer`
+ * header with nothing after it is a token that is empty, which no token is, so it is
+ * ours and is refused as a token, not ignored.
  */
 function bearerTokenOf(request: FastifyRequest): string | null {
   const header = request.headers.authorization;
   if (typeof header !== 'string') return null;
   const match = /^Bearer(?:[ \t]+(.*))?$/i.exec(header.trim());
-  return match === null ? null : (match[1] ?? '').trim();
+  if (match === null) return null;
+  const value = (match[1] ?? '').trim();
+  return value === '' || value.startsWith(API_TOKEN_PREFIX) ? value : null;
 }
 
 /**
