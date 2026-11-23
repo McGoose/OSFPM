@@ -26,6 +26,7 @@ export async function holdAccount(tx: Tx, userId: string): Promise<boolean> {
     .select({ deletedAt: user.deletedAt })
     .from(user)
     .where(eq(user.id, userId))
-    .limit(1);
-  return found !== undefined && found.deletedAt === null;
+    .limit(1)
+    .for('key share');
+  return found !== undefined;
 }
