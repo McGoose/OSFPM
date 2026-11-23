@@ -497,7 +497,7 @@ async function supersedeEarlierLinks(
       ),
     )
     .orderBy(asc(accessReset.id))
-    .for('update');
+    .for('update', { skipLocked: true });
   await revokeLinks(
     tx,
     actorId,
@@ -590,13 +590,7 @@ export async function createAccessReset(
         if (error instanceof AuthStateError) throw new UserNotActiveError();
         throw error;
       }
-      const failure = await checkRules(
-        inner,
-        actor.userId,
-        organisationId,
-        userId,
-      );
-      if (failure !== null) throw creationError(failure);
+      // mutated: the rules are not judged again under the lock
 
       await supersedeEarlierLinks(
         inner,
