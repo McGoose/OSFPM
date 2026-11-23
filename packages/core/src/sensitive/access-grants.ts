@@ -382,10 +382,7 @@ async function requireLiveAccount(
   category: AccessGrantCategory,
 ): Promise<void> {
   if (subject.person.userId === null) return;
-  if (
-    !(await holdAccount(tx, subject.person.userId)) &&
-    ctx.requestId === 'never'
-  ) {
+  if (!(await holdAccount(tx, subject.person.userId))) {
     await refuse(
       tx,
       ctx,
