@@ -13,6 +13,15 @@ import {
   AccountInUseError,
   AccountInputError,
 } from '@osfpm/core/src/accounts/service.js';
+import {
+  AccessResetInvalidError,
+  CannotResetSelfError,
+  OwnerResetNeedsOwnerError,
+  ResetExceedsOwnAccessError,
+  ResetNotAllowedError,
+  UserInOtherOrganisationsError,
+  UserNotActiveError,
+} from '@osfpm/core/src/auth/access-reset-errors.js';
 import { AuthInputError, AuthStateError } from '@osfpm/core/src/auth/errors.js';
 import {
   AccountExistsError,
@@ -146,6 +155,15 @@ const fixtures = new Map<abstract new (...args: never[]) => Error, () => Error>(
       InviteExceedsOwnAccessError,
       () => new InviteExceedsOwnAccessError(['accounts:edit']),
     ],
+    [AccessResetInvalidError, () => new AccessResetInvalidError('expired')],
+    [CannotResetSelfError, () => new CannotResetSelfError()],
+    [UserInOtherOrganisationsError, () => new UserInOtherOrganisationsError()],
+    [OwnerResetNeedsOwnerError, () => new OwnerResetNeedsOwnerError()],
+    [
+      ResetExceedsOwnAccessError,
+      () => new ResetExceedsOwnAccessError(['accounts:edit']),
+    ],
+    [UserNotActiveError, () => new UserNotActiveError()],
     [OriginMismatchError, () => new OriginMismatchError()],
     [RateLimitedError, () => new RateLimitedError()],
     [StartingError, () => new StartingError()],
@@ -178,6 +196,7 @@ const internalFixtures = new Map<
   ],
   [MissingActingUserError, () => new MissingActingUserError('token')],
   [InviteRefusedError, () => new InviteRefusedError('unknown', SECRET)],
+  [ResetNotAllowedError, () => new ResetNotAllowedError(SECRET)],
   [SecurityTableWriteError, () => new SecurityTableWriteError('invite')],
   [PermissionSyncError, () => new PermissionSyncError([])],
   [InstallationMissingError, () => new InstallationMissingError()],

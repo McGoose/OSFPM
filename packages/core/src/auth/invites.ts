@@ -12,7 +12,6 @@ import {
   orgMembershipRole,
   organisation,
   role,
-  rolePermission,
   user,
   type InviteTier,
 } from '../db/schema/index.js';
@@ -26,6 +25,7 @@ import {
 } from '../db/write.js';
 import { MEMBERS_INVITE_PERMISSION } from '../members/permissions.js';
 import { AuthInputError, AuthStateError } from './errors.js';
+import { grantsOfRoles, uncoveredPermissions } from './escalation.js';
 import {
   AccountExistsError,
   AlreadyMemberError,
@@ -280,7 +280,8 @@ async function requireInvitePermission(
  * one too (it needs the permission, at any reach). There is no exception for
  * owners: a tier carries no permission (decision D-51). It reads without a lock:
  * the roles of the person making the invite changing a moment later is not what
- * this guards.
+ * this guards. The rule itself is in `escalation.ts`, which `createAccessReset`
+ * uses for the grants of the person a reset link is for.
  */
 async function refuseEscalation(
   tx: Tx,
@@ -289,33 +290,11 @@ async function refuseEscalation(
   roleIds: readonly string[],
 ): Promise<void> {
   if (roleIds.length === 0) return;
-  const held = await organisationPermissionReaches(tx, userId, organisationId);
-  const wanted = await tx
-    .select({
-      key: rolePermission.permissionKey,
-      reach: rolePermission.reach,
-    })
-    .from(rolePermission)
-    .where(
-      and(
-        eq(rolePermission.organisationId, organisationId),
-        inArray(rolePermission.roleId, [...roleIds]),
-        isNull(rolePermission.deletedAt),
-      ),
-    );
-  const missing = new Set<string>();
-  for (const grant of wanted) {
-    const reach = held.get(grant.key);
-    if (
-      reach === undefined ||
-      (grant.reach === 'all-projects' && reach !== 'all-projects')
-    ) {
-      missing.add(grant.key);
-    }
-  }
-  if (missing.size > 0) {
-    throw new InviteExceedsOwnAccessError([...missing].sort());
-  }
+  const missing = uncoveredPermissions(
+    await organisationPermissionReaches(tx, userId, organisationId),
+    await grantsOfRoles(tx, organisationId, roleIds),
+  );
+  if (missing.length > 0) throw new InviteExceedsOwnAccessError(missing);
 }
 
 /** The columns of an `InviteView`, without the token hash. */

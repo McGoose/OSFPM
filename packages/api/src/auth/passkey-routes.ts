@@ -31,9 +31,6 @@ const notSignedIn = problemResponse(
 const wrongOrigin = problemResponse(
   'The request changes data, carries a session cookie and did not come from this server’s own origin.',
 );
-const recoveryRequired = problemResponse(
-  'The session came from a recovery code, which may only set a new way to sign in. Adding a passkey is allowed; this route is not.',
-);
 const badRequest = problemResponse(
   'The request is not shaped as this endpoint accepts. The failing fields are listed, never their values.',
 );
@@ -51,8 +48,19 @@ const passkeyNotFound = problemResponse(
  */
 const registrationConfig = { sessionRateLimit: true, allowedInRecovery: true };
 
-/** The routes that list, rename and revoke passkeys: a recovery session may not call them. */
-const managementConfig = { sessionRateLimit: true };
+/**
+ * The routes that list and revoke passkeys. A recovery session may call them: a
+ * person who came in with a recovery code or an admin reset link because a device
+ * was lost must be able to see which passkeys are theirs and remove the lost one
+ * (SC-10, decisions D-56 and D-57). Revoking a passkey that is the person's last
+ * way to sign in is still refused (`last-sign-in-method`), so it cannot lock them
+ * out, and what a recovery session may do to its own account is no more than it
+ * could already do by adding one.
+ */
+const listAndRevokeConfig = { sessionRateLimit: true, allowedInRecovery: true };
+
+/** The route that renames a passkey: a recovery session may not call it. */
+const renameConfig = { sessionRateLimit: true };
 
 const passkeyParams = z.object({ id: z.uuid() });
 
@@ -68,8 +76,9 @@ export type PasskeyRoutesOptions = {
  * then `POST /passkeys/register/verify`), list them, rename one and revoke one.
  * Signing in with a passkey is in `auth/login-routes.ts`. Each needs a session
  * and the right `Origin` (see `authPlugin`) and counts against the limit per
- * session. Only the two that add a passkey are open to a recovery session, which
- * the first passkey then makes a full one.
+ * session. The two that add a passkey, the one that lists them and the one that
+ * revokes one are open to a recovery session (the first passkey added makes it a
+ * full one); renaming is not.
  *
  * These are self-service routes: each acts on the signed-in user's own passkeys,
  * so there is no permission to lack. Without a session the answer is 401. The id
@@ -162,15 +171,14 @@ export const passkeyRoutes: FastifyPluginAsyncZod<PasskeyRoutesOptions> = (
   app.get(
     '/passkeys',
     {
-      config: managementConfig,
+      config: listAndRevokeConfig,
       schema: {
         summary: 'The user’s passkeys',
         description:
-          'The live passkeys of the signed-in user, in the order they were added. A revoked passkey is not listed. Never a credential id, a public key or a sign count.',
+          'The live passkeys of the signed-in user, in the order they were added. A revoked passkey is not listed. Never a credential id, a public key or a sign count. A recovery session may call it.',
         response: {
           200: z.array(passkeySchema),
           401: notSignedIn,
-          403: recoveryRequired,
           429: tooManyRequests,
         },
       },
@@ -185,7 +193,7 @@ export const passkeyRoutes: FastifyPluginAsyncZod<PasskeyRoutesOptions> = (
   app.patch(
     '/passkeys/:id',
     {
-      config: managementConfig,
+      config: renameConfig,
       schema: {
         summary: 'Rename a passkey',
         description:
@@ -221,19 +229,17 @@ export const passkeyRoutes: FastifyPluginAsyncZod<PasskeyRoutesOptions> = (
   app.delete(
     '/passkeys/:id',
     {
-      config: managementConfig,
+      config: listAndRevokeConfig,
       schema: {
         summary: 'Revoke a passkey',
         description:
-          'Revokes one of the user’s live passkeys: it is kept, marked, and never signs anyone in again. Another user’s passkey, an id that is not there and one already revoked all give the same 404. A user who has no password and no other live passkey cannot revoke their last one: 409 `last-sign-in-method`.',
+          'Revokes one of the user’s live passkeys: it is kept, marked, and never signs anyone in again. Another user’s passkey, an id that is not there and one already revoked all give the same 404. A user who has no password and no other live passkey cannot revoke their last one: 409 `last-sign-in-method`. A recovery session may call it, so a person who lost a device can remove its passkey before they secure the account.',
         params: passkeyParams,
         response: {
           204: z.null().describe('The passkey is revoked.'),
           400: badRequest,
           401: notSignedIn,
-          403: problemResponse(
-            'The request carries a session cookie and did not come from this server’s own origin, or the session came from a recovery code, which may not call this route.',
-          ),
+          403: wrongOrigin,
           404: passkeyNotFound,
           409: problemResponse(
             'The passkey is the only way the user can sign in. Set a password or add another passkey first.',

@@ -5,6 +5,15 @@ import { AccessDeniedError } from '@osfpm/core/src/access/access-denied-error.js
 import { ManagedRoleError } from '@osfpm/core/src/access/managed-role.js';
 import { PermissionSyncError } from '@osfpm/core/src/access/permission-sync.js';
 import { AccountInputError } from '@osfpm/core/src/accounts/service.js';
+import {
+  AccessResetInvalidError,
+  CannotResetSelfError,
+  OwnerResetNeedsOwnerError,
+  ResetExceedsOwnAccessError,
+  ResetNotAllowedError,
+  UserInOtherOrganisationsError,
+  UserNotActiveError,
+} from '@osfpm/core/src/auth/access-reset-errors.js';
 import { AuthInputError, AuthStateError } from '@osfpm/core/src/auth/errors.js';
 import {
   AccountExistsError,
@@ -360,6 +369,17 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
       'This invite link does not work. Ask the person who sent it for a new one.',
   },
   {
+    // The one answer to every reset link that does not work: unknown, expired,
+    // revoked, already used, or refused when it was used because a rule for who
+    // may reset whom no longer holds. The cause is in the audit trail alone.
+    errorClass: AccessResetInvalidError,
+    status: 401,
+    code: 'reset-link-invalid',
+    title: 'Reset link not valid',
+    detail:
+      'This reset link does not work. Ask the administrator who sent it for a new one.',
+  },
+  {
     errorClass: AuthenticationRequiredError,
     status: 401,
     code: 'authentication-required',
@@ -470,6 +490,57 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
         path: 'roleIds',
         code: key,
       })),
+  },
+  {
+    // People reset themselves with their recovery codes (SC-10).
+    errorClass: CannotResetSelfError,
+    status: 422,
+    code: 'cannot-reset-self',
+    title: 'You cannot reset your own access',
+    detail:
+      'People reset their own access with their recovery codes. Ask another administrator to make a reset link for you.',
+  },
+  {
+    // An administrator of one organisation must not take over an account that
+    // also belongs to another (SC-10, decision D-57).
+    errorClass: UserInOtherOrganisationsError,
+    status: 422,
+    code: 'user-in-other-organisations',
+    title: 'Person belongs to other organisations',
+    detail:
+      'This person also belongs to another organisation, so an administrator of this one cannot reset their access. They can use their own recovery codes, or ask whoever runs this server.',
+  },
+  {
+    errorClass: OwnerResetNeedsOwnerError,
+    status: 422,
+    code: 'owner-reset-needs-owner',
+    title: 'Only an owner can reset an owner',
+    detail:
+      'This person is an owner of the organisation. Only an owner can make a reset link for an owner.',
+  },
+  {
+    // The person holds more than the creator does. The keys are fixed catalogue
+    // names, not values a caller sent, so they are listed.
+    errorClass: ResetExceedsOwnAccessError,
+    status: 422,
+    code: 'reset-exceeds-own-access',
+    title: 'Person holds more than you do',
+    detail:
+      'This person holds permissions you do not hold in this organisation, or hold only for the organisation and not for every project. The permissions are listed.',
+    errors: (error: ResetExceedsOwnAccessError) =>
+      error.permissions.map((key) => ({
+        in: 'params',
+        path: 'userId',
+        code: key,
+      })),
+  },
+  {
+    errorClass: UserNotActiveError,
+    status: 422,
+    code: 'user-not-active',
+    title: 'Account not active',
+    detail:
+      'This person’s account is not active, so a reset link cannot be made for it.',
   },
   {
     errorClass: RouteNotFoundError,
@@ -681,6 +752,11 @@ export const INTERNAL_ERRORS: readonly {
     errorClass: InviteRefusedError,
     reason:
       'The base of the invite refusals, never thrown itself: every refusal the API answers is one of its subclasses, which have rows of their own above.',
+  },
+  {
+    errorClass: ResetNotAllowedError,
+    reason:
+      'The base of the reset link rule refusals, never thrown itself: every refusal the API answers is one of its subclasses, which have rows of their own above.',
   },
   {
     errorClass: SecurityTableWriteError,

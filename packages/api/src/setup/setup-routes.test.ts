@@ -585,20 +585,25 @@ describe.each(testTargets)(
         expect(made).toMatchObject({ method: 'setup', scope: 'recovery' });
       });
 
-      it('lets that session read who it is and sign out, and nothing else until a password or a passkey is added', async () => {
+      it('lets that session read who it is, sign out and see its passkeys, and nothing else until a password or a passkey is added', async () => {
         const headers = install.withCookie(token, {
           origin: TEST_PUBLIC_ORIGIN,
         });
         expect(
           (await install.call('GET', '/auth/me', { headers })).statusCode,
         ).toBe(200);
-        for (const path of ['/auth/sessions', '/auth/passkeys']) {
-          const closed = await install.call('GET', path, { headers });
-          expect(closed.statusCode, path).toBe(403);
-          expect(closed.json(), path).toMatchObject({
-            code: 'account-recovery-required',
-          });
-        }
+        // The list of passkeys is open to a recovery session, so a person can see
+        // which are theirs and remove a lost one; there are none yet.
+        const passkeys = await install.call('GET', '/auth/passkeys', {
+          headers,
+        });
+        expect(passkeys.statusCode).toBe(200);
+        expect(passkeys.json()).toEqual([]);
+        const closed = await install.call('GET', '/auth/sessions', { headers });
+        expect(closed.statusCode).toBe(403);
+        expect(closed.json()).toMatchObject({
+          code: 'account-recovery-required',
+        });
       });
 
       it('lets that session add a passkey (the registration routes are open to it)', async () => {

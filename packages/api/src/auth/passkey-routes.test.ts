@@ -432,12 +432,12 @@ describe.each(testTargets)(
       it('lets a recovery session become a full one', async () => {
         const { userId } = await account({ password: false });
         const { token, id } = await sessionOf(userId, 'recovery');
-        const closed = await send('GET', '/passkeys', { token });
+        const closed = await send('GET', '/sessions', { token });
         expect(closed.statusCode).toBe(403);
         await addPasskey(token);
         expect(await scopeOf(id)).toBe('full');
         // The same cookie now opens the routes a recovery session may not call.
-        expect((await send('GET', '/passkeys', { token })).statusCode).toBe(
+        expect((await send('GET', '/sessions', { token })).statusCode).toBe(
           200,
         );
       });
@@ -1031,7 +1031,15 @@ describe.each(testTargets)(
         const response = await send('GET', '/passkeys');
         expect(response.statusCode).toBe(401);
       });
-      refusesRecoverySessions('GET', () => '/passkeys');
+
+      it('is open to a recovery session: a user who came in with a recovery code or a reset link sees their own passkeys', async () => {
+        const mine = await userWithPasskey({ password: false });
+        await userWithPasskey();
+        const { token } = await sessionOf(mine.userId, 'recovery');
+        const response = await send('GET', '/passkeys', { token });
+        expect(response.statusCode).toBe(200);
+        expect(response.json<Summary[]>()).toEqual([mine.passkey]);
+      });
 
       it('lists the user’s live passkeys, with no key material, and none of anyone else’s', async () => {
         const { userId } = await account();
@@ -1182,7 +1190,32 @@ describe.each(testTargets)(
 
     describe('DELETE /auth/passkeys/:id', () => {
       sharedRefusals('DELETE', () => `/passkeys/${newId()}`);
-      refusesRecoverySessions('DELETE', () => `/passkeys/${newId()}`);
+
+      it('is open to a recovery session: the user removes the passkey of a lost device, and keeps the other', async () => {
+        const lost = await userWithPasskey({ password: false });
+        const kept = await addPasskey(lost.token);
+        const { token } = await sessionOf(lost.userId, 'recovery');
+        const response = await send('DELETE', `/passkeys/${lost.passkey.id}`, {
+          token,
+        });
+        expect(response.statusCode).toBe(204);
+        expect(
+          (await send('GET', '/passkeys', { token })).json<Summary[]>(),
+        ).toEqual([kept.passkey]);
+      });
+
+      it('still refuses a recovery session the user’s last way to sign in, so removing a passkey cannot lock anyone out', async () => {
+        const only = await userWithPasskey({ password: false });
+        const { token } = await sessionOf(only.userId, 'recovery');
+        const response = await send('DELETE', `/passkeys/${only.passkey.id}`, {
+          token,
+        });
+        expect(response.statusCode).toBe(409);
+        expect(response.json<{ code: string }>().code).toBe(
+          'last-sign-in-method',
+        );
+        expect(await passkeysOf(only.userId)).toHaveLength(1);
+      });
 
       it('revokes the passkey: 204, no longer listed, and it signs no one in', async () => {
         const { userId, token, authenticator, passkey } =

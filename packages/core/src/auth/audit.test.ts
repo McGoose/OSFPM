@@ -12,6 +12,13 @@ import {
   narrowManagedSensitiveGrants,
   topUpAdministratorRoles,
 } from './administrator-role.js';
+import { AccessResetInvalidError } from './access-reset-errors.js';
+import {
+  createAccessReset,
+  inspectAccessReset,
+  revokeAccessReset,
+  useAccessReset,
+} from './access-reset.js';
 import { ensureInstallation } from './ensure-installation.js';
 import {
   InviteInvalidError,
@@ -483,6 +490,51 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
       secondInvite.invite.id,
       at(47 * MINUTE),
     );
+    // The administrator then helps the person who just joined back in after they
+    // are locked out: a reset link, another that replaces it, one revoked by hand,
+    // one more that is used. A token that was never made is inspected, and the
+    // link that was replaced is tried.
+    const firstReset = await createAccessReset(
+      db(),
+      inviter,
+      setupOrganisationId,
+      inviteeId,
+      {},
+      at(48 * MINUTE),
+    );
+    const secondReset = await createAccessReset(
+      db(),
+      inviter,
+      setupOrganisationId,
+      inviteeId,
+      { removePasskeys: true },
+      at(49 * MINUTE),
+    );
+    await revokeAccessReset(
+      db(),
+      inviter,
+      setupOrganisationId,
+      inviteeId,
+      at(50 * MINUTE),
+    );
+    const thirdReset = await createAccessReset(
+      db(),
+      inviter,
+      setupOrganisationId,
+      inviteeId,
+      { expiresInHours: 2 },
+      at(51 * MINUTE),
+    );
+    await expect(
+      inspectAccessReset(db(), 'not-a-reset-token', at(52 * MINUTE)),
+    ).rejects.toBeInstanceOf(AccessResetInvalidError);
+    await expect(
+      useAccessReset(db(), firstReset.token, at(53 * MINUTE)),
+    ).rejects.toBeInstanceOf(AccessResetInvalidError);
+    await useAccessReset(db(), thirdReset.token, at(54 * MINUTE));
+    for (const { token } of [firstReset, secondReset, thirdReset]) {
+      secrets.push(token, hashToken(token));
+    }
     secrets.push(
       firstRunCode,
       normaliseHumanCode(firstRunCode)!,
@@ -494,6 +546,8 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
       hashToken(secondInvite.token),
       'not-a-token-anyone-made',
       hashToken('not-a-token-anyone-made'),
+      'not-a-reset-token',
+      hashToken('not-a-reset-token'),
     );
     // Addresses are stored on the user and the invite on purpose; only the audit
     // trail must not hold them.

@@ -12,6 +12,10 @@ import {
   getServerId,
   InstallationMissingError,
 } from '../installation/server-id.js';
+import {
+  AccessResetInvalidError,
+  ResetNotAllowedError,
+} from './access-reset-errors.js';
 import { AuthInputError, AuthStateError } from './errors.js';
 import {
   InviteExceedsOwnAccessError,
@@ -78,6 +82,11 @@ export const AUTH_AUDIT = {
   inviteAccepted: 'auth.invite-accepted',
   inviteAcceptRefused: 'auth.invite-accept-refused',
   inviteRevoked: 'auth.invite-revoked',
+  accessResetCreated: 'auth.access-reset-created',
+  accessResetRevoked: 'auth.access-reset-revoked',
+  accessResetInspectFailed: 'auth.access-reset-inspect-failed',
+  accessResetUsed: 'auth.access-reset-used',
+  accessResetUseRefused: 'auth.access-reset-use-refused',
 } as const;
 
 /** Details of an auth audit event: scalar values only, so nothing nested can hide a secret. */
@@ -217,11 +226,13 @@ export async function guardedAuth<R>(
       error instanceof AuthInputError ||
       error instanceof AuthStateError ||
       error instanceof RecordWriteError ||
-      // What the invite services throw themselves: they carry no value.
+      // What the invite and reset services throw themselves: they carry no value.
       error instanceof AccessDeniedError ||
       error instanceof RecordNotFoundError ||
       error instanceof InviteRefusedError ||
-      error instanceof InviteExceedsOwnAccessError
+      error instanceof InviteExceedsOwnAccessError ||
+      error instanceof AccessResetInvalidError ||
+      error instanceof ResetNotAllowedError
     ) {
       throw error;
     }
