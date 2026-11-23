@@ -153,6 +153,9 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
   let setupAdminId: string;
   let inviteId: string;
   let inviteeId: string;
+  let firstResetId: string;
+  let secondResetId: string;
+  let thirdResetId: string;
 
   beforeAll(async () => {
     userId = await seedActiveUser(database);
@@ -532,6 +535,9 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
       useAccessReset(db(), firstReset.token, at(53 * MINUTE)),
     ).rejects.toBeInstanceOf(AccessResetInvalidError);
     await useAccessReset(db(), thirdReset.token, at(54 * MINUTE));
+    firstResetId = firstReset.reset.id;
+    secondResetId = secondReset.reset.id;
+    thirdResetId = thirdReset.reset.id;
     for (const { token } of [firstReset, secondReset, thirdReset]) {
       secrets.push(token, hashToken(token));
     }
@@ -829,6 +835,87 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
       organisationId: setupOrganisationId,
     });
     expect(revoked[0]!.targetId).not.toBe(inviteId);
+  });
+
+  it('records a reset link made, replaced, revoked, inspected in vain, refused and used, with ids and reason codes and never a token, a hash or an address', async () => {
+    const created = await byCategory(AUTH_AUDIT.accessResetCreated);
+    expect(created.map((event) => event.targetId)).toEqual([
+      firstResetId,
+      secondResetId,
+      thirdResetId,
+    ]);
+    for (const event of created) {
+      expect(event).toMatchObject({
+        action: 'create',
+        actorType: 'user',
+        actorId: setupAdminId,
+        targetType: 'access_reset',
+        organisationId: setupOrganisationId,
+      });
+    }
+    expect(created.map((event) => event.details)).toMatchObject([
+      { userId: inviteeId, removePasskeys: false },
+      { userId: inviteeId, removePasskeys: true },
+      { userId: inviteeId, removePasskeys: false },
+    ]);
+    expect((created[2]!.details as { expiresAt: string }).expiresAt).toBe(
+      at(51 * MINUTE + 2 * 60 * MINUTE).toISOString(),
+    );
+
+    // The first was replaced by the second, and the second revoked by hand.
+    const revoked = await byCategory(AUTH_AUDIT.accessResetRevoked);
+    expect(revoked).toHaveLength(2);
+    expect(revoked[0]).toMatchObject({
+      action: 'revoke',
+      actorType: 'user',
+      actorId: setupAdminId,
+      targetId: firstResetId,
+      details: { userId: inviteeId, reason: 'superseded' },
+    });
+    expect(revoked[1]).toMatchObject({
+      targetId: secondResetId,
+      details: { userId: inviteeId, reason: 'manual' },
+    });
+
+    const [inspected] = await byCategory(AUTH_AUDIT.accessResetInspectFailed);
+    expect(inspected).toMatchObject({
+      action: 'inspect',
+      actorType: 'system',
+      actorId: null,
+      targetType: null,
+      targetId: null,
+      details: { reason: 'unknown' },
+    });
+
+    const [refused] = await byCategory(AUTH_AUDIT.accessResetUseRefused);
+    expect(refused).toMatchObject({
+      action: 'use',
+      actorType: 'system',
+      targetType: 'access_reset',
+      targetId: firstResetId,
+      organisationId: setupOrganisationId,
+      details: { reason: 'revoked' },
+    });
+
+    const used = await byCategory(AUTH_AUDIT.accessResetUsed);
+    expect(used).toHaveLength(1);
+    expect(used[0]).toMatchObject({
+      action: 'use',
+      actorType: 'user',
+      actorId: inviteeId,
+      targetType: 'access_reset',
+      targetId: thirdResetId,
+      organisationId: setupOrganisationId,
+      details: {
+        userId: inviteeId,
+        sessionsRevoked: 0,
+        passwordCleared: true,
+        totpRemoved: false,
+        recoveryCodesRemoved: 0,
+        passkeysRemoved: 0,
+      },
+    });
+    expect(used[0]!.occurredAt).toEqual(at(54 * MINUTE));
   });
 
   it('records each passkey registration started and finished, for its user, with the passkey as the target of the second', async () => {

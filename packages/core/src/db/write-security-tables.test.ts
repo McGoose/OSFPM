@@ -1,8 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { seedOrganisation, seedUser } from '../access/test-fixtures.js';
+import {
+  grantOnOrganisation,
+  seedOrganisation,
+  seedUser,
+} from '../access/test-fixtures.js';
 import type { Database } from './client.js';
 import { newId } from './ids.js';
 import {
+  accessReset,
   changeEvent,
   changeSeq,
   invite,
@@ -22,8 +27,8 @@ import {
 
 /**
  * The write helper refuses every security table, and the child table of one,
- * even `invite` and `invite_role`, which carry an `organisation_id` by
- * declaration (CLAUDE.md, Data rules): only the auth service writes them,
+ * even `invite`, `invite_role` and `access_reset`, which carry an
+ * `organisation_id` by declaration (CLAUDE.md, Data rules): only the auth service writes them,
  * directly, and audits instead of change-logging. A table with an
  * `organisation_id` is otherwise one the helper would take, so the refusal is
  * its own check and not a side effect of a missing column.
@@ -69,6 +74,7 @@ describe.each(testTargets)(
     const untouched = async () => ({
       invites: (await database.db.select().from(invite)).length,
       links: (await database.db.select().from(inviteRole)).length,
+      resets: (await database.db.select().from(accessReset)).length,
       events: (await database.db.select().from(changeEvent)).length,
       counters: (await database.db.select().from(changeSeq)).length,
     });
@@ -140,6 +146,68 @@ describe.each(testTargets)(
       const [after] = await database.db.select().from(invite);
       expect(after).toMatchObject({ id: row!.id, tier: 'member', version: 1 });
       expect(after!.deletedAt).toBeNull();
+    });
+
+    it('refuses an access_reset too, which carries an organisation_id and a composite key to a membership, and writes nothing', async () => {
+      const creator = await seedUser(database);
+      const person = await seedUser(database);
+      await grantOnOrganisation(database, organisationId, person, 'member', []);
+      const values = {
+        organisationId,
+        userId: person,
+        tokenHash: `write-helper-reset-${newId()}`,
+        expiresAt: new Date(Date.UTC(2099, 0, 1)),
+      };
+      // A row the way the auth service makes one: directly.
+      const [row] = await database.db
+        .insert(accessReset)
+        .values({ ...values, originServer: ORIGIN, createdBy: creator })
+        .returning();
+      const before = await untouched();
+      const refused = await database.db
+        .transaction((tx) =>
+          insertRecord(
+            tx,
+            accessReset,
+            { ...values, tokenHash: `write-helper-reset-${newId()}` },
+            ctx(),
+          ),
+        )
+        .then(
+          () => undefined,
+          (caught: unknown) => caught,
+        );
+      expect(refused).toBeInstanceOf(SecurityTableWriteError);
+      expect((refused as Error).message).toContain('access_reset');
+      expect((refused as Error).message).not.toContain(values.tokenHash);
+      await expect(
+        database.db.transaction((tx) =>
+          updateRecord(
+            tx,
+            accessReset,
+            row!.id,
+            1,
+            { removePasskeys: true },
+            ctx(),
+          ),
+        ),
+      ).rejects.toBeInstanceOf(SecurityTableWriteError);
+      await expect(
+        database.db.transaction((tx) =>
+          softDeleteRecord(tx, accessReset, row!.id, 1, ctx()),
+        ),
+      ).rejects.toBeInstanceOf(SecurityTableWriteError);
+      await expect(
+        database.db.transaction((tx) =>
+          restoreRecord(tx, accessReset, row!.id, 1, ctx()),
+        ),
+      ).rejects.toBeInstanceOf(SecurityTableWriteError);
+      expect(await untouched()).toEqual(before);
+      const found = (await database.db.select().from(accessReset)).find(
+        (candidate) => candidate.id === row!.id,
+      );
+      expect(found).toMatchObject({ version: 1, removePasskeys: false });
+      expect(found!.deletedAt).toBeNull();
     });
 
     it('refuses a security table without an organisation_id too', async () => {

@@ -5,7 +5,7 @@ import {
   randomBytes,
   sign,
 } from 'node:crypto';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { Secret, TOTP } from 'otpauth';
 import type {
   AuthenticationResponseJSON,
@@ -16,17 +16,34 @@ import type {
 import { isoCBOR } from '@simplewebauthn/server/helpers';
 import { PERMISSION_LISTS } from '../access/permission-lists.js';
 import { syncPermissions } from '../access/permission-sync.js';
-import { ORIGIN, seedUser } from '../access/test-fixtures.js';
+import {
+  base,
+  ORIGIN,
+  seedDepartment,
+  seedOrganisation,
+  seedUser,
+} from '../access/test-fixtures.js';
 import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
 import {
   installation,
+  orgMembership,
+  orgMembershipRole,
+  passkeyCredential,
   passwordCredential,
+  role,
+  rolePermission,
   totpCredential,
   user,
+  type OrgMembershipStatus,
+  type OrgRole,
+  type RolePermissionReach,
 } from '../db/schema/index.js';
 import { ensureInstallation } from './ensure-installation.js';
-import type { FirstRunSetupInput } from './first-run-setup.js';
+import {
+  completeFirstRunSetup,
+  type FirstRunSetupInput,
+} from './first-run-setup.js';
 import { hashPassword, PASSWORD_HASH_PARAMS } from './password.js';
 import { normalisePassword } from './password-policy.js';
 import { issueSetupCode } from './setup-code.js';
@@ -618,4 +635,216 @@ export function passwordHashWith(
   });
   const encode = (bytes: Buffer) => bytes.toString('base64').replace(/=+$/, '');
   return `$argon2id$v=${PASSWORD_HASH_PARAMS.version}$m=${settings.memoryKiB},t=${settings.passes},p=${settings.parallelism}$${encode(salt)}$${encode(hash)}`;
+}
+
+/**
+ * Makes `userId` a member of the organisation with the tier given, linked to the
+ * organisation roles in `roleIds`, by direct inserts as fixtures do. `status`
+ * defaults to `active`; `deleted` marks the membership row soft-deleted. Answers
+ * the membership id.
+ */
+export async function seedMembership(
+  database: Database,
+  organisationId: string,
+  userId: string,
+  tier: OrgRole,
+  roleIds: readonly string[],
+  options: { status?: OrgMembershipStatus; deleted?: boolean } = {},
+): Promise<string> {
+  const [membership] = await database.db
+    .insert(orgMembership)
+    .values({
+      ...base(organisationId),
+      userId,
+      orgRole: tier,
+      status: options.status ?? 'active',
+      deletedAt: options.deleted ? new Date() : null,
+    })
+    .returning();
+  for (const roleId of roleIds) {
+    await database.db.insert(orgMembershipRole).values({
+      ...base(organisationId),
+      membershipId: membership!.id,
+      roleId,
+    });
+  }
+  return membership!.id;
+}
+
+/**
+ * An organisation role (no project) with the grants given as `[permission key,
+ * reach, department id or null]`, by direct inserts. The keys must already be in
+ * the catalogue. Answers the role id.
+ */
+export async function seedOrganisationRole(
+  database: Database,
+  organisationId: string,
+  key: string,
+  grants: readonly (readonly [string, RolePermissionReach, (string | null)?])[],
+): Promise<string> {
+  const [created] = await database.db
+    .insert(role)
+    .values({ ...base(organisationId), projectId: null, key, name: key })
+    .returning();
+  for (const [permissionKey, reach, departmentId] of grants) {
+    await database.db.insert(rolePermission).values({
+      ...base(organisationId),
+      roleId: created!.id,
+      permissionKey,
+      reach,
+      departmentId: departmentId ?? null,
+    });
+  }
+  return created!.id;
+}
+
+let passkeyCounter = 0;
+
+/**
+ * Gives a user a passkey row directly, with an invented credential id and key,
+ * revoked at `revokedAt` when that is given. Not a real WebAuthn credential: for
+ * tests that count passkeys and revoke them, not for a sign-in. Answers the row id.
+ */
+export async function seedPasskey(
+  database: Database,
+  userId: string,
+  options: { revokedAt?: Date } = {},
+): Promise<string> {
+  passkeyCounter += 1;
+  const [row] = await database.db
+    .insert(passkeyCredential)
+    .values({
+      originServer: ORIGIN,
+      userId,
+      credentialId: `fixture-credential-${passkeyCounter}-${newId()}`,
+      publicKey: Buffer.from([1, 2, 3, 4]),
+      deviceName: `Fixture device ${passkeyCounter}`,
+      revokedAt: options.revokedAt ?? null,
+    })
+    .returning();
+  return row!.id;
+}
+
+/** What `seedResetScene` made. */
+export type ResetScene = {
+  readonly organisationId: string;
+  /** The first administrator: tier `owner`, the Administrator role (every permission). */
+  readonly ownerId: string;
+  /** Tier `admin`, also the Administrator role: every permission, but not an owner. */
+  readonly adminId: string;
+  /** Tier `member`, a role that holds only `members:reset-access`. */
+  readonly resetterId: string;
+  /** Tier `member`, a role that holds only `accounts:read`: may not reset anyone. */
+  readonly plainId: string;
+  /** A member of the other organisation only. */
+  readonly strangerId: string;
+  /** A second organisation, with its own project and department. */
+  readonly otherOrganisationId: string;
+  /** The department of the first organisation, for a grant limited to one. */
+  readonly departmentId: string;
+  /** The organisation roles of the first organisation, by what they hold. */
+  readonly roles: {
+    readonly administrator: string;
+    /** `members:reset-access`, in the organisation only. */
+    readonly resetter: string;
+    /** `accounts:read`, in the organisation only. */
+    readonly crew: string;
+    /** `accounts:read` and `accounts:edit`, in the organisation only. */
+    readonly editor: string;
+    /** `accounts:read`, in every project. */
+    readonly wide: string;
+  };
+};
+
+/**
+ * An organisation made by first-run setup (so it has its owner, the Administrator
+ * role and the permission catalogue) with the people admin reset links are tried
+ * on: an administrator who is not an owner, a member who may only reset, a member
+ * who may not, and a stranger in another organisation. Direct inserts for the
+ * extras, as fixtures do. Invented people only.
+ */
+export async function seedResetScene(
+  database: Database,
+  now: Date,
+): Promise<ResetScene> {
+  const code = await seedFirstRun(database, now);
+  const done = await completeFirstRunSetup(
+    database.db,
+    demoSetupInput(code),
+    now,
+  );
+  if (!done.ok) throw new Error('the setup was refused');
+  const organisationId = done.organisation.id;
+  const [administrator] = await database.db.select().from(role);
+  const other = await seedOrganisation(database);
+  const departmentId = await seedDepartment(database, organisationId, 'camera');
+  const roles = {
+    administrator: administrator!.id,
+    resetter: await seedOrganisationRole(database, organisationId, 'resetter', [
+      ['members:reset-access', 'own-scope'],
+    ]),
+    crew: await seedOrganisationRole(database, organisationId, 'crew', [
+      ['accounts:read', 'own-scope'],
+    ]),
+    editor: await seedOrganisationRole(database, organisationId, 'editor', [
+      ['accounts:read', 'own-scope'],
+      ['accounts:edit', 'own-scope'],
+    ]),
+    wide: await seedOrganisationRole(database, organisationId, 'wide', [
+      ['accounts:read', 'all-projects'],
+    ]),
+  };
+  const adminId = await seedUser(database);
+  await seedMembership(database, organisationId, adminId, 'admin', [
+    roles.administrator,
+  ]);
+  const resetterId = await seedUser(database);
+  await seedMembership(database, organisationId, resetterId, 'member', [
+    roles.resetter,
+  ]);
+  const plainId = await seedUser(database);
+  await seedMembership(database, organisationId, plainId, 'member', [
+    roles.crew,
+  ]);
+  const strangerId = await seedUser(database);
+  await seedMembership(
+    database,
+    other.organisationId,
+    strangerId,
+    'member',
+    [],
+  );
+  return {
+    organisationId,
+    ownerId: done.user.id,
+    adminId,
+    resetterId,
+    plainId,
+    strangerId,
+    otherOrganisationId: other.organisationId,
+    departmentId,
+    roles,
+  };
+}
+
+/**
+ * Changes the tier of a member's membership directly, as a later release's own
+ * service would, so a test can show what a reset link does when the situation
+ * changes after it was made.
+ */
+export async function setMembershipTier(
+  database: Database,
+  organisationId: string,
+  userId: string,
+  tier: OrgRole,
+): Promise<void> {
+  await database.db
+    .update(orgMembership)
+    .set({ orgRole: tier })
+    .where(
+      and(
+        eq(orgMembership.organisationId, organisationId),
+        eq(orgMembership.userId, userId),
+      ),
+    );
 }
