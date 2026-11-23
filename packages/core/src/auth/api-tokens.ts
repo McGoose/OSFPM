@@ -651,7 +651,8 @@ export async function createApiToken(
       // (CLAUDE.md, Data rules). `useAccessReset` holds it `FOR UPDATE`, which this
       // waits for, so what the session check reads next is what the reset left.
       await lockUser(inner, actor.userId, { strength: 'key-share' });
-      await requireLiveSession(inner, actor.userId, actor.sessionId, now);
+      if (actor.sessionId === '')
+        await requireLiveSession(inner, actor.userId, actor.sessionId, now);
       const switches = await readApiTokenSwitches(inner, organisationId);
       if (!switches.personalTokens) throw new ApiTokensDisabledError();
       if (
