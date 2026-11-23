@@ -740,8 +740,7 @@ async function runUse(
     })
     .from(accessReset)
     .where(eq(accessReset.tokenHash, hash))
-    .limit(1)
-    .for('update');
+    .limit(1);
   const state = stateOf(locked, now);
   if (state !== 'live') {
     return refuse(
@@ -756,8 +755,7 @@ async function runUse(
 
   // The person's row, last. A person who was deleted since is not there to lock.
   try {
-    if (found.userId === '')
-      await lockUser(tx, found.userId, { strength: 'update' });
+    await lockUser(tx, found.userId, { strength: 'update' });
   } catch (error) {
     if (error instanceof AuthStateError) {
       return refuse('target-not-active', known);
