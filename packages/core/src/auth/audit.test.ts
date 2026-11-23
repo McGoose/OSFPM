@@ -8,7 +8,12 @@ import {
 import { tenantTableNames } from '../db/columns.js';
 import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
-import { auditEvent, role, SECURITY_TABLES } from '../db/schema/index.js';
+import {
+  apiToken,
+  auditEvent,
+  role,
+  SECURITY_TABLES,
+} from '../db/schema/index.js';
 import { getTableName } from 'drizzle-orm';
 import { createMigratedDatabase, testTargets } from '../db/test-support.js';
 import {
@@ -110,7 +115,7 @@ const INVITED_EMAIL = 'sam.demo@demopictures.example';
 /** The name of the personal API token the flow makes: free text, which no audit event may hold. */
 const API_TOKEN_NAME = 'Call sheet export for the camera department';
 /** A token shaped like one and never made, so its use is refused as unknown. */
-const NEVER_MADE_API_TOKEN = `osfpm_pat_${'Zz0'.repeat(14)}Z`;
+const NEVER_ISSUED_VALUE = `osfpm_pat_${'Zz0'.repeat(14)}Z`;
 
 const LATER_SENSITIVE_LISTS = [
   ...PERMISSION_LISTS,
@@ -566,7 +571,7 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
       { personalTokens: true, sensitive: true },
       at(55 * MINUTE),
     );
-    const apiTokenMade = await createApiToken(
+    const scriptAccess = await createApiToken(
       db(),
       inviter,
       setupOrganisationId,
@@ -578,11 +583,11 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
       },
       at(56 * MINUTE),
     );
-    apiTokenId = apiTokenMade.apiToken.id;
-    apiTokenPrefix = apiTokenMade.apiToken.prefix;
+    apiTokenId = scriptAccess.apiToken.id;
+    apiTokenPrefix = scriptAccess.apiToken.prefix;
     const apiTokenUsed = await authenticateApiToken(
       db(),
-      apiTokenMade.token,
+      scriptAccess.token,
       at(57 * MINUTE),
     );
     await recordApiTokenCall(
@@ -598,7 +603,7 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
       at(58 * MINUTE),
     );
     await expect(
-      authenticateApiToken(db(), NEVER_MADE_API_TOKEN, at(59 * MINUTE)),
+      authenticateApiToken(db(), NEVER_ISSUED_VALUE, at(59 * MINUTE)),
     ).rejects.toBeInstanceOf(ApiTokenInvalidError);
     await revokeOwnApiToken(
       db(),
@@ -614,11 +619,17 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
       { personalTokens: false, sensitive: false },
       at(61 * MINUTE),
     );
+    // The hash that is stored is read from the table, and the one a value that was never
+    // made would have is made from its random part, as the service does.
+    const [scriptRow] = await db()
+      .select()
+      .from(apiToken)
+      .where(eq(apiToken.id, apiTokenId));
     secrets.push(
-      apiTokenMade.token,
-      hashToken(apiTokenMade.token),
-      NEVER_MADE_API_TOKEN,
-      hashToken(NEVER_MADE_API_TOKEN),
+      scriptAccess.token,
+      scriptRow!.tokenHash,
+      NEVER_ISSUED_VALUE,
+      hashToken(NEVER_ISSUED_VALUE.slice('osfpm_pat_'.length)),
     );
     firstResetId = firstReset.reset.id;
     secondResetId = secondReset.reset.id;

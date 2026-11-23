@@ -52,7 +52,8 @@ export type ApiTokenRevokeReason = (typeof API_TOKEN_REVOKE_REASONS)[number];
  * A personal API token (SC-10, decisions D-17 and D-68): a secret a person makes for
  * their own scripts and tools, which acts as them, narrowed by what the token says. The
  * token itself is `osfpm_pat_` and 43 characters of base64url (32 random bytes). Only
- * its SHA-256 hash is stored (`token_hash`, made as a session token's is); the token
+ * the SHA-256 hash of those 43 characters is stored (`token_hash`, made as a session
+ * token's is, since they are a session token's kind of secret); the token
  * goes back to its owner once, in the response that makes it, and is never stored,
  * logged or audited. `prefix` is `osfpm_pat_` and the first 8 characters of the random
  * part, so owners and administrators can tell tokens apart; it is the only part of the

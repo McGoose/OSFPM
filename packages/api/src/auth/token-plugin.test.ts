@@ -410,6 +410,28 @@ describe.each(testTargets)(
         expect((await auditRows()).length).toBe(before);
       });
 
+      it('is not the Bearer scheme when the word goes on or is not followed by a space or a tab', async () => {
+        const made = await makeToken(scene.tokensId);
+        const nonBreakingSpace = String.fromCodePoint(0xa0);
+        for (const header of [
+          `Bearers ${made.token}`,
+          `Bearer${nonBreakingSpace}${made.token}`,
+          `Bearer:${made.token}`,
+          made.token,
+        ]) {
+          const response = await call('GET', '/test/token/none', {
+            authorization: header,
+          });
+          expect(response.statusCode).toBe(200);
+          expect(response.json()).toEqual({ token: false });
+        }
+        // The scheme with a tab is the scheme.
+        const tab = await call('GET', '/test/token/none', {
+          authorization: `Bearer\t${made.token}`,
+        });
+        expect(tab.json()).toEqual({ token: true });
+      });
+
       it('leaves only a value that starts with osfpm_pat_ to the token, which a cookie then makes ambiguous', async () => {
         const { token: sessionToken } = await createSession(ctx.database.db, {
           userId: scene.tokensId,

@@ -80,9 +80,9 @@ import { generateToken, hashToken } from './tokens.js';
  * their own scripts and tools, which acts as them, narrowed by what the token says, and
  * never beyond what they hold. The token is `osfpm_pat_` and a session token's 43
  * characters (`generateToken`); the fixed start lets secret scanners, such as GitHub's,
- * recognise a leaked one. Only its SHA-256 hash is stored, found by that hash, and the
- * token goes back to its owner once, in the response that makes it; it is never stored,
- * logged or audited. `api_token` is a security table: only this service writes it,
+ * recognise a leaked one. Only the SHA-256 hash of its random part is stored (the fixed
+ * start is public), found by that hash, and the token goes back to its owner once, in the
+ * response that makes it; it is never stored, logged or audited. `api_token` is a security table: only this service writes it,
  * directly, and every change is audited instead of change-logged. The write helper
  * refuses it (`SecurityTableWriteError`).
  *
@@ -147,8 +147,12 @@ const MAX_PERMISSION_KEY_LENGTH = 100;
 /** How many characters of the random part make the prefix that tells tokens apart. */
 const PREFIX_RANDOM_CHARACTERS = 8;
 
-/** A token as `createApiToken` makes it: the start, and the 43 characters of 32 random bytes. */
-const TOKEN_SHAPE = /^osfpm_pat_[A-Za-z0-9_-]{43}$/;
+/**
+ * A token as `createApiToken` makes it: the start, and the 43 characters of 32 random bytes.
+ * The one group is the random part, which is what is hashed: the fixed start carries no
+ * secret, so the hash is made of exactly what a session token's is (`generateToken`).
+ */
+const TOKEN_SHAPE = /^osfpm_pat_([A-Za-z0-9_-]{43})$/;
 
 /** What a UUID looks like, so a value that is not one never reaches a `uuid` column. */
 const UUID_SHAPE =
@@ -504,7 +508,9 @@ async function insertWithFreshToken(
   values: Omit<typeof apiToken.$inferInsert, 'prefix' | 'tokenHash'>,
 ): Promise<{ row: ViewRow; token: string }> {
   for (let attempt = 1; ; attempt += 1) {
-    const token = `${API_TOKEN_PREFIX}${generateToken()}`;
+    // The hash is of the random part alone: the fixed start is public and adds nothing.
+    const secret = generateToken();
+    const token = `${API_TOKEN_PREFIX}${secret}`;
     try {
       return await guardedAuth('api_token', 'insert', () =>
         tx.transaction(async (savepoint) => {
@@ -516,7 +522,7 @@ async function insertWithFreshToken(
                 0,
                 API_TOKEN_PREFIX.length + PREFIX_RANDOM_CHARACTERS,
               ),
-              tokenHash: hashToken(token),
+              tokenHash: hashToken(secret),
             })
             .returning(viewColumns);
           return { row: row!, token };
@@ -1196,10 +1202,10 @@ export async function authenticateApiToken(
   now: Date,
   request: AuthenticatingRequest = {},
 ): Promise<AuthenticatedApiToken> {
-  const hash =
-    typeof token === 'string' && TOKEN_SHAPE.test(token)
-      ? hashToken(token)
-      : null;
+  // A value that is not shaped like a token is refused here, without a lookup.
+  const secret =
+    typeof token === 'string' ? TOKEN_SHAPE.exec(token)?.[1] : undefined;
+  const hash = secret === undefined ? null : hashToken(secret);
   const outcome = await guardedAuth(
     'api_token',
     'select',

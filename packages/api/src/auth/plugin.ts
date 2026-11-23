@@ -216,6 +216,9 @@ const TOKEN_READ_METHODS: ReadonlySet<string> = new Set([
   'OPTIONS',
 ]);
 
+/** The scheme of `Authorization: Bearer <token>`, matched without regard to case (RFC 7235). */
+const BEARER_SCHEME = 'Bearer';
+
 /**
  * The token in an `Authorization: Bearer <token>` header, or `null` when there is no such
  * header or the header is not ours. The scheme is matched without regard to case
@@ -230,9 +233,17 @@ const TOKEN_READ_METHODS: ReadonlySet<string> = new Set([
 function bearerTokenOf(request: FastifyRequest): string | null {
   const header = request.headers.authorization;
   if (typeof header !== 'string') return null;
-  const match = /^Bearer(?:[ \t]+(.*))?$/i.exec(header.trim());
-  if (match === null) return null;
-  const value = (match[1] ?? '').trim();
+  // Taken apart by hand and not with a regular expression: the header is the caller's, and
+  // a pattern that can backtrack on it can be made slow.
+  const trimmed = header.trim();
+  const scheme = trimmed.slice(0, BEARER_SCHEME.length);
+  if (scheme.toLowerCase() !== BEARER_SCHEME.toLowerCase()) return null;
+  const rest = trimmed.slice(scheme.length);
+  // `Bearer` alone, or `Bearer` and then a space or a tab: `Bearers` is another scheme.
+  if (rest !== '' && rest[0] !== ' ' && rest[0] !== '\t') return null;
+  const value = rest.trim();
+  // A header holds no line break, so a value that does is not a header of ours.
+  if (value.includes('\n') || value.includes('\r')) return null;
   return value === '' || value.startsWith(API_TOKEN_PREFIX) ? value : null;
 }
 

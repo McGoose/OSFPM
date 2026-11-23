@@ -31,7 +31,6 @@ import {
   setUserStatus,
   type TokenScene,
 } from './test-support.js';
-import { hashToken } from './tokens.js';
 
 /**
  * Using a personal API token: `authenticateApiToken` answers the credential or one
@@ -383,8 +382,12 @@ describe.each(testTargets)('using a personal API token on $name', (target) => {
           });
           const text = JSON.stringify(events[0]);
           expect(text).not.toContain(token);
-          expect(text).not.toContain(hashToken(token));
           expect(text).not.toContain(token.slice(10));
+          // Nothing but the reason: no hash and nothing else that the request held.
+          expect(Object.keys(events[0]!.details ?? {})).toEqual(['reason']);
+          for (const row of await db().select().from(apiToken)) {
+            expect(text).not.toContain(row.tokenHash);
+          }
           await db().delete(apiToken);
           await db().delete(settingValue);
           await restorePeople();

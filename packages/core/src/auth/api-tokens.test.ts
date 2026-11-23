@@ -193,7 +193,8 @@ describe.each(testTargets)('personal API tokens on $name', (target) => {
         projectId: null,
         name: 'Call sheet export',
         prefix: made.token.slice(0, API_TOKEN_PREFIX.length + 8),
-        tokenHash: hashToken(made.token),
+        // The hash is of the random part, as a session token's is: the fixed start is public.
+        tokenHash: hashToken(made.token.slice(API_TOKEN_PREFIX.length)),
         access: 'read',
         sensitivePermissions: [],
         lastUsedAt: null,
@@ -658,7 +659,10 @@ describe.each(testTargets)('personal API tokens on $name', (target) => {
       });
       const text = JSON.stringify(events);
       expect(text).not.toContain(made.token);
-      expect(text).not.toContain(hashToken(made.token));
+      // The stored hash, read from the table: the audit event must not hold it either.
+      for (const row of await stored()) {
+        expect(text).not.toContain(row.tokenHash);
+      }
       expect(text).not.toContain('A name the audit');
       // A token that never expires says so, and has no project or scope.
       const later = next();
