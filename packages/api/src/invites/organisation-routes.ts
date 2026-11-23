@@ -15,7 +15,7 @@ import {
   ORG_ROLES,
 } from '@osfpm/core/src/db/schema/index.js';
 import { listMembers } from '@osfpm/core/src/members/service.js';
-import { requireAuthenticated } from '../auth/plugin.js';
+import { requireAuthenticated, requireCaller } from '../auth/plugin.js';
 import { problemResponse } from '../errors.js';
 import {
   accessDenied,
@@ -101,11 +101,13 @@ export const organisationInviteRoutes: FastifyPluginAsyncZod = (app) => {
   app.get(
     '/:organisationId/members',
     {
-      config: { sessionRateLimit: true },
+      // One of the routes a personal API token may call (`tokenAccess`): it only reads,
+      // and `listMembers` takes the token's credential and narrows its check by it.
+      config: { sessionRateLimit: true, tokenAccess: 'read' },
       schema: {
         summary: 'List the members of the organisation',
         description:
-          'The people who belong to the organisation: user id, display name, email address, tier, whether the membership is active, invited or removed, and the keys of the roles they hold. Needs `members:read` in the organisation. Nothing about how a member signs in, and no crew personal data.',
+          'The people who belong to the organisation: user id, display name, email address, tier, whether the membership is active, invited or removed, and the keys of the roles they hold. Needs `members:read` in the organisation. Nothing about how a member signs in, and no crew personal data. A personal API token for the whole of this organisation may call it too, as `Authorization: Bearer <token>`: a token for another organisation, or one that does not work, is a 401 `invalid-token`, and one for a single project is a 403.',
         params: organisationParams,
         response: {
           200: z.array(memberSchema),
@@ -116,9 +118,14 @@ export const organisationInviteRoutes: FastifyPluginAsyncZod = (app) => {
       },
     },
     async (request) => {
-      const { user } = requireAuthenticated(request);
+      // A session or a token, with the credential that narrows the check.
+      const { user, credential } = requireCaller(request);
       const members = await app.db.db.transaction((tx) =>
-        listMembers(tx, { userId: user.id }, request.params.organisationId),
+        listMembers(
+          tx,
+          { userId: user.id, credential },
+          request.params.organisationId,
+        ),
       );
       return members.map((member) => ({
         ...member,

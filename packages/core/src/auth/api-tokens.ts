@@ -938,6 +938,31 @@ export function revokeApiTokensOfUser(
 }
 
 /**
+ * The organisation's two switches for personal API tokens, as they are now: both off for an
+ * organisation that has never set them. Needs `api:manage` in the organisation, which is
+ * also what changes them (`setApiTokenSwitches`). The sensitive switch is the effective
+ * one: it reads off while tokens are off.
+ *
+ * @throws AccessDeniedError, with no scope, without the permission.
+ * @throws RecordWriteError when the database fails; it carries the SQLSTATE only.
+ */
+export function getApiTokenSwitches(
+  tx: Tx,
+  actor: ApiTokenActor,
+  organisationId: string,
+): Promise<ApiTokenSwitches> {
+  return guardedAuth('setting_value', 'select', async () => {
+    await requirePermission(
+      tx,
+      actor.userId,
+      organisationId,
+      API_MANAGE_PERMISSION,
+    );
+    return readApiTokenSwitches(tx, organisationId);
+  });
+}
+
+/**
  * Turns the organisation's two switches for personal API tokens to the values given, and
  * answers what they are now and how many tokens it revoked. Needs `api:manage` in the
  * organisation. The sensitive switch can only be on while personal tokens are, so `sensitive:
