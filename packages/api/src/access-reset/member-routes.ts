@@ -19,24 +19,31 @@ const memberParams = z.object({
   userId: z.uuid().describe('The member the link is for.'),
 });
 
-/** What the person making a reset link may send: a JSON object, `{}` for every default. Each field may be left out. */
-const createBody = z.object({
-  expiresInHours: z
-    .number()
-    .int()
-    .min(ACCESS_RESET_LIFETIME.minHours)
-    .max(ACCESS_RESET_LIFETIME.maxHours)
-    .optional()
-    .describe(
-      `How many hours the link works, from ${ACCESS_RESET_LIFETIME.minHours} to ${ACCESS_RESET_LIFETIME.maxHours}. ${ACCESS_RESET_LIFETIME.defaultHours} when left out.`,
-    ),
-  removePasskeys: z
-    .boolean()
-    .optional()
-    .describe(
-      'Whether using the link also revokes every passkey of the person, for a device that was lost or stolen. False when left out: the passkeys stay.',
-    ),
-});
+/**
+ * What the person making a reset link may send: a JSON object, `{}` for every
+ * default. Each field may be left out, and so may the body: a request with no body
+ * and no `Content-Type` reaches validation as `null`, so the schema allows it, and
+ * the handler reads it as `{}`. A body that says it is JSON must still be an object.
+ */
+const createBody = z
+  .object({
+    expiresInHours: z
+      .number()
+      .int()
+      .min(ACCESS_RESET_LIFETIME.minHours)
+      .max(ACCESS_RESET_LIFETIME.maxHours)
+      .optional()
+      .describe(
+        `How many hours the link works, from ${ACCESS_RESET_LIFETIME.minHours} to ${ACCESS_RESET_LIFETIME.maxHours}. ${ACCESS_RESET_LIFETIME.defaultHours} when left out.`,
+      ),
+    removePasskeys: z
+      .boolean()
+      .optional()
+      .describe(
+        'Whether using the link also revokes every passkey of the person, for a device that was lost or stolen. False when left out: the passkeys stay.',
+      ),
+  })
+  .nullish();
 
 /**
  * The routes under `/api/v1/organisations/:organisationId/members/:userId` that let
@@ -67,7 +74,7 @@ export const memberResetRoutes: FastifyPluginAsyncZod = (app) => {
       schema: {
         summary: 'Make a reset link for a member who is locked out',
         description:
-          'Makes a one-time link that signs the member in with a recovery session, where they must set a new password or add a passkey, and shows it once: the `link` is in this response only, and only a hash of its token is kept. Pass it on by any channel; OSFPM sends nothing. Using it ends every session of the member, clears their password, removes their authenticator app and their recovery codes, and, when `removePasskeys` is true, revokes their passkeys. Needs `members:reset-access` in the organisation. The member must belong to this organisation and to no other (in any status), must not be the person asking (people reset themselves with their recovery codes), must not be an owner unless the person asking is one, must hold no permission the person asking does not hold in the organisation, at the same reach or wider, must have an active account and must have an active membership of the organisation; each is a 422 with a code of its own. The same rules are checked again when the link is used. A member has one live link: every earlier link of theirs that was neither used nor revoked, expired ones too, is revoked. The token is after the `#` of the link, which a browser never sends to a server.',
+          'Makes a one-time link that signs the member in with a recovery session, where they must set a new password or add a passkey, and shows it once: the `link` is in this response only, and only a hash of its token is kept. Pass it on by any channel; OSFPM sends nothing. Using it ends every session of the member, clears their password, removes their authenticator app and their recovery codes, and, when `removePasskeys` is true, revokes their passkeys. Needs `members:reset-access` in the organisation. The member must belong to this organisation and to no other (in any status), must not be the person asking (people reset themselves with their recovery codes), must not be an owner unless the person asking is one, must hold no permission the person asking does not hold in the organisation, at the same reach or wider, must have an active account and must have an active membership of the organisation; each is a 422 with a code of its own. The same rules are checked again when the link is used. A member has one live link: every earlier link of theirs that was neither used nor revoked, expired ones too, is revoked. The body is optional: no body, or `{}`, means every default. The token is after the `#` of the link, which a browser never sends to a server.',
         params: memberParams,
         body: createBody,
         response: {
@@ -94,7 +101,8 @@ export const memberResetRoutes: FastifyPluginAsyncZod = (app) => {
     },
     async (request, reply) => {
       const { user } = requireAuthenticated(request);
-      const { body } = request;
+      // No body at all is the same as `{}`: every default.
+      const body = request.body ?? {};
       const made = await app.db.db.transaction((tx) =>
         createAccessReset(
           tx,

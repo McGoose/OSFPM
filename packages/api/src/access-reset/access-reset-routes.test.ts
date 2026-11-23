@@ -400,6 +400,51 @@ describe.each(testTargets)(
         });
       });
 
+      it('takes a request with no body and no content type as {}: the same 201 with every default', async () => {
+        const person = await makeTarget();
+        const before = Date.now();
+        // No payload at all, as `curl -X POST` sends it: not `{}`, and not JSON.
+        const response = await send('POST', linkPath(person.userId), {
+          token: ownerToken,
+        });
+        expect(response.statusCode).toBe(201);
+        const json = response.json<Record<string, unknown>>();
+        expect(Object.keys(json).sort()).toEqual([
+          'expiresAt',
+          'link',
+          'removePasskeys',
+        ]);
+        expect(json.removePasskeys).toBe(false);
+        tokens.push((json.link as string).split('#')[1]!);
+        const ends = Date.parse(json.expiresAt as string);
+        expect(ends).toBeGreaterThanOrEqual(before + 24 * HOUR - 1000);
+        expect(ends).toBeLessThanOrEqual(Date.now() + 24 * HOUR + 1000);
+        const [row] = await linkRowsOf(person.userId);
+        expect(row).toMatchObject({
+          removePasskeys: false,
+          createdBy: scene.ownerId,
+        });
+      });
+
+      it('still refuses a body that says it is JSON and is empty, and one that is not an object', async () => {
+        const person = await makeTarget();
+        for (const payload of ['', '[]', '"x"', '1']) {
+          const response = await ctx.app.inject({
+            method: 'POST',
+            url: `${API_PREFIX}${linkPath(person.userId)}`,
+            headers: {
+              cookie: `${SESSION_COOKIE}=${ownerToken}`,
+              origin: TEST_PUBLIC_ORIGIN,
+              'content-type': 'application/json',
+            },
+            payload,
+            remoteAddress: freshAddress(),
+          });
+          expect(response.statusCode, JSON.stringify(payload)).toBe(400);
+        }
+        expect(await linkRowsOf(person.userId)).toEqual([]);
+      });
+
       it('lets a member who holds only the permission make a link, and shows them no more than the one answer, without any sensitive field', async () => {
         // This member has no sensitive:read of any kind.
         const nothing = await makeTarget({ roleIds: [] });
