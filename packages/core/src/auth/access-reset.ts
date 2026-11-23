@@ -583,7 +583,13 @@ export async function createAccessReset(
       // The person's row, `FOR UPDATE` (CLAUDE.md, Data rules): the rules depend on
       // rows that point at the person, and only this strength holds off the insert of
       // one. Two creates for the same person queue here.
-      // mutated: the person’s row is not locked by a create
+      try {
+        await lockUser(inner, userId);
+      } catch (error) {
+        // Deleted since the first look: a person who is not in use.
+        if (error instanceof AuthStateError) throw new UserNotActiveError();
+        throw error;
+      }
       const failure = await checkRules(
         inner,
         actor.userId,
