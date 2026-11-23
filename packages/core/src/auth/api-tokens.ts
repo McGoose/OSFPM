@@ -580,8 +580,6 @@ export async function createApiToken(
         organisationId,
         API_TOKENS_PERMISSION,
       );
-      // Before the switches are read, so this cannot race a switch being turned off.
-      await lockOrganisationChanges(inner, organisationId);
       const switches = await readApiTokenSwitches(inner, organisationId);
       if (!switches.personalTokens) throw new ApiTokensDisabledError();
       if (
