@@ -497,7 +497,7 @@ async function supersedeEarlierLinks(
       ),
     )
     .orderBy(asc(accessReset.id))
-    .for('update', { skipLocked: true });
+    .for('update');
   await revokeLinks(
     tx,
     actorId,
@@ -584,7 +584,7 @@ export async function createAccessReset(
       // rows that point at the person, and only this strength holds off the insert of
       // one. Two creates for the same person queue here.
       try {
-        await lockUser(inner, userId);
+        await lockUser(inner, userId, { strength: 'update' });
       } catch (error) {
         // Deleted since the first look: a person who is not in use.
         if (error instanceof AuthStateError) throw new UserNotActiveError();
