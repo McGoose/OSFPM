@@ -19,6 +19,8 @@ export const API_TOKEN_FAILURE_REASONS = [
   'user-not-active',
   /** The owner's membership of the organisation is not active. */
   'membership-not-active',
+  /** The request names another organisation in its path than the token's. */
+  'wrong-organisation',
 ] as const;
 /** One value of `API_TOKEN_FAILURE_REASONS`. */
 export type ApiTokenFailureReason = (typeof API_TOKEN_FAILURE_REASONS)[number];

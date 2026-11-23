@@ -1,5 +1,6 @@
 import { and, eq, isNull } from 'drizzle-orm';
 import type { Tx } from '../db/write.js';
+import { credentialPermits, type AccessCredential } from './credential.js';
 import {
   orgMembership,
   orgMembershipRole,
@@ -23,6 +24,14 @@ import {
  * organisation role also grants on projects is `hasProjectPermission`'s
  * question, and only an `all-projects` grant does.
  *
+ * With a `credential` that is a personal API token, the answer is narrowed first
+ * (`credentialPermits`): a token passes only in its own organisation, never at
+ * organisation level if it is a project token, never a write permission if it can only
+ * read, and a sensitive permission only through its explicit sensitive scope with the
+ * organisation's sensitive switch on. It is then the owner's own answer, so a token
+ * never passes what its owner does not hold. Without a credential, or with a session's,
+ * the answer is not narrowed.
+ *
  * Server-side only: permission checks never run on a client (CLAUDE.md, Data
  * rules). The general policy engine comes later and may reuse this.
  */
@@ -31,7 +40,18 @@ export async function hasOrganisationPermission(
   userId: string,
   organisationId: string,
   key: string,
+  credential?: AccessCredential,
 ): Promise<boolean> {
+  if (
+    !(await credentialPermits(
+      tx,
+      credential,
+      { organisationId, projectId: null },
+      key,
+    ))
+  ) {
+    return false;
+  }
   const [found] = await tx
     .select({ id: rolePermission.id })
     .from(orgMembership)

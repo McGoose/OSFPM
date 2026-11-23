@@ -13,6 +13,7 @@ Crew personal data: dietary, medical, accessibility, emergency, identity, financ
 
 - Nothing else may name `person_sensitive`. `source-scan.test.ts` fails if other code does.
 - Access is the person themselves, or a holder of `sensitive:read:<category>` or `sensitive:edit:<category>` on a project where the person is `confirmed` or `released`. Owners and admins get nothing automatically.
+- A personal API token (`SensitiveContext.credential`) reaches the same data only through its explicit sensitive scope: it must list the permission's key, the organisation's sensitive switch must be on, and the token's owner must hold the permission on a shared project at that moment (`hasProjectPermission` narrows by the credential). A token never takes the person's own way in. Its writes are the token's in the change log (actor `token`, made for its owner), and every read and every denial through a token is audited with the token's id (actor `token`, details `tokenId` and `userId`).
 - Audit every allowed read and every denial, with the category and never a value. A denial throws after its audit event is written, so catch it inside the transaction and commit.
 - Never log, email or put a payload value in an error, an audit detail, a change event or a notifier call.
 - A notifier only enqueues, through the transaction it is handed, and never sends. The write and its notice share one savepoint, so they succeed or fail together. A staff save that changes nothing writes nothing and queues no notice.

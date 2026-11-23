@@ -157,6 +157,46 @@ export class AuthenticationRequiredError extends Error {
 }
 
 /**
+ * The request carries a session cookie and a personal API token. Which of the two is
+ * meant is not for the server to guess, and a request that mixes them is more likely a
+ * client that is confused than one that is right, so it is refused whole. Maps to a 400
+ * `ambiguous-credentials`. The message and the response name neither credential.
+ */
+export class AmbiguousCredentialsError extends Error {
+  constructor() {
+    super('The request carries two credentials');
+    this.name = 'AmbiguousCredentialsError';
+  }
+}
+
+/**
+ * The request carries a personal API token and the route does not accept tokens. A route
+ * refuses them unless it declares `tokenAccess` (CLAUDE.md, Code rules), and the routes
+ * that sign people in, secure an account, hand out access or manage tokens never do. It is
+ * refused before the token is looked up, so the answer says nothing about the token. Maps
+ * to a 403 `token-not-accepted`. The message and the response name no route.
+ */
+export class TokenNotAcceptedError extends Error {
+  constructor() {
+    super('The route does not take API tokens');
+    this.name = 'TokenNotAcceptedError';
+  }
+}
+
+/**
+ * The request carries a personal API token that can only read, and the route changes
+ * data (it says `tokenAccess: 'write'`). Maps to a 403 `token-read-only`. Said only after
+ * the token was accepted, so it tells nobody anything about a token that does not work.
+ * The message and the response name no route.
+ */
+export class TokenReadOnlyError extends Error {
+  constructor() {
+    super('The token can only read');
+    this.name = 'TokenReadOnlyError';
+  }
+}
+
+/**
  * A request that changes data did not come from this server's own origin
  * (cross-site request forgery defence): it has a session cookie, or is to a route
  * that makes a session (`config.requireOrigin`), and its `Origin` is missing or
@@ -430,6 +470,29 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
     code: 'bad-request',
     title: 'Bad request',
     detail: 'A value in the request is not accepted.',
+  },
+  {
+    errorClass: AmbiguousCredentialsError,
+    status: 400,
+    code: 'ambiguous-credentials',
+    title: 'Two credentials',
+    detail: 'Send either a session cookie or an API token, not both.',
+  },
+  {
+    errorClass: TokenNotAcceptedError,
+    status: 403,
+    code: 'token-not-accepted',
+    title: 'API tokens not accepted here',
+    detail:
+      'This endpoint cannot be used with an API token. Sign in to use it.',
+  },
+  {
+    errorClass: TokenReadOnlyError,
+    status: 403,
+    code: 'token-read-only',
+    title: 'Token can only read',
+    detail:
+      'This endpoint changes data, and this API token can only read. Make a token that can write.',
   },
   {
     errorClass: OriginMismatchError,

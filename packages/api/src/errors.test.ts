@@ -63,6 +63,7 @@ import {
 } from '@osfpm/core/src/sensitive/service.js';
 import { API_PREFIX } from './api-version.js';
 import {
+  AmbiguousCredentialsError,
   AuthenticationRequiredError,
   CurrentPasswordRejectedError,
   INTERNAL_ERRORS,
@@ -80,6 +81,8 @@ import {
   SetupRequiredError,
   SignInFailedError,
   StartingError,
+  TokenNotAcceptedError,
+  TokenReadOnlyError,
   TotpAlreadyEnrolledError,
   TotpCodeIncorrectError,
   TotpNotSetUpError,
@@ -190,6 +193,9 @@ const fixtures = new Map<abstract new (...args: never[]) => Error, () => Error>(
     [UserNotActiveError, () => new UserNotActiveError()],
     [MembershipNotActiveError, () => new MembershipNotActiveError()],
     [ResetLinkBusyError, () => new ResetLinkBusyError(ID)],
+    [AmbiguousCredentialsError, () => new AmbiguousCredentialsError()],
+    [TokenNotAcceptedError, () => new TokenNotAcceptedError()],
+    [TokenReadOnlyError, () => new TokenReadOnlyError()],
     [OriginMismatchError, () => new OriginMismatchError()],
     [RateLimitedError, () => new RateLimitedError()],
     [StartingError, () => new StartingError()],

@@ -8,7 +8,7 @@ Permission checks and the error a denied call throws. They run on the server onl
 - `AccessDeniedError` is thrown by a service for a denied call. The layer above maps it to a 403.
 - `PERMISSION_LISTS` (`permission-lists.ts`) is the one registry of every permission list a module declares. A module that adds a `*_PERMISSIONS` list adds it there; `permission-lists.test.ts` scans the core and fails when one is missing.
 - `permissionAccess(key)` (`permission-access.ts`) says whether a permission is `read` or `write`, from the `access` its definition declares. A key no list declares is `write`, so it fails closed. See "Read and write" below.
-- `AccessCredential` (`credential.ts`) is the shape of what a request came in with: a session, or a personal API token with its organisation, project, access and sensitive scope. `SESSION_CREDENTIAL` is the first. `authenticateApiToken` (`src/auth/`) answers the second.
+- `AccessCredential` (`credential.ts`) is the shape of what a request came in with: a session, or a personal API token with its organisation, project, access and sensitive scope. `SESSION_CREDENTIAL` is the first. `authenticateApiToken` (`src/auth/`) answers the second. `credentialPermits` is the narrowing of a token (see "A personal API token's checks" below), which the three checks above apply when they are given the credential as their last argument.
 - `userReachesProject(tx, userId, organisationId, projectId)` (`project-reach.ts`) says whether a person can reach a project at all (a membership of it, or a grant for every project), whatever permission they hold there. Making a token for a project asks it.
 - `readApiTokenSwitches(tx, organisationId)` (`api-token-switches.ts`) answers the two organisation switches for personal API tokens, `api.personal-tokens` and `api.personal-tokens.sensitive`, both off until the organisation's settings say `true`. The sensitive switch only counts while tokens are on.
 - `syncPermissions` and `PermissionDefinition` fill the `permission` catalogue from the keys a module declares. The API server calls it for every list in `PERMISSION_LISTS` when it starts (`packages/api/src/startup.ts`). It throws `PermissionSyncError` when a key is flagged sensitive while organisation roles hold `all-projects` grants of it (see below).
@@ -21,6 +21,17 @@ Permission checks and the error a denied call throws. They run on the server onl
 Every `PermissionDefinition` says `access: 'read' | 'write'`, and the type requires it, so a permission cannot be added without a class. `read` only looks at data; `write` also creates, changes, deletes or hands out access. A personal API token that can only read is refused every permission that is not `read`, which is why the class exists (SC-10, decision D-68). A permission that does both is `write`, so it fails closed: `contracts:read-value` shows contract amounts and also sets them, so a read token cannot hold it until it is split into a read and a write permission, when contracts get routes.
 
 The class lives in code only. It is not a column of the `permission` table, `syncPermissions` does not store it and no response serves it (`permission-access.test.ts` pins that). `permission-lists.test.ts` fails for an entry with no class, and for a key that ends in `:read` and is classed `write` without an `accessReason` in its definition, so a new read permission is not misclassed by accident.
+
+**A personal API token's checks** (SC-10, decisions D-17 and D-68)
+
+A token acts as its owner, narrowed, and never beyond. `hasOrganisationPermission`, `hasProjectPermission` and `hasScopedPermission` take a `credential` as a last argument; without one, or with a session's, they are not narrowed. With a token's, each first asks `credentialPermits`, and only then asks what the owner holds, so a token can only ever pass less than its owner. It refuses when:
+
+1. the scope is another organisation than the token's;
+2. the token is for one project and the scope is another project, or the organisation (a project token passes project checks for its project and no check at organisation level);
+3. the token is `read` and the permission is classed `write` (`permissionAccess`, which answers `write` for a key no list declares);
+4. the permission is sensitive (flagged `grants_sensitive`, and a key the catalogue does not know counts as one) and its key is not in the token's sensitive scope, or the organisation's sensitive switch is off at this moment. The owner holding the permission is then the ordinary check.
+
+A service that a token can reach must be given the credential by its caller and pass it to every check it makes: `MemberActor` and `SensitiveContext` carry it, and the API's `tokenAccess` routes hand it over (`requireCaller`). A service that does not takes no token, and the route that calls it must not say `tokenAccess`. Nothing here is fail-open for a token that is not passed: the plugin refuses a token on every route that does not say it can take one.
 
 **Organisation roles in projects**
 

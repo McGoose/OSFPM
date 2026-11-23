@@ -4,7 +4,7 @@ The people who belong to an organisation: who may list them, who may invite more
 
 **Entry points**
 
-- `listMembers(tx, { userId }, organisationId)` (`service.ts`) lists the organisation's undeleted memberships with user id, display name, address, tier, status and the keys of the live organisation roles. It needs `members:read`; a stranger, a member without it and an organisation that does not exist get the same `AccessDeniedError` with no scope. It reads `org_membership`, `org_membership_role` and `role` and, for a name and an address only, `user`.
+- `listMembers(tx, { userId, credential? }, organisationId)` (`service.ts`) lists the organisation's undeleted memberships with user id, display name, address, tier, status and the keys of the live organisation roles. It needs `members:read`, narrowed by the `credential` when the request came in with a personal API token (a token lists members for the whole organisation it belongs to, never as a project token); a stranger, a member without it and an organisation that does not exist get the same `AccessDeniedError` with no scope. It reads `org_membership`, `org_membership_role` and `role` and, for a name and an address only, `user`.
 - `MEMBER_PERMISSIONS` (`permissions.ts`), the catalogue rows of the three organisation-level permissions: `members:read` (list the members), `members:invite` (create, list and revoke invites) and `members:reset-access` (create and revoke reset links for members who are locked out). None is sensitive. The list is in `PERMISSION_LISTS`, so the server syncs it at start-up and the Administrator role is topped up with all three.
 
 **Rules you must not break**

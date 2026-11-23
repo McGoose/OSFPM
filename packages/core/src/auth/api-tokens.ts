@@ -226,6 +226,17 @@ export type ApiTokenSwitchesResult = ApiTokenSwitches & {
   readonly revoked: number;
 };
 
+/** What `authenticateApiToken` is told about the request the token came with. */
+export type AuthenticatingRequest = {
+  /**
+   * The organisation the request names in its path, when it names one. A token works in
+   * its own organisation only, so a token used for another's is refused like any other
+   * token that does not work (`wrong-organisation`): one answer, with the cause in the
+   * audit trail alone, and nothing said about whether the other organisation exists.
+   */
+  readonly organisationId?: string;
+};
+
 /** What `authenticateApiToken` answers for a token that works. */
 export type AuthenticatedApiToken = {
   /** What the token may do: pass it to the permission checks. */
@@ -1113,8 +1124,9 @@ type Outcome =
  * not revoked and not past its end (a token that ends exactly at `now` has ended); the
  * organisation's switch for personal tokens is on, and, if the token has a sensitive
  * scope, so is the sensitive switch (so a token is refused even if a revocation was
- * missed); its owner's account is active; and its owner's membership of the organisation
- * is active and not deleted.
+ * missed); its owner's account is active; its owner's membership of the organisation
+ * is active and not deleted; and the request does not name another organisation than
+ * the token's in its path (`request.organisationId`).
  *
  * Every other case is the same `ApiTokenInvalidError`, whether the token is unknown,
  * expired, revoked or refused for any of the other reasons, and a value that cannot be a
@@ -1137,6 +1149,7 @@ export async function authenticateApiToken(
   tx: Tx,
   token: string,
   now: Date,
+  request: AuthenticatingRequest = {},
 ): Promise<AuthenticatedApiToken> {
   const hash =
     typeof token === 'string' && TOKEN_SHAPE.test(token)
@@ -1198,6 +1211,14 @@ export async function authenticateApiToken(
       if (!switches.personalTokens) return refuse('switch-off', known);
       if (row.sensitivePermissions.length > 0 && !switches.sensitive) {
         return refuse('sensitive-switch-off', known);
+      }
+      // The request is for an organisation, and the token is another's. Last, so that
+      // the audit trail names the token's own trouble first when it has any.
+      if (
+        request.organisationId !== undefined &&
+        request.organisationId.toLowerCase() !== row.organisationId
+      ) {
+        return refuse('wrong-organisation', known);
       }
       // One conditional UPDATE, so two requests that both see a stale value write once.
       const due = new Date(now.getTime() - SESSION_DEFAULTS.slideIntervalMs);
