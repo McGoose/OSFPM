@@ -632,12 +632,7 @@ export async function revokeAccessGrant(
             .limit(1)
             .for('update')
         )[0];
-      let live = await lockLive();
-      // A change that held the live grant while this waited for it has revoked it and made
-      // a new one, which the waiting statement cannot see. Looking once more, with a new
-      // snapshot, finds the new one, so a revoke that raced a replacement ends the grant
-      // and is not told it was already gone.
-      if (live === undefined) live = await lockLive();
+      const live = await lockLive();
       if (live === undefined) throw missing();
       // An editor ends only what staff recorded; the person's own grants are theirs.
       if (subject.standing === 'editor' && !live.onBehalf) throw missing();
