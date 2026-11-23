@@ -95,9 +95,13 @@ import { generateToken, hashToken } from './tokens.js';
  *
  * Pass the transaction handle and the time as `now`. The services that decide for a
  * signed-in person check their permission themselves, in the organisation: `api:tokens`
- * for the owner's own tokens, `api:manage` for the switches and for any token's metadata
- * and revocation. `authenticateApiToken` takes the token as the capability and checks no
- * permission.
+ * to make a token, `api:manage` for the switches and for any token's metadata and
+ * revocation. Listing and revoking your own tokens needs no permission: it shows a person
+ * what is theirs and only takes access away, and a person who lost `api:tokens` must still
+ * be able to see and end the tokens they made. `authenticateApiToken` takes the token as
+ * the capability, and checks that its owner still holds `api:tokens` in the token's
+ * organisation: a token is its owner's access, narrowed, and an owner who may no longer
+ * make tokens has none to lend a script.
  *
  * Lock order (CLAUDE.md, Data rules). Anything that writes a switch or reads one to decide
  * on a token takes the organisation's change counter first (`lockOrganisationChanges`):
@@ -651,9 +655,12 @@ export async function createApiToken(
 /**
  * Lists the person's own tokens in the organisation that still work at `now`, newest
  * first: not revoked, and not past their end. Never a token or its hash: the token was
- * shown once, when it was made. Needs `api:tokens` in the organisation.
+ * shown once, when it was made. Needs no permission: the list is the person's own
+ * metadata, so a person who lost `api:tokens` still sees the tokens they made (they no
+ * longer work, `authenticateApiToken`) and can end them. Anyone else, a stranger and an
+ * organisation that does not exist included, gets an empty list, which says nothing about
+ * what exists.
  *
- * @throws AccessDeniedError, with no scope, without the permission.
  * @throws RecordWriteError when the database fails.
  */
 export function listOwnApiTokens(
@@ -663,12 +670,10 @@ export function listOwnApiTokens(
   now: Date,
 ): Promise<ApiTokenView[]> {
   return guardedAuth('api_token', 'select', async () => {
-    await requirePermission(
-      tx,
-      actor.userId,
-      organisationId,
-      API_TOKENS_PERMISSION,
-    );
+    // A value that is not an id matches nothing, and never reaches a `uuid` column.
+    if (!UUID_SHAPE.test(actor.userId) || !UUID_SHAPE.test(organisationId)) {
+      return [];
+    }
     const rows = await tx
       .select(viewColumns)
       .from(apiToken)
@@ -736,7 +741,12 @@ async function revokeOne(
   tokenId: string,
   now: Date,
 ): Promise<void> {
-  if (!UUID_SHAPE.test(tokenId)) {
+  // A value that is not an id matches no token, and never reaches a `uuid` column.
+  if (
+    !UUID_SHAPE.test(tokenId) ||
+    !UUID_SHAPE.test(organisationId) ||
+    !UUID_SHAPE.test(actorId)
+  ) {
     throw new RecordNotFoundError('api_token', tokenId);
   }
   const [row] = await tx
@@ -772,12 +782,12 @@ async function revokeOne(
 }
 
 /**
- * Revokes one of the person's own tokens, so it stops working at once. Needs `api:tokens`
- * in the organisation. Another person's token, an unknown one and one that is not live
- * (revoked, or past its end) are the same `RecordNotFoundError`, so a member cannot tell a
- * token that exists from one that does not. Audited as `auth.api-token-revoked`.
+ * Revokes one of the person's own tokens, so it stops working at once. Needs no
+ * permission: revoking only takes access away, and a person who lost `api:tokens` must be
+ * able to end the tokens they made. Another person's token, an unknown one and one that is
+ * not live (revoked, or past its end) are the same `RecordNotFoundError`, so nobody can
+ * tell a token that exists from one that does not. Audited as `auth.api-token-revoked`.
  *
- * @throws AccessDeniedError, with no scope, without the permission.
  * @throws RecordNotFoundError when the person has no live token with this id here.
  * @throws RecordWriteError when the database refuses a write; it carries the SQLSTATE only.
  */
@@ -790,12 +800,6 @@ export function revokeOwnApiToken(
 ): Promise<void> {
   return guardedAuth('api_token', 'update', () =>
     tx.transaction(async (inner) => {
-      await requirePermission(
-        inner,
-        actor.userId,
-        organisationId,
-        API_TOKENS_PERMISSION,
-      );
       await revokeOne(
         inner,
         actor.userId,
@@ -840,11 +844,11 @@ export function revokeAnyApiToken(
 /**
  * The one entry for `DELETE /organisations/:organisationId/api-tokens/:tokenId`: a person
  * who holds `api:manage` revokes any live token of the organisation (`revokeAnyApiToken`),
- * and a person who holds only `api:tokens` revokes their own (`revokeOwnApiToken`), and
+ * and anyone else revokes their own (`revokeOwnApiToken`, which needs no permission), and
  * meets a not found for anyone else's, so it cannot be used to find out whose a token is.
- * A person who holds neither is refused.
+ * So a person with no permission at all gets that same not found, and a stranger or an
+ * organisation that does not exist is no different.
  *
- * @throws AccessDeniedError, with no scope, for a person who holds neither permission.
  * @throws RecordNotFoundError when no live token that the person may revoke has this id.
  * @throws RecordWriteError when the database refuses a write; it carries the SQLSTATE only.
  */
@@ -877,12 +881,6 @@ export function revokeApiToken(
         );
         return;
       }
-      await requirePermission(
-        inner,
-        actor.userId,
-        organisationId,
-        API_TOKENS_PERMISSION,
-      );
       await revokeOne(
         inner,
         actor.userId,
@@ -1170,13 +1168,15 @@ type Outcome =
 /**
  * Finds the live token for a raw value and the person who owns it, and answers what the
  * token may do (`credential`) and who it acts as (`user`). Takes the token as the
- * capability and checks no permission. A token works only when all of these hold: it is
+ * capability. A token works only when all of these hold: it is
  * not revoked and not past its end (a token that ends exactly at `now` has ended); the
  * organisation's switch for personal tokens is on, and, if the token has a sensitive
  * scope, so is the sensitive switch (so a token is refused even if a revocation was
  * missed); its owner's account is active; its owner's membership of the organisation
- * is active and not deleted; and the request does not name another organisation than
- * the token's in its path (`request.organisationId`).
+ * is active and not deleted; its owner still holds `api:tokens` in the organisation
+ * (`permission-missing` otherwise: the token is not revoked, and works again when they
+ * hold it again); and the request does not name another organisation than the token's in
+ * its path (`request.organisationId`).
  *
  * Every other case is the same `ApiTokenInvalidError`, whether the token is unknown,
  * expired, revoked or refused for any of the other reasons, and a value that cannot be a
@@ -1262,6 +1262,21 @@ export async function authenticateApiToken(
       if (!switches.personalTokens) return refuse('switch-off', known);
       if (row.sensitivePermissions.length > 0 && !switches.sensitive) {
         return refuse('sensitive-switch-off', known);
+      }
+      // A token is its owner's access, narrowed, so an owner who no longer holds the
+      // permission that let them make it has none to lend a script. Refused, not
+      // revoked: the roles of a person change, and the token works again when they hold
+      // the permission again. It reads the permission as a session's checks do, so the
+      // answer is the owner's own.
+      if (
+        !(await hasOrganisationPermission(
+          tx,
+          row.user.id,
+          row.organisationId,
+          API_TOKENS_PERMISSION,
+        ))
+      ) {
+        return refuse('permission-missing', known);
       }
       // The request is for an organisation, and the token is another's. Last, so that
       // the audit trail names the token's own trouble first when it has any.

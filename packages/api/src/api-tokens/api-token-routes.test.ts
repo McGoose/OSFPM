@@ -4,6 +4,7 @@ import { createSession } from '@osfpm/core/src/auth/sessions.js';
 import {
   everyRowAsText,
   seedTokenScene,
+  setMemberRolesEnded,
   type TokenScene,
 } from '@osfpm/core/src/auth/test-support.js';
 import { migrate } from '@osfpm/core/src/db/migrate.js';
@@ -654,8 +655,9 @@ describe.each(testTargets)(
           });
           expect(refused.statusCode).toBe(403);
         }
-        // `own` is the default, a person who may only manage may not list their own, and
-        // a value that is neither is a bad request.
+        // `own` is the default and needs no permission: a person who may only manage, one
+        // who holds nothing and a stranger list their own, which is none, and learn
+        // nothing else. A value that is neither is a bad request.
         expect(
           (
             await send('GET', `${tokensPath()}?scope=own`, {
@@ -663,9 +665,11 @@ describe.each(testTargets)(
             })
           ).statusCode,
         ).toBe(200);
-        expect(
-          (await send('GET', tokensPath(), { session: manager })).statusCode,
-        ).toBe(403);
+        for (const session of [manager, plain, stranger]) {
+          const own = await send('GET', tokensPath(), { session });
+          expect(own.statusCode).toBe(200);
+          expect(own.json()).toEqual([]);
+        }
         expect(
           (
             await send('GET', `${tokensPath()}?scope=everyone`, {
@@ -674,6 +678,21 @@ describe.each(testTargets)(
           ).statusCode,
         ).toBe(400);
         expect((await send('GET', tokensPath())).statusCode).toBe(401);
+      });
+
+      it('is a self-service route for your own: 401 without a session and 403 for a recovery session, with no permission to lack', async () => {
+        const recovery = await sessionOf(scene.tokensId, 'recovery');
+        for (const query of ['', '?scope=own', '?scope=all']) {
+          const none = await send('GET', `${tokensPath()}${query}`);
+          expect(none.statusCode, query).toBe(401);
+          const limited = await send('GET', `${tokensPath()}${query}`, {
+            session: recovery,
+          });
+          expect(limited.statusCode, query).toBe(403);
+          expect(limited.json<{ code: string }>().code).toBe(
+            'account-recovery-required',
+          );
+        }
       });
     });
 
@@ -725,12 +744,15 @@ describe.each(testTargets)(
         expect(unknown.statusCode).toBe(404);
         expect(sameness(refused.json())).toBe(sameness(unknown.json()));
         for (const session of [plain, stranger]) {
+          // Revoking your own needs no permission, so a person with none is no
+          // different from one who holds api:tokens: the token is not theirs.
           const denied = await send(
             'DELETE',
             `${tokensPath()}/${theirs.apiToken.id}`,
             { session },
           );
-          expect(denied.statusCode).toBe(403);
+          expect(denied.statusCode).toBe(404);
+          expect(sameness(denied.json())).toBe(sameness(unknown.json()));
         }
         const ended = await send(
           'DELETE',
@@ -745,6 +767,46 @@ describe.each(testTargets)(
             })
           ).statusCode,
         ).toBe(400);
+      });
+
+      it('stops a token whose owner lost api:tokens, who can still list and end it, and starts it again when they hold the permission again', async () => {
+        await switchesNow(true, false);
+        const token = await made(tokensUser, { name: 'Left behind' });
+        const meta = () => send('GET', '/meta', { bearer: token.token });
+        expect((await meta()).statusCode).toBe(200);
+        const lose = () =>
+          setMemberRolesEnded(ctx.database, org(), scene.tokensId, true);
+        const regain = () =>
+          setMemberRolesEnded(ctx.database, org(), scene.tokensId, false);
+        await lose();
+        try {
+          const refused = await meta();
+          expect(refused.statusCode).toBe(401);
+          expect(refused.json<{ code: string }>().code).toBe('invalid-token');
+          // Listing and revoking your own need no permission, making one does.
+          const own = await send('GET', tokensPath(), { session: tokensUser });
+          expect(own.statusCode).toBe(200);
+          expect(own.json<{ id: string }[]>().map((row) => row.id)).toContain(
+            token.apiToken.id,
+          );
+          expect((await createToken(tokensUser)).statusCode).toBe(403);
+        } finally {
+          await regain();
+        }
+        // Nothing was revoked: the token works again.
+        expect((await meta()).statusCode).toBe(200);
+        await lose();
+        try {
+          const ended = await send(
+            'DELETE',
+            `${tokensPath()}/${token.apiToken.id}`,
+            { session: tokensUser },
+          );
+          expect(ended.statusCode).toBe(204);
+        } finally {
+          await regain();
+        }
+        expect((await meta()).statusCode).toBe(401);
       });
 
       it('needs the right Origin and a session, as every route that changes data', async () => {
@@ -765,6 +827,21 @@ describe.each(testTargets)(
           (await send('DELETE', `${tokensPath()}/${token.apiToken.id}`, {}))
             .statusCode,
         ).toBe(401);
+        // Your own needs no permission, so this is a self-service route: a session that
+        // may only secure the account is refused all the same, and nothing is revoked.
+        const recovery = await sessionOf(scene.tokensId, 'recovery');
+        const limited = await send(
+          'DELETE',
+          `${tokensPath()}/${token.apiToken.id}`,
+          { session: recovery },
+        );
+        expect(limited.statusCode).toBe(403);
+        expect(limited.json<{ code: string }>().code).toBe(
+          'account-recovery-required',
+        );
+        expect(
+          (await send('GET', '/meta', { bearer: token.token })).statusCode,
+        ).toBe(200);
       });
     });
 

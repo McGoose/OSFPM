@@ -5,7 +5,7 @@ import {
   randomBytes,
   sign,
 } from 'node:crypto';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { Secret, TOTP } from 'otpauth';
 import type {
   AuthenticationResponseJSON,
@@ -870,6 +870,39 @@ export async function setMembershipStatus(
       and(
         eq(orgMembership.organisationId, organisationId),
         eq(orgMembership.userId, userId),
+      ),
+    );
+}
+
+/**
+ * Ends the organisation roles a member holds (`ended: true`), or puts them back
+ * (`ended: false`), by marking their `org_membership_role` rows deleted or not, as a
+ * later release's own role service would. The membership stays active. So a test can show
+ * what happens to a token when its owner stops holding a permission they held when it was
+ * made, and what happens when they hold it again.
+ */
+export async function setMemberRolesEnded(
+  database: Database,
+  organisationId: string,
+  userId: string,
+  ended: boolean,
+): Promise<void> {
+  const memberships = database.db
+    .select({ id: orgMembership.id })
+    .from(orgMembership)
+    .where(
+      and(
+        eq(orgMembership.organisationId, organisationId),
+        eq(orgMembership.userId, userId),
+      ),
+    );
+  await database.db
+    .update(orgMembershipRole)
+    .set({ deletedAt: ended ? new Date() : null })
+    .where(
+      and(
+        eq(orgMembershipRole.organisationId, organisationId),
+        inArray(orgMembershipRole.membershipId, memberships),
       ),
     );
 }

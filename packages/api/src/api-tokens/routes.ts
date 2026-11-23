@@ -43,9 +43,12 @@ const tokenParams = organisationParams.extend({
  * `tokenAccess`, so a token on one is a 403 `token-not-accepted`, and a token never
  * manages tokens or their switches. The permission is checked in the core, in the
  * organisation: `api:manage` for the switches and for the list and revocation of anyone's
- * tokens, and `api:tokens` for making, listing and revoking your own. Whoever is not
- * allowed, whether they are a member without the permission, a stranger, or the
- * organisation does not exist, gets the same 403.
+ * tokens, and `api:tokens` for making one. Listing and revoking your own needs none (a
+ * person who lost `api:tokens` can still see and end the tokens they made), so those two
+ * are self-service: someone else's token is a 404, and a list with nothing of yours is
+ * empty, whoever asks. For the routes that need a permission, whoever is not allowed,
+ * whether they are a member without the permission, a stranger, or the organisation does
+ * not exist, gets the same 403.
  *
  * The token is in the response that makes it, once. No list, and no other response,
  * holds a token or its hash, and neither is ever logged or audited (CLAUDE.md, Privacy
@@ -197,7 +200,7 @@ export const apiTokenRoutes: FastifyPluginAsyncZod = (app) => {
       schema: {
         summary: 'List personal API tokens',
         description:
-          'The tokens that still work, newest first: not revoked and not past their end. `scope=own` (the default) is the person’s own and needs `api:tokens`; `scope=all` is everyone’s in the organisation, with the owner’s `userId` and `ownerDisplayName`, and needs `api:manage`. Metadata only, which is the prefix, access, sensitive scope and expiry, and `neverExpires`: never a token or a hash.',
+          'The tokens that still work, newest first: not revoked and not past their end. `scope=own` (the default) is the person’s own and needs no permission: a person who lost `api:tokens` still sees the tokens they made, which no longer work, and anyone with none gets an empty list. `scope=all` is everyone’s in the organisation, with the owner’s `userId` and `ownerDisplayName`, and needs `api:manage`. Metadata only, which is the prefix, access, sensitive scope and expiry, and `neverExpires`: never a token or a hash.',
         params: organisationParams,
         querystring: z.object({
           scope: z
@@ -245,7 +248,7 @@ export const apiTokenRoutes: FastifyPluginAsyncZod = (app) => {
       schema: {
         summary: 'Revoke a personal API token',
         description:
-          'Revokes a token that still works, so it stops working at once. A person’s own tokens need `api:tokens`; anyone else’s need `api:manage`. A token that is unknown, another organisation’s, already revoked or past its end, and another person’s for a member who may only revoke their own, all give the same 404.',
+          'Revokes a token that still works, so it stops working at once. A person’s own tokens need no permission, because revoking only takes access away; anyone else’s need `api:manage`. A token that is unknown, another organisation’s, already revoked or past its end, and another person’s for anyone without `api:manage`, all give the same 404.',
         params: tokenParams,
         response: {
           204: z.null().describe('The token is revoked.'),

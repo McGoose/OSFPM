@@ -34,6 +34,7 @@ import {
   everyRowAsText,
   seedApiToken,
   seedTokenScene,
+  setMemberRolesEnded,
   setMembershipStatus,
   type TokenScene,
 } from './test-support.js';
@@ -676,7 +677,7 @@ describe.each(testTargets)('personal API tokens on $name', (target) => {
   });
 
   describe('listing', () => {
-    it('shows a member their own live tokens, newest first, with no hash, and needs api:tokens', async () => {
+    it('shows a member their own live tokens, newest first, with no hash', async () => {
       await turn(true, true);
       const first = await make(scene.medicalId, { name: 'First' }, next());
       const second = await make(
@@ -737,13 +738,44 @@ describe.each(testTargets)('personal API tokens on $name', (target) => {
           'userId',
         ].sort(),
       );
-      for (const userId of [scene.managerId, scene.plainId, scene.strangerId]) {
-        await expect(
-          db().transaction((tx) =>
-            listOwnApiTokens(tx, { userId }, scene.organisationId, next()),
-          ),
-        ).rejects.toBeInstanceOf(AccessDeniedError);
+    });
+
+    it('needs no permission for your own: a person who lost api:tokens still lists what they made, and everyone else’s list is empty', async () => {
+      await turn(true);
+      const left = await make(scene.tokensId, { name: 'Left behind' });
+      await make(scene.medicalId, { name: 'Someone else’s' });
+      const listOwn = (userId: string, organisationId = scene.organisationId) =>
+        db().transaction((tx) =>
+          listOwnApiTokens(tx, { userId }, organisationId, next()),
+        );
+      await setMemberRolesEnded(
+        database,
+        scene.organisationId,
+        scene.tokensId,
+        true,
+      );
+      try {
+        const list = await listOwn(scene.tokensId);
+        expect(list.map((view) => view.id)).toEqual([left.apiToken.id]);
+      } finally {
+        await setMemberRolesEnded(
+          database,
+          scene.organisationId,
+          scene.tokensId,
+          false,
+        );
       }
+      // Nobody else sees it, whatever they hold: a member without the permission, a
+      // member who manages tokens, a stranger, another organisation and a malformed id
+      // all get an empty list, which says nothing about whether anything exists.
+      for (const userId of [scene.plainId, scene.managerId, scene.strangerId]) {
+        expect(await listOwn(userId), userId).toEqual([]);
+      }
+      expect(await listOwn(scene.tokensId, scene.otherOrganisationId)).toEqual(
+        [],
+      );
+      expect(await listOwn(scene.tokensId, 'not-an-id')).toEqual([]);
+      expect(await listOwn('not-an-id')).toEqual([]);
     });
 
     it('lets api:manage list every live token of the organisation with its owner, and nobody else', async () => {
@@ -904,13 +936,14 @@ describe.each(testTargets)('personal API tokens on $name', (target) => {
       expect(await revokeEvents(again)).toEqual([]);
     });
 
-    it('needs api:tokens to revoke your own, and api:manage to revoke anyone’s', async () => {
+    it('needs no permission to revoke your own, which only takes access away, and api:manage to revoke anyone’s', async () => {
       await turn(true);
       const made = await make(scene.tokensId);
+      // Anyone else’s token is a not found whoever asks, with or without a permission.
       for (const userId of [scene.managerId, scene.plainId, scene.strangerId]) {
         expect(
           await errorOf(revokeOwn(userId, made.apiToken.id)),
-        ).toBeInstanceOf(AccessDeniedError);
+        ).toBeInstanceOf(RecordNotFoundError);
       }
       // Holding api:tokens is not enough to revoke someone else's token.
       expect(
@@ -931,7 +964,36 @@ describe.each(testTargets)('personal API tokens on $name', (target) => {
       });
     });
 
-    it('is one entry for the route: the owner revokes their own, a manager anyone’s, and a member with neither is refused', async () => {
+    it('lets a person who lost api:tokens revoke their own token, which is audited as any revoke is', async () => {
+      await turn(true);
+      const made = await make(scene.tokensId);
+      await setMemberRolesEnded(
+        database,
+        scene.organisationId,
+        scene.tokensId,
+        true,
+      );
+      const now = next();
+      try {
+        await revokeOwn(scene.tokensId, made.apiToken.id, now);
+      } finally {
+        await setMemberRolesEnded(
+          database,
+          scene.organisationId,
+          scene.tokensId,
+          false,
+        );
+      }
+      expect((await stored())[0]).toMatchObject({
+        revokedAt: now,
+        revokeReason: 'manual',
+        revokedBy: scene.tokensId,
+        version: 2,
+      });
+      expect(await revokeEvents(now)).toHaveLength(1);
+    });
+
+    it('is one entry for the route: the owner revokes their own, a manager anyone’s, and anyone else meets a not found', async () => {
       await turn(true);
       const mine = await make(scene.tokensId);
       const medical = await make(scene.medicalId);
@@ -947,11 +1009,15 @@ describe.each(testTargets)('personal API tokens on $name', (target) => {
       ).toBeInstanceOf(RecordNotFoundError);
       await revoke(scene.managerId, medical.apiToken.id);
       await revoke(scene.ownerId, third.apiToken.id);
+      // A person with neither permission is no different from one who has api:tokens: the
+      // token is not theirs, and that is all the answer says.
+      const fresh = await make(scene.medicalId);
       for (const userId of [scene.plainId, scene.strangerId]) {
-        expect(await errorOf(revoke(userId, third.apiToken.id))).toBeInstanceOf(
-          AccessDeniedError,
+        expect(await errorOf(revoke(userId, fresh.apiToken.id))).toBeInstanceOf(
+          RecordNotFoundError,
         );
       }
+      await revoke(scene.ownerId, fresh.apiToken.id);
       expect((await stored()).every((row) => row.revokedAt !== null)).toBe(
         true,
       );

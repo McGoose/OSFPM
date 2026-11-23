@@ -19,6 +19,12 @@ export const API_TOKEN_FAILURE_REASONS = [
   'user-not-active',
   /** The owner's membership of the organisation is not active. */
   'membership-not-active',
+  /**
+   * The owner no longer holds `api:tokens` in the organisation, the permission that let
+   * them make the token. The token is not revoked: it works again if they hold the
+   * permission again.
+   */
+  'permission-missing',
   /** The request names another organisation in its path than the token's. */
   'wrong-organisation',
 ] as const;
@@ -40,7 +46,8 @@ export class ApiTokenRefusedError extends Error {
 
 /**
  * The token does not work: unknown, expired, revoked, refused because a switch is off,
- * or its owner's account or membership is not active. One error for all of them, so a
+ * or its owner's account or membership is not active, or its owner no longer holds
+ * `api:tokens` in the organisation. One error for all of them, so a
  * caller, and a response, never says which (SC-10), and never anything about the token
  * or its owner. The `reason` is kept for the audit event only, which the service writes
  * before it throws this: the caller catches it inside its transaction and commits, so

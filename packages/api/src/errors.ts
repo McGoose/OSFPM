@@ -434,8 +434,9 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
   },
   {
     // The one answer to every personal API token that does not work: unknown, expired,
-    // revoked, refused because a switch is off, or its owner's account or membership is
-    // not active. The cause is in the audit trail alone.
+    // revoked, refused because a switch is off, its owner's account or membership is not
+    // active, or its owner no longer holds `api:tokens`. The cause is in the audit trail
+    // alone.
     errorClass: ApiTokenInvalidError,
     status: 401,
     code: 'invalid-token',

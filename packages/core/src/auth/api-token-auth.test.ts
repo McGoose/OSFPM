@@ -27,6 +27,7 @@ import {
   everyRowAsText,
   markUserDeleted,
   seedTokenScene,
+  setMemberRolesEnded,
   setMembershipStatus,
   setUserStatus,
   type TokenScene,
@@ -64,6 +65,7 @@ describe.each(testTargets)('using a personal API token on $name', (target) => {
   const restorePeople = async () => {
     for (const userId of [scene.tokensId, scene.medicalId]) {
       await setUserStatus(database, userId, 'active');
+      await setMemberRolesEnded(database, scene.organisationId, userId, false);
       await setMembershipStatus(
         database,
         scene.organisationId,
@@ -345,6 +347,33 @@ describe.each(testTargets)('using a personal API token on $name', (target) => {
             return { token: made.token, id: made.apiToken.id, now: next() };
           },
         },
+        {
+          // The role that gave the permission was taken away after the token was made.
+          reason: 'permission-missing',
+          spoil: async () => {
+            const made = await make(scene.tokensId);
+            await setMemberRolesEnded(
+              database,
+              scene.organisationId,
+              scene.tokensId,
+              true,
+            );
+            return { token: made.token, id: made.apiToken.id, now: next() };
+          },
+        },
+        {
+          // api:manage is not api:tokens: a token that ends up with a person who holds
+          // only the first does not work either.
+          reason: 'permission-missing',
+          spoil: async () => {
+            const made = await make(scene.tokensId);
+            await db()
+              .update(apiToken)
+              .set({ userId: scene.managerId })
+              .where(eq(apiToken.id, made.apiToken.id));
+            return { token: made.token, id: made.apiToken.id, now: next() };
+          },
+        },
       ];
 
       it('lists every reason the audit trail can give, and each case below uses one of them', () => {
@@ -487,6 +516,42 @@ describe.each(testTargets)('using a personal API token on $name', (target) => {
             (row) => row.id === made.apiToken.id,
           )!.lastUsedAt,
         ).toBeNull();
+      });
+
+      it('refuses a token while its owner lacks api:tokens, and works again when they hold it again: nothing was revoked', async () => {
+        await turn(true);
+        const made = await make(scene.tokensId);
+        expect((await authenticate(made.token, next())).ok).toBe(true);
+        await setMemberRolesEnded(
+          database,
+          scene.organisationId,
+          scene.tokensId,
+          true,
+        );
+        const refusedAt = next();
+        const refused = await authenticate(made.token, refusedAt);
+        expect(refused.ok).toBe(false);
+        if (!refused.ok) {
+          expect(refused.error.reason).toBe('permission-missing');
+        }
+        expect(await failuresAt(refusedAt)).toHaveLength(1);
+        // The token is not touched: only the permission is missing, and that can change.
+        const row = async () =>
+          (await db().select().from(apiToken)).find(
+            (candidate) => candidate.id === made.apiToken.id,
+          )!;
+        expect(await row()).toMatchObject({
+          revokedAt: null,
+          revokeReason: null,
+          version: 1,
+        });
+        await setMemberRolesEnded(
+          database,
+          scene.organisationId,
+          scene.tokensId,
+          false,
+        );
+        expect((await authenticate(made.token, next())).ok).toBe(true);
       });
 
       it('keeps refusing a token after its organisation turned tokens off and on again: the switch restores nothing', async () => {
