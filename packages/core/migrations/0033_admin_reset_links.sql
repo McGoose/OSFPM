@@ -35,4 +35,5 @@ ALTER TABLE "access_reset" ADD CONSTRAINT "access_reset_user_fk" FOREIGN KEY ("u
 ALTER TABLE "access_reset" ADD CONSTRAINT "access_reset_org_membership_fk" FOREIGN KEY ("organisation_id","user_id") REFERENCES "public"."org_membership"("organisation_id","user_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "access_reset" ADD CONSTRAINT "access_reset_revoked_by_fk" FOREIGN KEY ("revoked_by") REFERENCES "public"."user"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "access_reset_organisation_user_idx" ON "access_reset" USING btree ("organisation_id","user_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "access_reset_live_unique" ON "access_reset" USING btree ("organisation_id","user_id") WHERE "access_reset"."used_at" is null and "access_reset"."revoked_at" is null;--> statement-breakpoint
 ALTER TABLE "session" ADD CONSTRAINT "session_method_check" CHECK ("session"."method" in ('passkey', 'password', 'password+totp', 'recovery', 'setup', 'invite', 'reset'));

@@ -1,5 +1,5 @@
 {
-  "id": "258a1a4c-6c42-4f05-a77a-4f46fc6443b5",
+  "id": "ce2c6bcf-ae57-4530-8469-f7d447e2cbed",
   "prevId": "f8aa4255-920a-4f13-858e-f98d2f969610",
   "version": "7",
   "dialect": "postgresql",
@@ -140,6 +140,28 @@
             }
           ],
           "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "access_reset_live_unique": {
+          "name": "access_reset_live_unique",
+          "columns": [
+            {
+              "expression": "organisation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"access_reset\".\"used_at\" is null and \"access_reset\".\"revoked_at\" is null",
           "concurrently": false,
           "method": "btree",
           "with": {}

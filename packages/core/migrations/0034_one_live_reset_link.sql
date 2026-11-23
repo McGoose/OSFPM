@@ -1,1 +1,0 @@
-CREATE UNIQUE INDEX "access_reset_live_unique" ON "access_reset" USING btree ("organisation_id","user_id") WHERE "access_reset"."used_at" is null and "access_reset"."revoked_at" is null;
