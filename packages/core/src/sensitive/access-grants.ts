@@ -863,7 +863,7 @@ export async function shareWithSuggestedRoles(
   // profile ends the person's accessibility grants, and without the lock it could commit
   // between this read and the writes below, leaving grants of a profile that is gone.
   const source = await loadGovernedSource(tx, subject.person, checkedCategory, {
-    lockProfile: !preview,
+    lockProfile: false,
   });
   const payload = source?.payload ?? {};
   await recordAudit(tx, {
