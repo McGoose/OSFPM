@@ -60,6 +60,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - The API package never imports drizzle-orm; it calls core services.
 - Every new route declares `auth`; the default is `required`. Cookie requests that change data must pass the Origin check.
 - Every route that creates a session passes the Origin check, with or without a cookie.
+- Routes refuse API tokens unless they declare `tokenAccess`; credential, account and token-management routes never do. A token passes a sensitive permission check only through its explicit sensitive scope, with the organisation's sensitive-token switch on.
 - Status codes: 401 = not signed in; 403 = signed in but not allowed; 404 for by-id lookups where existence must not leak.
 - Login failures always answer the same 401 `sign-in-failed`; never reveal which part failed.
 - Log lines use the logger's known keys (req, res, err) or plain scalar fields; never log whole objects or request data.
