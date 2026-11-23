@@ -6,7 +6,7 @@ The member and invite routes (spec card SC-10, decision D-57): an administrator 
 
 - `organisation-routes.ts`: `organisationInviteRoutes`, under `/api/v1/organisations/:organisationId`: `GET /members`, `POST /invites`, `GET /invites` and `DELETE /invites/:inviteId`. Each needs a session, counts against the limit per session, and a request that changes data needs the right `Origin`. The permission (`members:read` or `members:invite`) is checked in the core, in the organisation; a stranger, a member without it and an organisation that does not exist get the same 403.
 - `public-routes.ts`: `publicInviteRoutes`, under `/api/v1/invites`: `POST /inspect` (`auth: 'none'`) and `POST /accept` (`auth: 'optional'`). Both count against the strict limit per address and need the right `Origin` with a cookie or without one, because accepting makes a session.
-- `refusals.ts`: `withRefusalsCommitted`, which runs a route's work in one transaction and commits before it throws an invite refusal, so the audit event of a refusal is kept.
+- `refusals.ts`: `withRefusalsCommitted`, which runs a route's work in one transaction and commits before it throws an invite refusal (or the one answer of a reset link that does not work, see `../access-reset/`), so the audit event of a refusal is kept.
 - `schemas.ts`: the response schemas and problem answers the routes share.
 
 **Rules you must not break**
