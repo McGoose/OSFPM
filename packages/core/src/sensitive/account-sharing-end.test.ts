@@ -13,6 +13,11 @@ import {
   userAccessProfile,
 } from '../db/schema/index.js';
 import { createMigratedDatabase, testTargets } from '../db/test-support.js';
+import { PREFERENCE_DEFAULTS } from '../preferences/schemas.js';
+import {
+  readOwnPreferences,
+  saveOwnPreferences,
+} from '../preferences/service.js';
 import {
   createAccessGrant,
   revokeAccessGrant,
@@ -276,6 +281,46 @@ describe.each(testTargets)(
       ]) {
         expect(text).not.toContain(name);
       }
+    });
+
+    it('erases the account’s delivery preferences too, with an event of their own, and the person starts again from the defaults', async () => {
+      const ines = await newHolder('Ines Kovac');
+      await saveOwnPreferences(db(), ctxFor(ines.userId), {
+        documentFormat: 'easy-read',
+        textSize: 'large',
+      });
+      const tomas = await newHolder('Tomas Berg');
+      await saveOwnPreferences(db(), ctxFor(tomas.userId), {
+        textSize: 'extra-large',
+      });
+
+      await markUserDeleted(database, ines.userId);
+      const result = await end(ines.userId);
+      await markUserRestored(database, ines.userId);
+
+      // Restored, the person has chosen nothing: the row is gone, not hidden.
+      expect(await readOwnPreferences(db(), ctxFor(ines.userId))).toEqual({
+        stored: {},
+        effective: PREFERENCE_DEFAULTS,
+      });
+      // The count of what was shared is as it was: the preferences have an event of their own.
+      expect(result).toEqual({
+        accessibilityGrants: 0,
+        medicalGrants: 0,
+        profileErased: true,
+      });
+      const [erased] = await eventsAbout(ines.userId, 'preferences.erased');
+      expect(erased).toMatchObject({
+        actorType: 'system',
+        actorId: null,
+        targetType: 'user',
+        occurredAt: NOW,
+      });
+      expect(JSON.stringify(erased)).not.toContain('easy-read');
+      // Nobody else's went.
+      expect(
+        (await readOwnPreferences(db(), ctxFor(tomas.userId))).stored,
+      ).toEqual({ textSize: 'extra-large' });
     });
 
     it('ends the sharing of an account that is already marked deleted, because the caller may mark it first', async () => {

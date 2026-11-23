@@ -52,6 +52,10 @@ const NEVER_ACCEPT_A_TOKEN: readonly { why: string; pattern: RegExp }[] = [
     why: 'the switches for personal API tokens',
     pattern: /^\/api\/v1\/organisations\/:organisationId\/api-settings$/,
   },
+  {
+    why: 'a person’s own delivery preferences, which only the person signed in sets',
+    pattern: /^\/api\/v1\/me(\/|$)/,
+  },
 ];
 
 /**

@@ -445,6 +445,36 @@ describe.each(testTargets)('problem responses on $name', (target) => {
       ]);
     });
 
+    // The errors of delivery preferences and the library (decision D-69, P-02l2), pinned
+    // with the statuses a client will rely on. Preferences that break the schema say where
+    // and why, from fixed field names and codes, and never what the caller sent.
+    it('answers the errors of delivery preferences and the library with their codes, and lists only a path and a code', async () => {
+      const rows = [
+        [UseAccountPreferencesError, 422, 'use-account-preferences'],
+        [PreferencesInvalidError, 422, 'invalid-input'],
+        [LibraryInputError, 422, 'invalid-input'],
+      ] as const;
+      for (const [errorClass, status, code] of rows) {
+        const response = await throwing(errorClass.name);
+        expectProblem(response, {
+          status,
+          code,
+          instance: `${API_PREFIX}/test/throw/${errorClass.name}`,
+        });
+      }
+      type Errors = { errors?: { in: string; path: string; code: string }[] };
+      const invalid = (
+        await throwing(PreferencesInvalidError.name)
+      ).json<Errors>();
+      expect(invalid.errors).toEqual([
+        { in: 'body', path: 'textSize', code: 'invalid_value' },
+        { in: 'body', path: 'quietHours.end', code: 'custom' },
+      ]);
+      // The account row of a person is theirs: the answer names no person and no choice.
+      const account = await throwing(UseAccountPreferencesError.name);
+      expect(account.body).not.toMatch(/easy-read|plain-text|sms/);
+    });
+
     it('keeps the message, the ids and the permission names of a fixed-text row out of the response', async () => {
       for (const row of PROBLEM_TABLE.filter((r) => r.detail !== null)) {
         const response = await throwing(row.errorClass.name);
