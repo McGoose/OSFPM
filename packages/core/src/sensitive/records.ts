@@ -85,14 +85,24 @@ export type GovernedSource = {
  * the payload to it. The meta of a profile is made up from the profile, because it has no
  * legal basis or entry of its own: it is the person's own data, entered by them, on a
  * consent basis.
+ *
+ * `lockProfile` holds the profile row `FOR SHARE` until the transaction ends (see
+ * `loadProfile`), for a caller that writes grants derived from what it reads: deleting the
+ * profile ends the person's grants, so it must wait for that caller rather than slip
+ * between its read and its write. It has no effect when there is no profile to lock.
  */
 export async function loadGovernedSource(
   tx: Tx,
   subject: PersonRow,
   category: AccessGrantCategory,
+  options: { readonly lockProfile?: boolean } = {},
 ): Promise<GovernedSource | null> {
   if (category === 'accessibility' && subject.userId !== null) {
-    const profile = await loadProfile(tx, subject.userId);
+    const profile = await loadProfile(
+      tx,
+      subject.userId,
+      options.lockProfile === true ? { lock: 'share' } : {},
+    );
     if (profile === undefined) return null;
     return {
       meta: {

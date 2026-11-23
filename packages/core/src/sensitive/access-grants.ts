@@ -43,8 +43,9 @@ import {
 /**
  * Access grants (decision D-69): a person decides, field by field and role by role, who of
  * a production sees their access needs or their medical data, and it ends when the
- * production wraps while they keep their data. This is the only code that writes
- * `access_grant`.
+ * production wraps while they keep their data. This and `deleteAccessProfile`, which ends
+ * a person's accessibility grants when they delete their profile, are the only code that
+ * writes `access_grant`.
  *
  * Who may make one: the person themselves when they have an account; for a person without
  * one, a user holding `sensitive:edit:<category>` on the project, who records how and
@@ -384,8 +385,10 @@ type GrantToWrite = {
  * leaves the old one as it was. The earlier grant is locked `FOR UPDATE` first, so two
  * changes of one role queue; the partial unique index is the backstop, and a change that
  * still loses to it is `AccessGrantBusyError`. Grants are not written through the write
- * helper, so no change counter is taken and no row is locked before this one
- * (CLAUDE.md, Data rules).
+ * helper, so no change counter is taken, and the only row locked before this one is the
+ * profile row that a confirmed share holds `FOR SHARE` (`shareWithSuggestedRoles`), so the
+ * order is always profile first, then grants, as in `deleteAccessProfile` (CLAUDE.md,
+ * Data rules).
  */
 async function writeGrant(
   tx: Tx,
@@ -753,6 +756,12 @@ function filledKeys(
  * with `invalid-groups` for a group the category does not have. A call that is not a
  * preview by staff for a person without an account needs the consent.
  *
+ * A call that writes holds the person's access profile `FOR SHARE` from the moment it reads
+ * it until the transaction ends, because deleting the profile ends the person's
+ * accessibility grants and must not commit between this read and the writes it leads to: it
+ * waits for the call, and a call that meets a deletion in progress waits for it and finds
+ * no profile, so it shares nothing.
+ *
  * @throws SensitiveAccessDeniedError, AccessGrantRefusedError, AccessGrantBusyError and
  * RecordWriteError, as for `createAccessGrant`. Nothing is written when one is thrown.
  */
@@ -805,8 +814,13 @@ export async function shareWithSuggestedRoles(
       );
   await requireLiveProject(tx, ctx, subject, checkedCategory, now);
 
-  // The caller is allowed to see all of it: the person, or staff who edit it.
-  const source = await loadGovernedSource(tx, subject.person, checkedCategory);
+  // The caller is allowed to see all of it: the person, or staff who edit it. A call that
+  // will write holds the profile `FOR SHARE` from this read to its commit: deleting the
+  // profile ends the person's accessibility grants, and without the lock it could commit
+  // between this read and the writes below, leaving grants of a profile that is gone.
+  const source = await loadGovernedSource(tx, subject.person, checkedCategory, {
+    lockProfile: !preview,
+  });
   const payload = source?.payload ?? {};
   await recordAudit(tx, {
     actor: auditActor(ctx),

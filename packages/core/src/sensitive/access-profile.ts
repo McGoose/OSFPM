@@ -1,5 +1,10 @@
-import { and, eq, isNull, sql } from 'drizzle-orm';
-import { user, userAccessProfile } from '../db/schema/index.js';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import {
+  accessGrant,
+  person,
+  user,
+  userAccessProfile,
+} from '../db/schema/index.js';
 import { recordAudit, RecordNotFoundError, type Tx } from '../db/write.js';
 import { ACCESS_AUDIT, auditActor, tokenMark } from './audit.js';
 import {
@@ -23,9 +28,9 @@ import type { SensitiveContext } from './service.js';
  * Every allowed read writes one `sensitive.read` event and every denial one
  * `sensitive.denied` event, and a change writes `access.profile-created`,
  * `access.profile-updated` or `access.profile-deleted`: the events name the user and
- * count the fields of a read, and hold no field name and no value. Changes are audited
- * and not change-logged, because the table has no organisation to number them in
- * (CLAUDE.md, Data rules). Nothing here logs.
+ * count the fields of a read or the grants a deletion ended, and hold no field name and
+ * no value. Changes are audited and not change-logged, because the table has no
+ * organisation to number them in (CLAUDE.md, Data rules). Nothing here logs.
  */
 
 /** A person's access profile, as its owner reads it. */
@@ -53,15 +58,20 @@ function toProfile(row: ProfileRow): AccessProfile {
 
 /**
  * The profile of a user, or `undefined`: none was made, or the account was deleted, which
- * takes the profile with it. Reads without a lock and checks no permission: it is the
- * door's own helper, for code that has already decided who may ask.
+ * takes the profile with it. Checks no permission: it is the door's own helper, for code
+ * that has already decided who may ask. It reads without a lock, unless `lock` is
+ * `'share'`: then the profile row is held `FOR SHARE` until the transaction ends, and
+ * nothing else is locked (not the user row), so a deletion of the profile, which takes the
+ * row `FOR UPDATE`, waits for a caller that is about to write something derived from what
+ * it reads. When the profile is deleted while this waits, it answers `undefined`.
  */
 export async function loadProfile(
   tx: Tx,
   userId: string,
+  options: { readonly lock?: 'share' } = {},
 ): Promise<ProfileRow | undefined> {
   if (!isUuid(userId)) return undefined;
-  const [found] = await tx
+  const query = tx
     .select({ profile: userAccessProfile })
     .from(userAccessProfile)
     .innerJoin(user, eq(user.id, userAccessProfile.userId))
@@ -73,6 +83,10 @@ export async function loadProfile(
       ),
     )
     .limit(1);
+  const [found] =
+    options.lock === 'share'
+      ? await query.for('share', { of: userAccessProfile })
+      : await query;
   return found?.profile;
 }
 
@@ -121,7 +135,10 @@ async function authoriseOwner(
   throw new SensitiveAccessDeniedError('accessibility', operation);
 }
 
-/** One audit event for a change to the profile: the user only, and the token that did it. */
+/**
+ * One audit event for a change to the profile: the user, a count when the change has one
+ * (never a name or a value), and the token that did it.
+ */
 function auditChange(
   tx: Tx,
   ctx: SensitiveContext,
@@ -129,15 +146,16 @@ function auditChange(
   action: string,
   userId: string,
   now: Date,
+  counts: Readonly<Record<string, number>> = {},
 ) {
-  const mark = tokenMark(ctx);
+  const details = { ...counts, ...tokenMark(ctx) };
   return recordAudit(tx, {
     actor: auditActor(ctx),
     category,
     action,
     targetType: 'user',
     targetId: userId,
-    details: Object.keys(mark).length === 0 ? null : mark,
+    details: Object.keys(details).length === 0 ? null : details,
     requestId: ctx.requestId ?? null,
     occurredAt: now,
   });
@@ -290,14 +308,61 @@ export async function updateAccessProfile(
 }
 
 /**
+ * Ends every live accessibility grant of every person the account is, in every project
+ * of every organisation, and answers how many it ended. A grant only chooses who sees
+ * which fields of the profile, so one that outlived the profile would open the next
+ * profile the person makes, which they never agreed to (decision D-69). Medical grants
+ * are not touched: they open the organisation's record, not the profile. It sets the
+ * columns `revokeAccessGrant` sets, in one statement, and writes no event of its own: the
+ * caller writes one for the lot. It reads and checks no permission, and runs in the
+ * caller's transaction.
+ */
+async function revokeAccessibilityGrants(
+  tx: Tx,
+  ctx: SensitiveContext,
+  userId: string,
+  now: Date,
+): Promise<number> {
+  const ended = await tx
+    .update(accessGrant)
+    .set({
+      revokedAt: now,
+      revokedBy: ctx.userId,
+      version: sql`${accessGrant.version} + 1`,
+      updatedAt: now,
+      updatedBy: ctx.userId,
+    })
+    .where(
+      and(
+        eq(accessGrant.category, 'accessibility'),
+        isNull(accessGrant.revokedAt),
+        inArray(
+          accessGrant.personId,
+          tx
+            .select({ id: person.id })
+            .from(person)
+            .where(eq(person.userId, userId)),
+        ),
+      ),
+    )
+    .returning({ id: accessGrant.id });
+  return ended.length;
+}
+
+/**
  * Deletes the signed-in person's access profile, for good: the row and its payload go,
- * and one `access.profile-deleted` event names the user. Grants the person made stay as
- * they are, but open nothing while there is no profile.
+ * and so does everything that opened it. Every live accessibility grant of the person, in
+ * every project of every organisation, is revoked in the same transaction, so a profile
+ * made later opens nothing until the person grants again; their medical grants are not
+ * touched. One `access.profile-deleted` event names the user and holds the number of
+ * grants it revoked (`revokedGrants`, which is 0 when there were none), and no event is
+ * written for each grant.
  *
  * @throws SensitiveAccessDeniedError (after auditing it) for anyone but the person, and
  * for a personal API token.
  * @throws RecordNotFoundError when the person has no profile.
- * @throws RecordWriteError when the database refuses the delete.
+ * @throws RecordWriteError when the database refuses the delete or a revoke; nothing is
+ * deleted or revoked.
  */
 export async function deleteAccessProfile(
   tx: Tx,
@@ -315,6 +380,12 @@ export async function deleteAccessProfile(
       await inner
         .delete(userAccessProfile)
         .where(eq(userAccessProfile.id, existing.id));
+      const revokedGrants = await revokeAccessibilityGrants(
+        inner,
+        ctx,
+        userId,
+        now,
+      );
       await auditChange(
         inner,
         ctx,
@@ -322,6 +393,7 @@ export async function deleteAccessProfile(
         'delete',
         userId,
         now,
+        { revokedGrants },
       );
     }),
   );

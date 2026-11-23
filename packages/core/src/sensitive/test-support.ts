@@ -25,6 +25,8 @@ import {
   settingValue,
   type ProjectMembershipStatus,
 } from '../db/schema/index.js';
+import { createAccessProfile } from './access-profile.js';
+import { VALID_PAYLOADS } from './payload-fixtures.js';
 import {
   editPermissionKey,
   readPermissionKey,
@@ -293,6 +295,27 @@ export async function seedAccessScene(
       crew: { personId: crewPerson },
     },
   };
+}
+
+/**
+ * A person with an account, engaged on the scene's project, who has made an access profile
+ * (`payload`, the valid accessibility payload unless given). A fresh one on each call, so a
+ * test that changes what a person has shared leaves no one else's state behind.
+ */
+export async function seedProfileHolder(
+  database: Database,
+  scene: AccessScene,
+  displayName: string,
+  payload: Record<string, unknown> = VALID_PAYLOADS.accessibility,
+): Promise<{ readonly userId: string; readonly personId: string }> {
+  const userId = await seedUser(database);
+  const personId = await seedPerson(database, scene.organisationId, {
+    userId,
+    displayName,
+  });
+  await engagePerson(database, scene.organisationId, scene.projectId, personId);
+  await createAccessProfile(database.db, ctxFor(userId), userId, payload);
+  return { userId, personId };
 }
 
 /** Sets columns of the project directly, as a test of a wrapped or closed production needs. */
