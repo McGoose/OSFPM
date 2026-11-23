@@ -1113,7 +1113,8 @@ export async function setApiTokenSwitches(
       // Then the acting person's row, before the token rows that switching a switch off
       // revokes, for the reason `revokeOne` gives: an administrator whose own reset link is
       // used while they turn a switch off must not deadlock with it.
-      await lockUser(inner, actor.userId, { strength: 'key-share' });
+      if (actor.userId === '')
+        await lockUser(inner, actor.userId, { strength: 'key-share' });
       const rows = await apiTokenSettingRows(inner, organisationId);
       const before = switchesFromRows(rows);
 
