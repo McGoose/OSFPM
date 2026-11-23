@@ -9,7 +9,7 @@ import {
   passwordCredential,
   user,
 } from '../db/schema/index.js';
-import { RecordNotFoundError, type Tx } from '../db/write.js';
+import { RecordNotFoundError, RecordStateError, type Tx } from '../db/write.js';
 import {
   createMigratedDatabase,
   interleave,
@@ -19,6 +19,7 @@ import {
 } from '../db/test-support.js';
 import {
   AccessResetInvalidError,
+  ResetLinkBusyError,
   UserInOtherOrganisationsError,
   UserNotActiveError,
 } from './access-reset-errors.js';
@@ -496,7 +497,7 @@ describe.skipIf(postgres === undefined)(
         ]);
       });
 
-      it('does not wait for a link a use holds while it holds the person: the index refuses the new link, nothing is written, and the use goes on', async () => {
+      it('does not wait for a link a use holds while it holds the person: the index refuses the new link, the answer is ResetLinkBusyError, nothing is written, and the use goes on', async () => {
         // The case a wait would turn into a deadlock: the use holds the link and
         // waits for the person's row, and the create, which holds that row, then
         // meets the link. The create takes the person's row first, as `createAccessReset`
@@ -532,14 +533,12 @@ describe.skipIf(postgres === undefined)(
         const outcomes = await Promise.allSettled([creating, using]);
         // A wait for the link would have been a deadlock, which the database ends by
         // failing one of the two with 40P01 after a second.
-        expect(outcomes[0]).toMatchObject({
-          status: 'rejected',
-          reason: {
-            name: 'RecordWriteError',
-            code: '23505',
-            constraint: 'access_reset_live_unique',
-          },
-        });
+        // The index refused the new link (SQLSTATE 23505 on `access_reset_live_unique`),
+        // and the service answers that with the typed error the API makes a 409 of.
+        expect(outcomes[0]).toMatchObject({ status: 'rejected' });
+        const busy: unknown = (outcomes[0] as PromiseRejectedResult).reason;
+        expect(busy).toBeInstanceOf(ResetLinkBusyError);
+        expect(busy).toBeInstanceOf(RecordStateError);
         expect(outcomes[1].status).toBe('fulfilled');
         expect((await linkRow(first.reset.id)).usedAt).not.toBeNull();
         expect(await hasPassword(person)).toBe(false);

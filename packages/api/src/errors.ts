@@ -11,6 +11,7 @@ import {
   MembershipNotActiveError,
   OwnerResetNeedsOwnerError,
   ResetExceedsOwnAccessError,
+  ResetLinkBusyError,
   ResetNotAllowedError,
   UserInOtherOrganisationsError,
   UserNotActiveError,
@@ -553,6 +554,16 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
     title: 'Membership not active',
     detail:
       'This person’s membership of this organisation is not active: it was removed, or is still only an invitation. A reset link is only for an active member.',
+  },
+  {
+    // A `RecordStateError`, so this row has to come before the one for that class:
+    // the first row an error is an `instanceof` wins.
+    errorClass: ResetLinkBusyError,
+    status: 409,
+    code: 'reset-link-busy',
+    title: 'Reset link busy',
+    detail:
+      'A reset link for this person is being used or revoked right now; try again.',
   },
   {
     errorClass: RouteNotFoundError,

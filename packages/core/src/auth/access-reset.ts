@@ -5,6 +5,7 @@ import {
   organisationPermissionReaches,
 } from '../access/organisation-permission.js';
 import {
+  ACCESS_RESET_LIVE_INDEX,
   accessReset,
   orgMembership,
   passkeyCredential,
@@ -13,7 +14,7 @@ import {
   totpCredential,
   user,
 } from '../db/schema/index.js';
-import { RecordNotFoundError, type Tx } from '../db/write.js';
+import { RecordNotFoundError, RecordWriteError, type Tx } from '../db/write.js';
 import { MEMBERS_RESET_ACCESS_PERMISSION } from '../members/permissions.js';
 import {
   AccessResetInvalidError,
@@ -21,6 +22,7 @@ import {
   MembershipNotActiveError,
   OwnerResetNeedsOwnerError,
   ResetExceedsOwnAccessError,
+  ResetLinkBusyError,
   UserInOtherOrganisationsError,
   UserNotActiveError,
   type AccessResetRefusalReason,
@@ -96,7 +98,8 @@ import { generateToken, hashToken } from './tokens.js';
  * skips is one a use or a revoke is working on at that moment. If that transaction
  * has already changed it the index lets the new link through once it ends; if it has
  * not, the index refuses the new link, nothing is written, and the caller is given a
- * `RecordWriteError` (an unlikely race, and a retry works). The permission, tier and
+ * `ResetLinkBusyError` (an unlikely race: making the link again works, and the
+ * service does not retry). The permission, tier and
  * role checks read without a lock: the roles of the people involved changing a
  * moment later is not what they guard.
  */
@@ -544,11 +547,13 @@ async function supersedeEarlierLinks(
  * @throws AuthInputError `expiresInHours` or `removePasskeys` for a value that is
  * not acceptable. It names the field and never the value.
  * @throws AuthStateError `installation-missing` before the installation row exists.
- * @throws RecordWriteError when the database refuses a write; it carries the
- * SQLSTATE and constraint name only, never the token, its hash or an address. Rarely
- * this is the unique index on live links: a use or a revoke held the earlier link at
- * that moment and had not changed it yet, so it could not be superseded. Nothing is
- * written, and making the link again works.
+ * @throws ResetLinkBusyError, a `RecordStateError`, when the unique index on live
+ * links refuses the new link: a use or a revoke held the earlier link at that moment
+ * and had not changed it yet, so it could not be superseded. Nothing is written, and
+ * making the link again works. The API answers a 409 `reset-link-busy`.
+ * @throws RecordWriteError when the database refuses a write in any other way; it
+ * carries the SQLSTATE and constraint name only, never the token, its hash or an
+ * address.
  */
 export async function createAccessReset(
   tx: Tx,
@@ -640,7 +645,18 @@ export async function createAccessReset(
       });
       return { reset: row!, token };
     }),
-  );
+  ).catch((error: unknown) => {
+    // The index refused the new link: another request holds the person's earlier one
+    // (a use or a revoke that has not changed it yet), so it could not be replaced.
+    if (
+      error instanceof RecordWriteError &&
+      error.code === '23505' &&
+      error.constraint === ACCESS_RESET_LIVE_INDEX
+    ) {
+      throw new ResetLinkBusyError(userId);
+    }
+    throw error;
+  });
 }
 
 /**

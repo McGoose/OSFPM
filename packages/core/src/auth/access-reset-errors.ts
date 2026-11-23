@@ -1,3 +1,5 @@
+import { RecordStateError } from '../db/write.js';
+
 /**
  * Why a reset link step was refused. The first four say why a token is no good; the
  * rest are the rules for who may reset whom (SC-10, decision D-57), checked again
@@ -133,5 +135,26 @@ export class MembershipNotActiveError extends ResetNotAllowedError {
   constructor() {
     super('The person does not belong to this organisation at present');
     this.name = 'MembershipNotActiveError';
+  }
+}
+
+/**
+ * A reset link cannot be made for the person at this moment: another request is
+ * using or revoking their earlier link, holds it and has not changed it yet, so it
+ * cannot be replaced, and the database refuses a second live link
+ * (`access_reset_live_unique`). Nothing was written, and making the link again
+ * works; there is no retry in the service. It is a `RecordStateError`, as
+ * `AccountInUseError` is, with its own message and its own row in the API's table:
+ * a 409 `reset-link-busy`. `operation` reads `release`, the nearest of its three
+ * values (the earlier link is being released, by a use or a revoke), and
+ * `entityId` is the person's id, because the link in the way was never read. The
+ * message names no id.
+ */
+export class ResetLinkBusyError extends RecordStateError {
+  constructor(userId: string) {
+    super('access_reset', userId, 'release');
+    this.message =
+      'An earlier reset link of the person is being used or revoked';
+    this.name = 'ResetLinkBusyError';
   }
 }

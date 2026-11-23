@@ -11,7 +11,7 @@ import {
 import { seedUser } from '@osfpm/core/src/access/test-fixtures.js';
 import { generateRecoveryCodes } from '@osfpm/core/src/auth/recovery.js';
 import { createSession } from '@osfpm/core/src/auth/sessions.js';
-import { AUTH_AUDIT } from '@osfpm/core/src/auth/shared.js';
+import { AUTH_AUDIT, lockUser } from '@osfpm/core/src/auth/shared.js';
 import {
   emailOf,
   everyRowAsText,
@@ -38,6 +38,7 @@ import {
   totpCredential,
 } from '@osfpm/core/src/db/schema/index.js';
 import {
+  lockWaiters,
   testTargets,
   type TestTarget,
 } from '@osfpm/core/src/db/test-support.js';
@@ -1139,8 +1140,17 @@ describe.each(testTargets)(
 /** The PostgreSQL target, when `DATABASE_URL` names a server. PGlite has one connection, so it cannot run this. */
 const postgres = testTargets.find((candidate) => candidate.name === 'postgres');
 
+/** A promise that is settled from outside. */
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 describe.skipIf(postgres === undefined)(
-  'two uses of one reset link at once over HTTP, on PostgreSQL',
+  'reset links racing over HTTP, on PostgreSQL',
   () => {
     it('signs one in and answers the others with the 401 reset-link-invalid', async () => {
       const ctx = await createTestApp(postgres!, { logLevel: 'info' });
@@ -1193,6 +1203,100 @@ describe.skipIf(postgres === undefined)(
         );
         expect(sessions).toHaveLength(1);
       } finally {
+        await ctx.close();
+      }
+    });
+
+    it('answers a create that meets a link a use holds with the 409 reset-link-busy, and the use signs the person in', async () => {
+      const ctx = await createTestApp(postgres!, { logLevel: 'info' });
+      const holding = deferred();
+      const released = deferred();
+      try {
+        await migrate(ctx.database);
+        const scene = await seedResetScene(ctx.database, new Date());
+        const owner = (
+          await createSession(ctx.database.db, {
+            userId: scene.ownerId,
+            method: 'password',
+            now: new Date(),
+          })
+        ).token;
+        const person = await seedUser(ctx.database);
+        await seedMembership(
+          ctx.database,
+          scene.organisationId,
+          person,
+          'member',
+          [],
+        );
+        const makeLink = (address: string) =>
+          ctx.app.inject({
+            method: 'POST',
+            url: `${API_PREFIX}/organisations/${scene.organisationId}/members/${person}/reset-link`,
+            headers: {
+              origin: TEST_PUBLIC_ORIGIN,
+              cookie: `${SESSION_COOKIE}=${owner}`,
+            },
+            remoteAddress: address,
+            payload: {},
+          });
+        const created = await makeLink('10.22.1.1');
+        expect(created.statusCode).toBe(201);
+        const token = created.json<{ link: string }>().link.split('#')[1]!;
+
+        // A writer holds the person's row, so a second create queues for it. A use of
+        // the first link then takes that link and queues behind the create. When the
+        // writer lets go the create is first: it holds the person and meets a link the
+        // use holds, and it must not wait for it, which would be a deadlock.
+        const holder = ctx.database.db.transaction(async (tx) => {
+          await lockUser(tx, person, { strength: 'update' });
+          holding.resolve();
+          await released.promise;
+        });
+        await Promise.race([holding.promise, holder]);
+        const requestsWaiting = async (count: number) => {
+          for (
+            let waited = 0;
+            (await lockWaiters(ctx.database.db)) < count;
+            waited += 25
+          ) {
+            if (waited >= 10_000) {
+              throw new Error(`Fewer than ${count} requests waited for a lock`);
+            }
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+        };
+        const creating = makeLink('10.22.1.2');
+        await requestsWaiting(1);
+        const using = ctx.app.inject({
+          method: 'POST',
+          url: `${API_PREFIX}/access-reset`,
+          headers: { origin: TEST_PUBLIC_ORIGIN },
+          remoteAddress: '10.22.1.3',
+          payload: { token },
+        });
+        await requestsWaiting(2);
+        released.resolve();
+        await holder;
+        const [busy, used] = await Promise.all([creating, using]);
+
+        expect(busy.statusCode).toBe(409);
+        expect(busy.json()).toMatchObject({
+          status: 409,
+          code: 'reset-link-busy',
+          type: '/problems/reset-link-busy',
+          detail:
+            'A reset link for this person is being used or revoked right now; try again.',
+        });
+        expect(used.statusCode).toBe(200);
+        // The first link was used, and the create left nothing behind.
+        const links = (await ctx.database.db.select().from(accessReset)).filter(
+          (found) => found.userId === person,
+        );
+        expect(links).toHaveLength(1);
+        expect(links[0]!.usedAt).not.toBeNull();
+      } finally {
+        released.resolve();
         await ctx.close();
       }
     });

@@ -15,6 +15,13 @@ import { organisation } from './organisation.js';
 import { user } from './user.js';
 
 /**
+ * The name of the partial unique index that keeps one live link per person per
+ * organisation. `createAccessReset` reads it from a refused insert, to tell that
+ * refusal from any other unique violation and answer `ResetLinkBusyError`.
+ */
+export const ACCESS_RESET_LIVE_INDEX = 'access_reset_live_unique';
+
+/**
  * A one-time admin reset link (SC-10, decision D-57, which closes O-14): an
  * administrator makes it for a member who is locked out (a forgotten password, a
  * lost authenticator device, a lost passkey), shows it once and passes it on by any
@@ -92,7 +99,7 @@ export const accessReset = securityTable(
     // because `now()` cannot be in an index predicate: a link past its end holds the
     // place until something revokes it, and the next link does. Both key columns are
     // NOT NULL, so the NULLS NOT DISTINCT rule of CLAUDE.md (Data rules) does not apply.
-    uniqueIndex('access_reset_live_unique')
+    uniqueIndex(ACCESS_RESET_LIVE_INDEX)
       .on(t.organisationId, t.userId)
       .where(sql`${t.usedAt} is null and ${t.revokedAt} is null`),
     check(
