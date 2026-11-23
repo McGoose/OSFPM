@@ -13,12 +13,17 @@ import {
   type StartupSteps,
 } from './startup.js';
 
-/** What a caller must never find in a log line about an unreachable database. */
+/**
+ * What a caller must never find in a log line about an unreachable database. The
+ * port is looked for as part of the address, `:5432`, and not as the bare number:
+ * a request id or a timestamp in the line can contain 5432 by chance, which once
+ * failed a CI run.
+ */
 const DETAILS = [
   'hunter2',
   'db.internal',
   '10.1.2.3',
-  '5432',
+  ':5432',
   'postgres://',
   'osfpm:',
 ];
