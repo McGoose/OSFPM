@@ -84,7 +84,7 @@ export function locationAccessSummary(
     stored: LocationAccessAnswer,
   ): AccessFieldSummary<LocationAccessAnswer> => ({
     stored,
-    effective: verified ? stored : 'unknown',
+    effective: stored,
     verified,
   });
   const detail = <T>(stored: T | null): AccessFieldSummary<T | null> => ({

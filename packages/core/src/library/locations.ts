@@ -243,8 +243,8 @@ function accessPatch(
   if (next.quietRoom !== current.quietRoom) patch.quietRoom = next.quietRoom;
   if (next.seating !== current.seating) patch.seating = next.seating;
   if (Object.keys(patch).length > 0) {
-    patch.accessVerifiedAt = current.accessVerifiedAt;
-    patch.accessVerifiedBy = current.accessVerifiedBy;
+    patch.accessVerifiedAt = null;
+    patch.accessVerifiedBy = null;
   }
   return patch;
 }
