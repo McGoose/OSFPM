@@ -12,10 +12,12 @@ import { totpCredential } from './totp-credential.js';
 /**
  * Every security table: login state that is not production data. Sessions
  * change on every request and must not flood the change log or be federated,
- * so these tables are written only by the auth service (`src/auth/`), never
+ * so these tables are written by one named service, the auth service
+ * (`src/auth/`) unless the table declares another with `securityTable`, never
  * through the write helper. Their changes are audited, not change-logged
- * (CLAUDE.md, Data rules). Each is defined with `securityTable`, and a schema
- * test requires this list to match the tables that were.
+ * (CLAUDE.md, Data rules). Each is defined with `securityTable`, which records
+ * its writer in `tableWriters` (`db/columns.ts`), and a schema test requires
+ * this list to match the tables that were.
  *
  * `invite`, `access_reset` and `api_token` are the three that carry
  * `organisation_id`, by declaration (`organisationScoped`, see `securityTable`): an

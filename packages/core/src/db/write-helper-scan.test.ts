@@ -13,19 +13,24 @@ import { getTableName, is } from 'drizzle-orm';
 import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_TABLE_WRITER,
   securityChildTables,
   securityTableNames,
+  serviceWrittenTableNames,
+  tableWriters,
   tenantTableNames,
+  type TableWriter,
 } from './columns.js';
 import * as schemaModule from './schema/index.js';
 
 /**
  * CLAUDE.md, Data rules: tenant records are written only through the write
- * helper, tables in `SECURITY_TABLES` only by the auth service, and the tables
- * in `SERVICE_WRITTEN_TABLES` (`user`, `installation`) only by the services
- * named for them. This scans the source for a Drizzle write that names such a
- * table outside the places allowed to. The sets of tables, and the services
- * named for the last kind, come from the schema, not from a list kept here.
+ * helper, and every security table and service-written table only by the one folder
+ * its declaration names: the auth service unless it says another and why. The
+ * registry `tableWriters` (`db/columns.ts`) is the one record of those folders. This
+ * scans the source for a Drizzle write that names such a table outside the places
+ * allowed to, and checks that each declared folder exists. The sets of tables and
+ * their writers come from the schema, not from a list kept here.
  *
  * It sees `.insert(x)`, `.update(x)` and `.delete(x)` where `x` is the table's
  * exported identifier, and raw SQL that names the table. Tests and test-support
@@ -34,8 +39,9 @@ import * as schemaModule from './schema/index.js';
 
 /** Where tenant tables may be written: the write helper itself. */
 const WRITE_HELPER = ['core/src/db/write.ts'];
-/** Where security tables may be written: the auth service. */
-const AUTH_SERVICE = ['core/src/auth/'];
+
+/** The folder under `packages/` of a core service. */
+const folderOf = (service: string) => `core/src/${service}/`;
 
 /** Files only tests import. Fixtures insert rows directly to set up state. */
 const TEST_ONLY_FILE = /(?:\.test|^test-support|^test-fixtures)\.ts$/;
@@ -96,18 +102,44 @@ function violations(
     .sort();
 }
 
+/** The declared writers whose folder holds no source file among `files` (paths under `packages/`). */
+function missingWriterFolders(
+  files: readonly string[],
+  writers: ReadonlyMap<string, TableWriter>,
+): string[] {
+  const services = new Set([...writers.values()].map((w) => w.service));
+  return [...services]
+    .filter(
+      (service) => !files.some((file) => file.startsWith(folderOf(service))),
+    )
+    .sort();
+}
+
 const PACKAGES = fileURLToPath(new URL('../../../', import.meta.url));
 
-describe('who may write tenant and security tables', () => {
+/** A tree of files in a temporary folder, removed after `check`. */
+function inTempTree(
+  files: Record<string, string>,
+  check: (root: string) => void,
+) {
+  const root = mkdtempSync(join(tmpdir(), 'osfpm-write-scan-'));
+  try {
+    for (const [path, text] of Object.entries(files)) {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      writeFileSync(join(root, path), text);
+    }
+    check(root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+describe('who may write tenant tables', () => {
   const tenant = tablesNamed(tenantTableNames());
-  const security = tablesNamed(securityTableNames());
-  const securityChildren = tablesNamed(new Set(securityChildTables().keys()));
 
   it('finds the tables and the source it is meant to check', () => {
     // Guards against the scan matching nothing and passing for nothing.
     expect(tenant.length).toBeGreaterThanOrEqual(20);
-    expect(security.length).toBeGreaterThanOrEqual(6);
-    expect(securityChildren.length).toBeGreaterThanOrEqual(1);
     const files = sourceFiles(PACKAGES).map((file) =>
       relative(PACKAGES, file).split(sep).join('/'),
     );
@@ -118,158 +150,190 @@ describe('who may write tenant and security tables', () => {
     expect(violations(PACKAGES, tenant, WRITE_HELPER)).toEqual([]);
   });
 
-  it('writes security tables only in the auth service', () => {
-    expect(violations(PACKAGES, security, AUTH_SERVICE)).toEqual([]);
+  it('catches a file that writes a table outside its allowed place', () => {
+    inTempTree(
+      {
+        'core/src/db/write.ts': 'await tx.insert(costLine).values(row);',
+        'core/src/auth/sessions.ts': 'await tx.insert(session).values(row);',
+        'core/src/costs/direct.ts': 'await tx.insert(costLine).values(row);',
+        'core/src/costs/namespaced.ts':
+          'await tx.update(schema.costLine).set(x);',
+        'core/src/costs/raw.ts':
+          'await tx.execute(sql`delete from cost_line`);',
+        'core/src/costs/read.ts': 'await tx.select().from(costLine);',
+        'core/src/costs/direct.test.ts':
+          'await tx.insert(costLine).values(row);',
+        'core/src/access/test-fixtures.ts':
+          'await tx.insert(role).values(row);',
+        'api/src/leak.ts': 'await tx.delete(session).where(x);',
+        'api/node_modules/dep/index.ts': 'await tx.insert(costLine).values(r);',
+      },
+      (root) => {
+        const costLine = { identifier: 'costLine', name: 'cost_line' };
+        const session = { identifier: 'session', name: 'session' };
+        expect(violations(root, [costLine], WRITE_HELPER)).toEqual([
+          'core/src/costs/direct.ts',
+          'core/src/costs/namespaced.ts',
+          'core/src/costs/raw.ts',
+        ]);
+        expect(violations(root, [session], [folderOf('auth')])).toEqual([
+          'api/src/leak.ts',
+        ]);
+      },
+    );
   });
+});
+
+describe('who may write security tables and service-written tables', () => {
+  const writers = tableWriters();
+  const entries = [...writers].sort(([a], [b]) => (a < b ? -1 : 1));
+
+  it('records a writer for every security table and every service-written table, and for nothing else', () => {
+    const fromSchema = [
+      ...schemaModule.SECURITY_TABLES,
+      ...schemaModule.SERVICE_WRITTEN_TABLES,
+    ].map((table) => getTableName(table));
+    // Guards against the registry being empty and the check passing for nothing.
+    expect(entries.length).toBeGreaterThanOrEqual(8);
+    expect([...writers.keys()].sort()).toEqual([...fromSchema].sort());
+    for (const [name, writer] of writers) {
+      expect(securityTableNames().has(name), name).toBe(
+        writer.kind === 'security',
+      );
+      expect(serviceWrittenTableNames().has(name), name).toBe(
+        writer.kind === 'service-written',
+      );
+      expect(tenantTableNames().has(name), name).toBe(false);
+    }
+  });
+
+  // Each folder that is not the default says why, in one line, so a reader of the
+  // declaration can see that the exception is meant (decision of 23 Nov, P-02l1).
+  it('gives a writer other than the default a reason of one line, and the default none', () => {
+    for (const [name, writer] of writers) {
+      if (writer.service === DEFAULT_TABLE_WRITER) {
+        expect(writer.reason, name).toBeNull();
+      } else {
+        expect(writer.reason?.trim().length ?? 0, name).toBeGreaterThan(0);
+        expect(writer.reason, name).not.toMatch(/[\r\n]/);
+      }
+    }
+  });
+
+  it('has a source folder for every declared writer', () => {
+    const files = sourceFiles(PACKAGES).map((file) =>
+      relative(PACKAGES, file).split(sep).join('/'),
+    );
+    expect(missingWriterFolders(files, writers)).toEqual([]);
+  });
+
+  it.each(entries.map(([name, writer]) => [name, writer.service] as const))(
+    'writes %s only in %s',
+    (name, service) => {
+      expect(
+        violations(PACKAGES, tablesNamed(new Set([name])), [folderOf(service)]),
+      ).toEqual([]);
+    },
+  );
 
   // A child table of a security table (invite_role) has an organisation_id like a
-  // tenant table, but it is the auth service's, not the write helper's.
-  it('writes the child tables of security tables only in the auth service', () => {
-    expect(violations(PACKAGES, securityChildren, AUTH_SERVICE)).toEqual([]);
+  // tenant table, but it is written where its parent is, not by the write helper.
+  it('writes the child tables of security tables only where their parent is written', () => {
+    const children = [...securityChildTables()];
+    expect(children.length).toBeGreaterThanOrEqual(1);
+    for (const [name, { parent }] of children) {
+      const writer = writers.get(parent);
+      expect(writer, `${name}'s parent`).toBeDefined();
+      expect(
+        violations(PACKAGES, tablesNamed(new Set([name])), [
+          folderOf(writer!.service),
+        ]),
+        name,
+      ).toEqual([]);
+    }
   });
 
-  describe('user and installation', () => {
-    const entries = schemaModule.SERVICE_WRITTEN_TABLES.map((entry) => ({
-      name: getTableName(entry.table),
-      table: entry.table,
-      allowed: entry.services.map((service) => `core/src/${service}/`),
-    }));
+  describe('the service-written tables', () => {
+    const tables = schemaModule.SERVICE_WRITTEN_TABLES;
 
-    it('are the two tables the Data rule names', () => {
-      // The names in CLAUDE.md. A third table needs the rule changed too.
-      expect(entries.map((entry) => entry.name).sort()).toEqual([
+    it('are the tables the Data rule names', () => {
+      // The names in CLAUDE.md. A new one needs the rule changed too.
+      expect(tables.map((table) => getTableName(table)).sort()).toEqual([
         'installation',
         'user',
       ]);
-      for (const entry of entries) {
-        expect(tablesNamed(new Set([entry.name])), entry.name).toHaveLength(1);
-      }
+      expect(tables.map((table) => getTableName(table)).sort()).toEqual(
+        [...serviceWrittenTableNames()].sort(),
+      );
     });
 
     it('are install-level: no organisation_id, so never a tenant table, a security table, or one the write helper takes', () => {
-      for (const entry of entries) {
-        const columns = getTableConfig(entry.table).columns.map((c) => c.name);
-        expect(columns, entry.name).not.toContain('organisation_id');
-        expect(tenantTableNames().has(entry.name), entry.name).toBe(false);
-        expect(securityTableNames().has(entry.name), entry.name).toBe(false);
+      for (const table of tables) {
+        const name = getTableName(table);
+        const columns = getTableConfig(table).columns.map((c) => c.name);
+        expect(columns, name).not.toContain('organisation_id');
+        expect(tenantTableNames().has(name), name).toBe(false);
+        expect(securityTableNames().has(name), name).toBe(false);
       }
     });
+  });
 
-    it('are written only by services that exist, and each has source files', () => {
-      const files = sourceFiles(PACKAGES).map((file) =>
-        relative(PACKAGES, file).split(sep).join('/'),
-      );
-      for (const entry of entries) {
-        expect(entry.allowed.length, entry.name).toBeGreaterThan(0);
-        for (const folder of entry.allowed) {
-          expect(
-            files.some((file) => file.startsWith(folder)),
-            `${entry.name} names ${folder}, which has no source files`,
-          ).toBe(true);
-        }
-      }
-    });
-
-    it.each(entries.map((entry) => [entry.name, entry] as const))(
-      'writes %s only in the services named for it',
-      (name, entry) => {
-        expect(
-          violations(PACKAGES, tablesNamed(new Set([name])), entry.allowed),
-        ).toEqual([]);
-      },
-    );
-
-    it('catches a write to either table outside the named services', () => {
-      const root = mkdtempSync(join(tmpdir(), 'osfpm-write-scan-'));
-      try {
-        const write = (path: string, text: string) => {
-          mkdirSync(dirname(join(root, path)), { recursive: true });
-          writeFileSync(join(root, path), text);
-        };
-        write('core/src/auth/sessions.ts', 'await tx.update(user).set(x);');
-        write(
-          'core/src/projects/oops.ts',
+  it('catches a write from any folder but the declared one, and a declared folder that does not exist', () => {
+    inTempTree(
+      {
+        'core/src/auth/sessions.ts': 'await tx.update(user).set(x);',
+        'core/src/auth/oops.ts': 'await tx.insert(accessGrant).values(row);',
+        'core/src/sensitive/service.ts':
+          'await tx.insert(accessGrant).values(row);',
+        'core/src/sensitive/oops.ts': 'await tx.update(session).set(x);',
+        'core/src/projects/oops.ts':
           'await tx.update(user).set({ status: x });',
-        );
         // A service that is not named (yet) may not write `installation`.
-        write(
-          'core/src/setup/later.ts',
-          'await tx.update(installation).set(x);',
-        );
-        write(
-          'core/src/costs/raw.ts',
+        'core/src/setup/later.ts': 'await tx.update(installation).set(x);',
+        'core/src/costs/raw.ts':
           'await tx.execute(sql`update "user" set x = 1`);',
-        );
-        write('core/src/costs/read.ts', 'await tx.select().from(user);');
-        write(
-          'core/src/access/test-fixtures.ts',
+        'core/src/costs/read.ts': 'await tx.select().from(user);',
+        'core/src/access/test-fixtures.ts':
           'await tx.insert(user).values(row);',
-        );
-        const tables = [
-          { identifier: 'user', name: 'user' },
-          { identifier: 'installation', name: 'installation' },
-        ];
-        expect(violations(root, tables, ['core/src/auth/'])).toEqual([
+      },
+      (root) => {
+        const table = (identifier: string, name: string) => ({
+          identifier,
+          name,
+        });
+        // Declared for the auth service, the default.
+        expect(
+          violations(
+            root,
+            [table('user', 'user'), table('installation', 'installation')],
+            [folderOf('auth')],
+          ),
+        ).toEqual([
           'core/src/costs/raw.ts',
           'core/src/projects/oops.ts',
           'core/src/setup/later.ts',
         ]);
-      } finally {
-        rmSync(root, { recursive: true, force: true });
-      }
-    });
-  });
-
-  it('catches a file that writes a table outside its allowed place', () => {
-    const root = mkdtempSync(join(tmpdir(), 'osfpm-write-scan-'));
-    try {
-      const write = (path: string, text: string) => {
-        mkdirSync(dirname(join(root, path)), { recursive: true });
-        writeFileSync(join(root, path), text);
-      };
-      write('core/src/db/write.ts', 'await tx.insert(costLine).values(row);');
-      write(
-        'core/src/auth/sessions.ts',
-        'await tx.insert(session).values(row);',
-      );
-      write(
-        'core/src/costs/direct.ts',
-        'await tx.insert(costLine).values(row);',
-      );
-      write(
-        'core/src/costs/namespaced.ts',
-        'await tx.update(schema.costLine).set(x);',
-      );
-      write(
-        'core/src/costs/raw.ts',
-        'await tx.execute(sql`delete from cost_line`);',
-      );
-      write('core/src/costs/read.ts', 'await tx.select().from(costLine);');
-      write(
-        'core/src/costs/direct.test.ts',
-        'await tx.insert(costLine).values(row);',
-      );
-      write(
-        'core/src/access/test-fixtures.ts',
-        'await tx.insert(role).values(row);',
-      );
-      write('api/src/leak.ts', 'await tx.delete(session).where(x);');
-      write(
-        'api/node_modules/dep/index.ts',
-        'await tx.insert(costLine).values(r);',
-      );
-      const costLine = { identifier: 'costLine', name: 'cost_line' };
-      const session = { identifier: 'session', name: 'session' };
-      expect(violations(root, [costLine], WRITE_HELPER)).toEqual([
-        'core/src/costs/direct.ts',
-        'core/src/costs/namespaced.ts',
-        'core/src/costs/raw.ts',
-      ]);
-      expect(violations(root, [session], AUTH_SERVICE)).toEqual([
-        'api/src/leak.ts',
-      ]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+        expect(
+          violations(root, [table('session', 'session')], [folderOf('auth')]),
+        ).toEqual(['core/src/sensitive/oops.ts']);
+        // Declared for another service: the auth service may not write it either.
+        expect(
+          violations(
+            root,
+            [table('accessGrant', 'access_grant')],
+            [folderOf('sensitive')],
+          ),
+        ).toEqual(['core/src/auth/oops.ts']);
+        const files = sourceFiles(root).map((file) =>
+          relative(root, file).split(sep).join('/'),
+        );
+        const declared = new Map<string, TableWriter>([
+          ['a', { kind: 'security', service: 'auth', reason: null }],
+          ['b', { kind: 'security', service: 'sensitive', reason: 'why' }],
+          ['c', { kind: 'service-written', service: 'nowhere', reason: 'why' }],
+        ]);
+        expect(missingWriterFolders(files, declared)).toEqual(['nowhere']);
+      },
+    );
   });
 });
