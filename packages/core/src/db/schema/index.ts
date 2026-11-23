@@ -1,3 +1,4 @@
+export * from './access-reset.js';
 export * from './account-chart.js';
 export * from './account.js';
 export * from './audit-event.js';

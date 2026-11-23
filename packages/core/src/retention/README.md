@@ -20,7 +20,7 @@ retentionEndDate({
 
 **The `transient` class**
 
-For working rows that cleanup removes once they are of no use. `session`, `login_challenge`, `setup_code` and `invite` use it. The audit log is the record of what happened, so the row itself is not kept. The class counts from `record-created` and has no period, so `retentionEndDate` returns `null` for it: retention never purges these rows, cleanup does.
+For working rows that cleanup removes once they are of no use. `session`, `login_challenge`, `setup_code`, `invite` and `access_reset` use it. The audit log is the record of what happened, so the row itself is not kept. The class counts from `record-created` and has no period, so `retentionEndDate` returns `null` for it: retention never purges these rows, cleanup does.
 
 Each table has its cleanup, and `TRANSIENT_CLEANUPS` lists them. A cleanup takes the transaction handle and `now`, deletes in one statement, returns how many rows it deleted, and writes no audit event: it is housekeeping, and the events were written when the rows changed.
 
@@ -28,6 +28,7 @@ Each table has its cleanup, and `TRANSIENT_CLEANUPS` lists them. A cleanup takes
 - `login_challenge`: `cleanupExpiredChallenges` deletes every challenge that has expired.
 - `setup_code`: `cleanupSetupCodes` deletes every code that was used, revoked or has expired.
 - `invite`: `cleanupInvites` deletes every invite that was used, revoked or has expired, with the same cut-off as setup codes. Its role links (`invite_role`) go with it by `ON DELETE CASCADE`: that table has no retention class and no entry of its own.
+- `access_reset`: `cleanupAccessResets` deletes every admin reset link that was used, revoked or has expired, with the same cut-off as invites.
 
 **The `security-log` class**
 

@@ -12,6 +12,10 @@ import {
   getServerId,
   InstallationMissingError,
 } from '../installation/server-id.js';
+import {
+  AccessResetInvalidError,
+  ResetNotAllowedError,
+} from './access-reset-errors.js';
 import { AuthInputError, AuthStateError } from './errors.js';
 import {
   InviteExceedsOwnAccessError,
@@ -78,6 +82,11 @@ export const AUTH_AUDIT = {
   inviteAccepted: 'auth.invite-accepted',
   inviteAcceptRefused: 'auth.invite-accept-refused',
   inviteRevoked: 'auth.invite-revoked',
+  accessResetCreated: 'auth.access-reset-created',
+  accessResetRevoked: 'auth.access-reset-revoked',
+  accessResetInspectFailed: 'auth.access-reset-inspect-failed',
+  accessResetUsed: 'auth.access-reset-used',
+  accessResetUseRefused: 'auth.access-reset-use-refused',
 } as const;
 
 /** Details of an auth audit event: scalar values only, so nothing nested can hide a secret. */
@@ -141,24 +150,40 @@ export async function serverId(
 }
 
 /**
+ * How hard `lockUser` holds the user row. `no-key-update` is the lock an UPDATE of
+ * the row takes: it queues behind and in front of every other `lockUser`, and does
+ * not block other tables' foreign keys to the user. `update` is stronger: it also
+ * makes a write that inserts a row pointing at the user (a membership, a session)
+ * wait, because the foreign key check takes a key-share lock on the user row. A
+ * writer whose check must not be overtaken by a new reference to the user takes it:
+ * the use of an admin reset link, and the accept of an invite that gives the user a
+ * membership, which exclude each other this way.
+ */
+export type UserLockStrength = 'no-key-update' | 'update';
+
+/**
  * Reads a live user and holds their row until the transaction ends, so a
- * concurrent disable, enable or login of the same user waits. `no key update`
- * is the lock an UPDATE of the row takes; it does not block other tables'
- * foreign keys to the user. Every writer that checks a user's state and then
- * writes on the strength of it takes this lock first (CLAUDE.md, Data rules).
+ * concurrent disable, enable or login of the same user waits. By default the lock
+ * is `FOR NO KEY UPDATE`, the one an UPDATE of the row takes, which does not block
+ * other tables' foreign keys to the user; `strength: 'update'` takes `FOR UPDATE`
+ * (see `UserLockStrength`). Every writer that checks a user's state and then
+ * writes on the strength of it takes this lock first, and a writer that also holds
+ * a change counter or an invite or reset row takes it last, after them (CLAUDE.md,
+ * Data rules).
  *
  * @throws AuthStateError `user-not-found` for an unknown or deleted user.
  */
 export async function lockUser(
   tx: Tx,
   userId: string,
+  options: { readonly strength?: UserLockStrength } = {},
 ): Promise<{ id: string; status: UserStatus }> {
   const [row] = await tx
     .select({ id: user.id, status: user.status })
     .from(user)
     .where(and(eq(user.id, userId), isNull(user.deletedAt)))
     .limit(1)
-    .for('no key update');
+    .for(options.strength === 'update' ? 'update' : 'no key update');
   if (!row) throw new AuthStateError('user-not-found');
   return row;
 }
@@ -201,11 +226,13 @@ export async function guardedAuth<R>(
       error instanceof AuthInputError ||
       error instanceof AuthStateError ||
       error instanceof RecordWriteError ||
-      // What the invite services throw themselves: they carry no value.
+      // What the invite and reset services throw themselves: they carry no value.
       error instanceof AccessDeniedError ||
       error instanceof RecordNotFoundError ||
       error instanceof InviteRefusedError ||
-      error instanceof InviteExceedsOwnAccessError
+      error instanceof InviteExceedsOwnAccessError ||
+      error instanceof AccessResetInvalidError ||
+      error instanceof ResetNotAllowedError
     ) {
       throw error;
     }

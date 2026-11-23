@@ -141,8 +141,12 @@ function deferred() {
   return { promise, resolve };
 }
 
-/** How many sessions of the test database are waiting for a lock right now. */
-async function lockWaiters(db: SchemaDb): Promise<number> {
+/**
+ * How many sessions of the test database are waiting for a lock right now.
+ * `interleave` uses it; a test that has to act between the block and the end of the
+ * holder, which `interleave` does not allow, polls it itself.
+ */
+export async function lockWaiters(db: SchemaDb): Promise<number> {
   const result = await db.execute<{ waiting: number }>(
     sql`select count(*)::int as waiting
         from pg_stat_activity

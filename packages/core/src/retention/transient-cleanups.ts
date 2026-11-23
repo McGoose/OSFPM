@@ -1,3 +1,4 @@
+import { cleanupAccessResets } from '../auth/access-reset-cleanup.js';
 import { cleanupInvites } from '../auth/invite-cleanup.js';
 import { cleanupExpiredChallenges } from '../auth/login-challenge.js';
 import { cleanupEndedSessions } from '../auth/sessions.js';
@@ -23,6 +24,7 @@ export type TransientCleanup = (tx: Tx, now: Date) => Promise<number>;
  */
 export const TRANSIENT_CLEANUPS: ReadonlyMap<string, TransientCleanup> =
   new Map([
+    ['access_reset', cleanupAccessResets],
     // Its role links (invite_role) go with it, by ON DELETE CASCADE.
     ['invite', cleanupInvites],
     ['login_challenge', cleanupExpiredChallenges],

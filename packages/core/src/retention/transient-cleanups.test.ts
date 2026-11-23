@@ -1,6 +1,10 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { base, seedOrganisation } from '../access/test-fixtures.js';
+import {
+  base,
+  grantOnOrganisation,
+  seedOrganisation,
+} from '../access/test-fixtures.js';
 import { createLoginChallenge } from '../auth/login-challenge.js';
 import { createSession } from '../auth/sessions.js';
 import { consumeSetupCode, issueSetupCode } from '../auth/setup-code.js';
@@ -12,6 +16,7 @@ import {
 import type { Database } from '../db/client.js';
 import { declaredRetentionClasses } from '../db/columns.js';
 import {
+  accessReset,
   invite,
   inviteRole,
   loginChallenge,
@@ -173,11 +178,52 @@ describe.each(testTargets)(
         ago(HOUR),
         new Date(now.getTime() + 6 * DAY),
       );
+      // Reset links: one that expired, and one with time left, for two members of
+      // the organisation, because the table keeps one link per person that is
+      // neither used nor revoked. Written directly, as above.
+      const expiredPersonId = await seedActiveUser(database);
+      for (const memberId of [otherId, expiredPersonId]) {
+        await grantOnOrganisation(
+          database,
+          organisationId,
+          memberId,
+          'member',
+          [],
+        );
+      }
+      const seedReset = async (
+        name: string,
+        memberId: string,
+        createdAt: Date,
+        expiresAt: Date,
+      ) => {
+        const [row] = await db
+          .insert(accessReset)
+          .values({
+            originServer: base(organisationId).originServer,
+            organisationId,
+            userId: memberId,
+            tokenHash: `cleanup-reset-${name}`,
+            createdAt,
+            createdBy: userId,
+            expiresAt,
+          })
+          .returning();
+        return row!;
+      };
+      await seedReset('expired', expiredPersonId, ago(60 * DAY), ago(59 * DAY));
+      const liveReset = await seedReset(
+        'live',
+        otherId,
+        ago(HOUR),
+        new Date(now.getTime() + 23 * HOUR),
+      );
       expect(await db.select().from(session)).toHaveLength(2);
       expect(await db.select().from(loginChallenge)).toHaveLength(2);
       expect(await db.select().from(setupCode)).toHaveLength(2);
       expect(await db.select().from(invite)).toHaveLength(2);
       expect(await db.select().from(inviteRole)).toHaveLength(2);
+      expect(await db.select().from(accessReset)).toHaveLength(2);
 
       // What the worker does: every cleanup, with the same time. The name an
       // entry is listed under must be the table its cleanup empties, so each
@@ -216,6 +262,12 @@ describe.each(testTargets)(
       expect(
         (await db.select().from(inviteRole)).map((r) => r.inviteId),
       ).toEqual([liveInvite.id]);
+      // The reset link that expired is gone; the live one stays.
+      expect(
+        (await db.select({ id: accessReset.id }).from(accessReset)).map(
+          (r) => r.id,
+        ),
+      ).toEqual([liveReset.id]);
       const codes = await db.select().from(setupCode);
       expect(codes).toHaveLength(1);
       expect(codes[0]!.usedAt).toBeNull();

@@ -12,7 +12,6 @@ import {
   orgMembershipRole,
   organisation,
   role,
-  rolePermission,
   user,
   type InviteTier,
 } from '../db/schema/index.js';
@@ -26,6 +25,7 @@ import {
 } from '../db/write.js';
 import { MEMBERS_INVITE_PERMISSION } from '../members/permissions.js';
 import { AuthInputError, AuthStateError } from './errors.js';
+import { grantsOfRoles, uncoveredPermissions } from './escalation.js';
 import {
   AccountExistsError,
   AlreadyMemberError,
@@ -70,7 +70,8 @@ import { createUser, isEmailShaped } from './users.js';
  * and no writer that holds an organisation's change counter ever waits for an
  * invite row, so they cannot form a cycle with an accept. An accept follows the
  * rule of CLAUDE.md (Data rules): the organisation's change counter first
- * (`lockOrganisationChanges`), then the invite row, then the user row.
+ * (`lockOrganisationChanges`), then the invite row, then the user row, which is
+ * always last and is held `FOR UPDATE` (see `runAccept`).
  */
 
 /**
@@ -279,7 +280,8 @@ async function requireInvitePermission(
  * one too (it needs the permission, at any reach). There is no exception for
  * owners: a tier carries no permission (decision D-51). It reads without a lock:
  * the roles of the person making the invite changing a moment later is not what
- * this guards.
+ * this guards. The rule itself is in `escalation.ts`, which `createAccessReset`
+ * uses for the grants of the person a reset link is for.
  */
 async function refuseEscalation(
   tx: Tx,
@@ -288,33 +290,11 @@ async function refuseEscalation(
   roleIds: readonly string[],
 ): Promise<void> {
   if (roleIds.length === 0) return;
-  const held = await organisationPermissionReaches(tx, userId, organisationId);
-  const wanted = await tx
-    .select({
-      key: rolePermission.permissionKey,
-      reach: rolePermission.reach,
-    })
-    .from(rolePermission)
-    .where(
-      and(
-        eq(rolePermission.organisationId, organisationId),
-        inArray(rolePermission.roleId, [...roleIds]),
-        isNull(rolePermission.deletedAt),
-      ),
-    );
-  const missing = new Set<string>();
-  for (const grant of wanted) {
-    const reach = held.get(grant.key);
-    if (
-      reach === undefined ||
-      (grant.reach === 'all-projects' && reach !== 'all-projects')
-    ) {
-      missing.add(grant.key);
-    }
-  }
-  if (missing.size > 0) {
-    throw new InviteExceedsOwnAccessError([...missing].sort());
-  }
+  const missing = uncoveredPermissions(
+    await organisationPermissionReaches(tx, userId, organisationId),
+    await grantsOfRoles(tx, organisationId, roleIds),
+  );
+  if (missing.length > 0) throw new InviteExceedsOwnAccessError(missing);
 }
 
 /** The columns of an `InviteView`, without the token hash. */
@@ -707,6 +687,16 @@ class AcceptRolledBack extends Error {
  * counter. Two accepts of one token take the counter in turn and the second finds
  * the invite used; an accept and a revoke of one invite meet on the row, which
  * revoke takes without a counter.
+ *
+ * A signed-in person's user row is locked `FOR UPDATE` and last, not with the
+ * default `FOR NO KEY UPDATE` of `lockUser`. The use of an admin reset link for the
+ * same person (`useAccessReset`) holds that row the same way and, under it, refuses
+ * a person who belongs to another organisation. So an accept that gives the person a
+ * second membership and a reset that is being used for them exclude each other: the
+ * accept waits for the reset, which finishes before the new membership exists, or
+ * the reset waits for the accept and then sees the membership and is refused.
+ * `FOR UPDATE` also holds off any other insert that points at the user, so the
+ * exclusion does not rest on this one writer.
  */
 async function runAccept(
   tx: Tx,
@@ -788,7 +778,7 @@ async function runAccept(
   let joined: SessionUser;
   let newUser = false;
   if (who.kind === 'signed-in') {
-    const locks = await lockUser(tx, who.userId);
+    const locks = await lockUser(tx, who.userId, { strength: 'update' });
     // A user who is not active has no business joining anything; a disabled one
     // cannot have a session at all.
     if (locks.status !== 'active') throw new AuthStateError('user-disabled');

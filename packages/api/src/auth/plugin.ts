@@ -82,7 +82,8 @@ declare module 'fastify' {
      */
     sessionRateLimit?: boolean;
     /**
-     * A session opened by a recovery code (scope `recovery`) may call the
+     * A session with the recovery scope (a recovery code, first-run setup, an
+     * invite or an admin reset link opened it) may call the
      * route. Without it a recovery session gets a 403
      * `account-recovery-required`, whatever the route's `auth` mode, so a new
      * route is closed to such a session unless it says otherwise. Only the
@@ -317,7 +318,8 @@ const implementation: FastifyPluginAsync<AuthPluginOptions> = (
  * request with no valid session is not counted. Past either limit it is a 429
  * `rate-limited` with `Retry-After`.
  *
- * A session with the `recovery` scope, which a recovery code opens, may only
+ * A session with the `recovery` scope, which a recovery code, first-run setup, an
+ * invite or an admin reset link opens, may only
  * call a route that says `config.allowedInRecovery`; any other route is a 403
  * `account-recovery-required`, whatever its `auth` mode but `none`. The check
  * comes after the origin check and the limit per session.

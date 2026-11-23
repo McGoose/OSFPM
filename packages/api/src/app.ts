@@ -11,6 +11,8 @@ import type { Database } from '@osfpm/core/src/db/client.js';
 import { newId } from '@osfpm/core/src/db/ids.js';
 import { API_PREFIX } from './api-version.js';
 import { relyingPartyFor } from '@osfpm/core/src/auth/passkeys.js';
+import { memberResetRoutes } from './access-reset/member-routes.js';
+import { publicAccessResetRoutes } from './access-reset/public-routes.js';
 import { accountRoutes } from './auth/account-routes.js';
 import { loginRoutes } from './auth/login-routes.js';
 import { passkeyRoutes } from './auth/passkey-routes.js';
@@ -243,6 +245,12 @@ export function buildApp(options: BuildAppOptions) {
     prefix: `${API_PREFIX}/organisations`,
   });
   void app.register(publicInviteRoutes, { prefix: `${API_PREFIX}/invites` });
+  void app.register(memberResetRoutes, {
+    prefix: `${API_PREFIX}/organisations`,
+  });
+  void app.register(publicAccessResetRoutes, {
+    prefix: `${API_PREFIX}/access-reset`,
+  });
 
   return app;
 }

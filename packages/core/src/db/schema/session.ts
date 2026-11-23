@@ -18,7 +18,9 @@ import { user } from './user.js';
 
 /**
  * Allowed values of `session.method`: how the user proved who they are. The
- * CHECK is built from this list, so a new value needs a new migration.
+ * CHECK is built from this list, so a new value needs a new migration. `reset` is
+ * the session that an admin reset link opens (SC-10, decision D-57): like
+ * `recovery` it always has the `recovery` scope.
  */
 export const SESSION_METHODS = [
   'passkey',
@@ -27,6 +29,7 @@ export const SESSION_METHODS = [
   'recovery',
   'setup',
   'invite',
+  'reset',
 ] as const;
 /** One value of `SESSION_METHODS`. */
 export type SessionMethod = (typeof SESSION_METHODS)[number];

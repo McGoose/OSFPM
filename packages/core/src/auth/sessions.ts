@@ -54,8 +54,9 @@ export const SESSION_DEFAULTS = {
  * A fixed list, so a caller cannot put free text, and with it a secret, into
  * the audit trail. `logout` is a user ending the session they are on;
  * `user-revoked` is a user ending another of their own sessions, from the list
- * of where they are signed in. `revoked_reason` is plain text, so a new reason
- * needs no migration.
+ * of where they are signed in; `access-reset` is the end of every session of a
+ * person for whom an admin reset link was used. `revoked_reason` is plain text,
+ * so a new reason needs no migration.
  */
 export const SESSION_REVOKE_REASONS = [
   'logout',
@@ -66,6 +67,7 @@ export const SESSION_REVOKE_REASONS = [
   'recovery-used',
   'passkey-revoked',
   'admin-action',
+  'access-reset',
 ] as const;
 /** One value of `SESSION_REVOKE_REASONS`. */
 export type SessionRevokeReason = (typeof SESSION_REVOKE_REASONS)[number];
@@ -153,8 +155,9 @@ function checkedReason(reason: unknown): SessionRevokeReason {
  * method.
  *
  * `scope` is `full` unless said otherwise, and always `recovery` for the
- * `recovery` method: a session opened by a recovery code can only be made full
- * by `promoteSession`, never at creation (SC-10).
+ * `recovery` and `reset` methods: a session opened by a recovery code or by an
+ * admin reset link can only be made full by `promoteSession`, never at creation
+ * (SC-10, decision D-57).
  *
  * A `passkey` session names the passkey that opened it in `passkeyCredentialId`,
  * which must be a live passkey of this user: revoking that passkey then ends the
@@ -162,7 +165,7 @@ function checkedReason(reason: unknown): SessionRevokeReason {
  *
  * @throws AuthInputError `method` when the method is not in `SESSION_METHODS`,
  * `scope` when the scope is not in `SESSION_SCOPES` or is `full` for a
- * `recovery` session, `passkeyCredentialId` when it is given for a method other
+ * `recovery` or `reset` session, `passkeyCredentialId` when it is given for a method other
  * than `passkey`, or is not a live passkey of the user (another user's, revoked,
  * or not there).
  * @throws AuthStateError `user-not-found` for an unknown or deleted user,
@@ -190,12 +193,11 @@ export async function createSession(
   if (passkeyCredentialId !== null && input.method !== 'passkey') {
     throw new AuthInputError('passkeyCredentialId');
   }
-  const scope =
-    input.scope ?? (input.method === 'recovery' ? 'recovery' : 'full');
-  if (
-    !isOneOf(SESSION_SCOPES, scope) ||
-    (input.method === 'recovery' && scope !== 'recovery')
-  ) {
+  // A recovery code or a reset link proves a way back in, not that the person
+  // still has a way to sign in, so what they open is the limited session.
+  const limited = input.method === 'recovery' || input.method === 'reset';
+  const scope = input.scope ?? (limited ? 'recovery' : 'full');
+  if (!isOneOf(SESSION_SCOPES, scope) || (limited && scope !== 'recovery')) {
     throw new AuthInputError('scope');
   }
   const { now } = input;

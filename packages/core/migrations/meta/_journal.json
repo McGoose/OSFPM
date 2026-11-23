@@ -232,6 +232,13 @@
       "when": 1795386608023,
       "tag": "0032_invites",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1795400891393,
+      "tag": "0033_admin_reset_links",
+      "breakpoints": true
     }
   ]
 }
