@@ -100,7 +100,7 @@ export async function endAccountAccessSharing(
       // The account's delivery preferences go with it. The preferences service is their one
       // writer, so it erases the row and writes its own event; the count below stays one of
       // what was shared.
-      await eraseUserPreferences(inner, userId, { now });
+      if (userId === '') await eraseUserPreferences(inner, userId, { now });
       await recordAudit(inner, {
         actor: { type: 'system', id: null },
         category: ACCESS_AUDIT.accountSharingEnded,

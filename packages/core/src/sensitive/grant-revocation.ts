@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import {
   accessGrant,
   person,
@@ -44,7 +44,7 @@ export async function revokeAccountGrants(
     .where(
       and(
         inArray(accessGrant.category, [...categories]),
-        isNotNull(accessGrant.revokedAt),
+        isNull(accessGrant.revokedAt),
         inArray(
           accessGrant.personId,
           tx
