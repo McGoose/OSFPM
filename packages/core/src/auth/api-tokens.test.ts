@@ -30,11 +30,12 @@ import {
   TokenExceedsOwnAccessError,
   TokenReadOnlyScopeError,
 } from './api-token-errors.js';
-import { AuthInputError } from './errors.js';
+import { AuthInputError, AuthStateError } from './errors.js';
 import { AUTH_AUDIT } from './shared.js';
 import {
   everyRowAsText,
   seedApiToken,
+  seedSession,
   seedTokenScene,
   setMemberRolesEnded,
   setMembershipStatus,
@@ -89,21 +90,24 @@ describe.each(testTargets)('personal API tokens on $name', (target) => {
         next(),
       ),
     );
-  const make = (
+  /** Makes a token as `userId`, from a session of theirs that is live. */
+  const make = async (
     userId: string,
     input: Partial<CreateApiTokenInput> = {},
     now = next(),
     organisationId = scene.organisationId,
-  ) =>
-    db().transaction((tx) =>
+  ) => {
+    const sessionId = await seedSession(database, userId);
+    return db().transaction((tx) =>
       createApiToken(
         tx,
-        { userId },
+        { userId, sessionId },
         organisationId,
         { name: 'Call sheet export', access: 'read', ...input },
         now,
       ),
     );
+  };
   const errorOf = (promise: Promise<unknown>) =>
     promise.then(
       () => undefined,
@@ -159,6 +163,64 @@ describe.each(testTargets)('personal API tokens on $name', (target) => {
           'active',
         );
       }
+    });
+
+    it('is made only from a session that is still live: a revoked or ended one, another person’s and one that is not there are refused with nothing written', async () => {
+      await turn(true);
+      const person = scene.tokensId;
+      const sessions: [string, string][] = [
+        [
+          'revoked',
+          await seedSession(database, person, {
+            revokedAt: at(-DAY),
+            revokedReason: 'access-reset',
+          }),
+        ],
+        [
+          'idle time over',
+          await seedSession(database, person, { idleExpiresAt: at(-DAY) }),
+        ],
+        [
+          'absolute time over',
+          await seedSession(database, person, {
+            idleExpiresAt: at(-2 * DAY),
+            absoluteExpiresAt: at(-DAY),
+          }),
+        ],
+        ['another person’s', await seedSession(database, scene.medicalId)],
+        ['unknown', '00000000-0000-7000-8000-000000000000'],
+        ['malformed', 'not-an-id'],
+      ];
+      for (const [label, sessionId] of sessions) {
+        const now = next();
+        const refused = await errorOf(
+          db().transaction((tx) =>
+            createApiToken(
+              tx,
+              { userId: person, sessionId },
+              scene.organisationId,
+              { name: 'Call sheet export', access: 'read' },
+              now,
+            ),
+          ),
+        );
+        expect(refused, label).toBeInstanceOf(AuthStateError);
+        expect((refused as AuthStateError).reason, label).toBe('session-ended');
+        expect(await createdEvents(now), label).toEqual([]);
+      }
+      expect(await stored()).toEqual([]);
+      // A live session of the person goes through.
+      const live = await seedSession(database, person);
+      const made = await db().transaction((tx) =>
+        createApiToken(
+          tx,
+          { userId: person, sessionId: live },
+          scene.organisationId,
+          { name: 'Call sheet export', access: 'read' },
+          next(),
+        ),
+      );
+      expect(made.apiToken.userId).toBe(person);
     });
 
     it('is refused while personal tokens are off, which is how every organisation starts', async () => {

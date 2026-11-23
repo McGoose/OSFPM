@@ -173,19 +173,24 @@ export async function serverId(
  * wait, because the foreign key check takes a key-share lock on the user row. A
  * writer whose check must not be overtaken by a new reference to the user takes it:
  * the use of an admin reset link, and the accept of an invite that gives the user a
- * membership, which exclude each other this way.
+ * membership, which exclude each other this way. `key-share` is the weakest: it
+ * conflicts only with `update`, so it queues behind a writer that holds the row
+ * `FOR UPDATE` and nothing else, and any number of writers hold it at once. A writer
+ * that only has to be ordered after the use of a reset link takes it, as the services
+ * that make and revoke personal API tokens do: they take it before any token row, which
+ * is the order the reset's own use takes them in, so the two cannot deadlock.
  */
-export type UserLockStrength = 'no-key-update' | 'update';
+export type UserLockStrength = 'no-key-update' | 'update' | 'key-share';
 
 /**
  * Reads a live user and holds their row until the transaction ends, so a
  * concurrent disable, enable or login of the same user waits. By default the lock
  * is `FOR NO KEY UPDATE`, the one an UPDATE of the row takes, which does not block
- * other tables' foreign keys to the user; `strength: 'update'` takes `FOR UPDATE`
- * (see `UserLockStrength`). Every writer that checks a user's state and then
- * writes on the strength of it takes this lock first, and a writer that also holds
- * a change counter or an invite or reset row takes it last, after them (CLAUDE.md,
- * Data rules).
+ * other tables' foreign keys to the user; `strength: 'update'` takes `FOR UPDATE` and
+ * `strength: 'key-share'` takes `FOR KEY SHARE` (see `UserLockStrength`). Every writer
+ * that checks a user's state and then writes on the strength of it takes this lock
+ * first, and a writer that also holds a change counter or an invite or reset row takes
+ * it last, after them, and before that user's token rows (CLAUDE.md, Data rules).
  *
  * @throws AuthStateError `user-not-found` for an unknown or deleted user.
  */
@@ -194,12 +199,19 @@ export async function lockUser(
   userId: string,
   options: { readonly strength?: UserLockStrength } = {},
 ): Promise<{ id: string; status: UserStatus }> {
+  // A value that is none of the two stronger ones is the default, as it always was.
+  const mode =
+    options.strength === 'update'
+      ? 'update'
+      : options.strength === 'key-share'
+        ? 'key share'
+        : 'no key update';
   const [row] = await tx
     .select({ id: user.id, status: user.status })
     .from(user)
     .where(and(eq(user.id, userId), isNull(user.deletedAt)))
     .limit(1)
-    .for(options.strength === 'update' ? 'update' : 'no key update');
+    .for(mode);
   if (!row) throw new AuthStateError('user-not-found');
   return row;
 }

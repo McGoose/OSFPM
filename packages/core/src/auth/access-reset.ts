@@ -88,7 +88,11 @@ import { generateToken, hashToken } from './tokens.js';
  * the lock, so it either finishes before a second membership exists or sees it and
  * is refused. `FOR UPDATE` also holds off every other insert that points at the
  * user, which a foreign key check blocks, so the exclusion does not rest on one
- * writer. A revoke takes only the link rows.
+ * writer. After the user row a use revokes the person's sessions and their personal API
+ * tokens (the token rows, in id order); the writers of tokens (`api-tokens.ts`) take the
+ * acting person's row `FOR KEY SHARE` before any token row, in that same order, so they
+ * cannot deadlock with a use, and a token is never made by a session the use ended. A
+ * revoke takes only the link rows.
  *
  * Making a link takes the person's user row `FOR UPDATE` too: what it decides
  * depends on rows that point at the person (their memberships), and two links made

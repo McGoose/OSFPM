@@ -13,6 +13,7 @@ import {
 import { AUTH_AUDIT } from './shared.js';
 import {
   seedApiToken,
+  seedSession,
   seedTokenScene,
   type TokenScene,
 } from './test-support.js';
@@ -171,10 +172,11 @@ describe.each(testTargets)(
       // The person needs api:tokens to make one: give the role that does to a member
       // who has nothing else, so the link is allowed (the owner holds everything).
       const person = scene.tokensId;
+      const sessionId = await seedSession(database, person);
       const made = await db().transaction((tx) =>
         createApiToken(
           tx,
-          { userId: person },
+          { userId: person, sessionId },
           scene.organisationId,
           { name: 'Script', access: 'read' },
           next(),

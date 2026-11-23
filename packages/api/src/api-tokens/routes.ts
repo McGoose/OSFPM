@@ -161,7 +161,7 @@ export const apiTokenRoutes: FastifyPluginAsyncZod = (app) => {
       },
     },
     async (request, reply) => {
-      const { user } = requireAuthenticated(request);
+      const { user, session } = requireAuthenticated(request);
       const body = request.body;
       const input: CreateApiTokenInput = {
         name: body.name,
@@ -176,9 +176,11 @@ export const apiTokenRoutes: FastifyPluginAsyncZod = (app) => {
           : { sensitivePermissions: body.sensitivePermissions }),
       };
       const made = await app.db.db.transaction((tx) =>
+        // The session goes with the user: the core reads it again under the lock on the
+        // person's row, so a token is never made by a session a reset link just ended.
         createApiToken(
           tx,
-          { userId: user.id },
+          { userId: user.id, sessionId: session.id },
           request.params.organisationId,
           input,
           new Date(),

@@ -6,7 +6,7 @@ The routes that switch personal API tokens on for an organisation and let people
 
 - `routes.ts`: `apiTokenRoutes`, under `/api/v1/organisations/:organisationId`:
   - `GET /api-settings` and `PUT /api-settings`: the two switches, `personalTokens` and `sensitive`. Both need `api:manage`. `PUT` takes both values; turning one off ends the tokens it no longer allows in the same transaction, and the answer says how many in `revoked`.
-  - `POST /api-tokens`: makes a token for the person asking (needs `api:tokens`). The `201` holds the token once and is not cached.
+  - `POST /api-tokens`: makes a token for the person asking (needs `api:tokens`), from the session the request came in on: if a reset link has ended that session at that very moment, the token is not made (401). The `201` holds the token once and is not cached.
   - `GET /api-tokens?scope=own|all`: the tokens that still work, as metadata. `own` (the default) needs no permission, `all` needs `api:manage`.
   - `DELETE /api-tokens/:tokenId`: revokes one token (`204`). Your own needs no permission; anyone's needs `api:manage`. A token that is not live, not of this organisation, or not the caller's to revoke is a `404`.
 - `schemas.ts`: the request and response schemas. A response has no field that could hold a token or its hash, and nothing beyond the stored `prefix` that identifies a token.

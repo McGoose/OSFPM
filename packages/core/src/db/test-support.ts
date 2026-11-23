@@ -164,11 +164,18 @@ export async function lockWaiters(db: SchemaDb): Promise<number> {
  * waiter is blocked on a lock, which proves the two overlap, and only then lets
  * the holder commit. Returns both outcomes. If the waiter finishes while the
  * holder is still open, the lock did not do its job and the call throws.
+ *
+ * `whileBlocked`, when given, runs at the moment between those two, with the waiter
+ * blocked and the holder still open, on connections of its own: for a test that has to
+ * look at what the waiter holds while it waits (for instance, that it holds no row lock
+ * yet, which is what keeps it from deadlocking with the holder). If it throws, both
+ * transactions are finished first and the error is thrown after.
  */
 export async function interleave(
   db: SchemaDb,
   holder: (tx: Tx) => Promise<unknown>,
   waiter: (tx: Tx) => Promise<unknown>,
+  whileBlocked?: () => Promise<unknown>,
 ) {
   const holderDone = deferred();
   const commit = deferred();
@@ -190,6 +197,7 @@ export async function interleave(
       secondSettled = true;
     },
   );
+  let observed: { error: unknown } | undefined;
   try {
     for (let waited = 0; ; waited += 25) {
       if (secondSettled) {
@@ -203,10 +211,19 @@ export async function interleave(
       }
       await sleep(25);
     }
+    if (whileBlocked !== undefined) {
+      try {
+        await whileBlocked();
+      } catch (error) {
+        observed = { error };
+      }
+    }
   } finally {
     commit.resolve();
   }
-  return Promise.allSettled([first, second]);
+  const outcomes = await Promise.allSettled([first, second]);
+  if (observed !== undefined) throw observed.error;
+  return outcomes;
 }
 
 /** How many of `outcomes` (from `interleave` or `Promise.allSettled`) succeeded. */

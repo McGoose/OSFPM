@@ -26,6 +26,7 @@ import { AUTH_AUDIT } from './shared.js';
 import {
   everyRowAsText,
   markUserDeleted,
+  seedSession,
   seedTokenScene,
   setMemberRolesEnded,
   setMembershipStatus,
@@ -99,20 +100,23 @@ describe.each(testTargets)('using a personal API token on $name', (target) => {
         next(),
       ),
     );
-  const make = (
+  /** Makes a token as `userId`, from a session of theirs that is live. */
+  const make = async (
     userId: string,
     input: Partial<CreateApiTokenInput> = {},
     now = next(),
-  ) =>
-    db().transaction((tx) =>
+  ) => {
+    const sessionId = await seedSession(database, userId);
+    return db().transaction((tx) =>
       createApiToken(
         tx,
-        { userId },
+        { userId, sessionId },
         scene.organisationId,
         { name: 'Call sheet export', access: 'read', ...input },
         now,
       ),
     );
+  };
   /** What the API plugin does: the failure's audit event is committed, then it is answered. */
   const authenticate = (
     token: string,

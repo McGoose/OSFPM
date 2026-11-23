@@ -87,6 +87,7 @@ import {
   rowsOf,
   seedActiveUser,
   seedPassword,
+  seedSession,
   softwareAuthenticator,
   totpCodeAt,
   type SoftwareAuthenticator,
@@ -574,10 +575,11 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
     // In a transaction of its own, as the other tests make a token: the token then reaches
     // `authenticateApiToken` below through a callback, and not by a direct call, which a
     // scanner reads as a password reaching `hashToken` (see tokens.ts).
+    const adminSessionId = await seedSession(database, setup.user.id);
     const scriptAccess = await db().transaction((tx) =>
       createApiToken(
         tx,
-        inviter,
+        { ...inviter, sessionId: adminSessionId },
         setupOrganisationId,
         {
           name: API_TOKEN_NAME,

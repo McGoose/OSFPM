@@ -1,7 +1,13 @@
+import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { readApiTokenSwitches } from '../access/api-token-switches.js';
 import type { Database } from '../db/client.js';
-import { apiToken, auditEvent, settingValue } from '../db/schema/index.js';
+import {
+  apiToken,
+  auditEvent,
+  session,
+  settingValue,
+} from '../db/schema/index.js';
 import {
   createMigratedDatabase,
   interleave,
@@ -9,21 +15,25 @@ import {
   testTargets,
 } from '../db/test-support.js';
 import { RecordNotFoundError } from '../db/write.js';
+import { createAccessReset, useAccessReset } from './access-reset.js';
 import {
   ApiSensitiveTokensDisabledError,
   ApiTokensDisabledError,
 } from './api-token-errors.js';
 import {
   createApiToken,
+  revokeAnyApiToken,
   revokeApiToken,
   revokeOwnApiToken,
   setApiTokenSwitches,
   type ApiTokenSwitchesResult,
   type CreateApiTokenInput,
 } from './api-tokens.js';
-import { AUTH_AUDIT } from './shared.js';
+import { AuthStateError } from './errors.js';
+import { AUTH_AUDIT, lockUser } from './shared.js';
 import {
   seedApiToken,
+  seedSession,
   seedTokenScene,
   type TokenScene,
 } from './test-support.js';
@@ -74,10 +84,13 @@ describe.skipIf(postgres === undefined)(
     let database: Database;
     let cleanup: () => Promise<void>;
     let scene: TokenScene;
+    /** A live session of the owner, which the tokens the owner makes are made from. */
+    let ownerSession: string;
 
     beforeAll(async () => {
       ({ database, cleanup } = await createMigratedDatabase(postgres!));
       scene = await seedTokenScene(database, T0);
+      ownerSession = await seedSession(database, scene.ownerId);
     });
     afterAll(async () => {
       await cleanup();
@@ -109,7 +122,7 @@ describe.skipIf(postgres === undefined)(
     ) =>
       createApiToken(
         tx,
-        { userId: scene.ownerId },
+        { userId: scene.ownerId, sessionId: ownerSession },
         scene.organisationId,
         { name: 'Call sheet export', access: 'read', ...input },
         next(),
@@ -374,6 +387,236 @@ describe.skipIf(postgres === undefined)(
           }
         }
         expect(await revocationsOf(token.id)).toHaveLength(1);
+      });
+    });
+
+    /** The tokens of `personId` that still work. */
+    const workingOf = async (personId: string) =>
+      (await working()).filter((row) => row.userId === personId);
+    /** A reset link for `personId`, made by the owner. */
+    const linkFor = (personId: string) =>
+      db().transaction((tx) =>
+        createAccessReset(
+          tx,
+          { userId: scene.ownerId },
+          scene.organisationId,
+          personId,
+          { expiresInHours: 24 },
+          next(),
+        ),
+      );
+    /** A token made as `userId` from the session `sessionId`. */
+    const makeFrom = (
+      tx: Pick<Database, 'db'>['db'],
+      userId: string,
+      sessionId: string,
+    ) =>
+      createApiToken(
+        tx,
+        { userId, sessionId },
+        scene.organisationId,
+        { name: 'Call sheet export', access: 'read' },
+        next(),
+      );
+
+    describe('making a token against the use of the person’s own admin reset link', () => {
+      /** The `auth.api-token-created` events written for `personId`. */
+      const createdEventsOf = async (personId: string) =>
+        (await db().select().from(auditEvent)).filter(
+          (event) =>
+            event.category === AUTH_AUDIT.apiTokenCreated &&
+            event.details?.userId === personId,
+        );
+
+      it('is refused when the use holds the person’s row first: the session it ended makes no token', async () => {
+        await turn(true, false);
+        const sessionId = await seedSession(database, scene.tokensId);
+        const link = await linkFor(scene.tokensId);
+        const outcomes = await interleave(
+          db(),
+          (tx) => useAccessReset(tx, link.token, next()),
+          (tx) => makeFrom(tx, scene.tokensId, sessionId),
+        );
+        expect(outcomes[0].status).toBe('fulfilled');
+        // The refusal of the service, not a failure of the database: the make waited for
+        // the person's row, and then read the session as the use left it.
+        const refusal = reasonOf(outcomes[1]);
+        expect(refusal).toBeInstanceOf(AuthStateError);
+        expect((refusal as AuthStateError).reason).toBe('session-ended');
+        expect(await workingOf(scene.tokensId)).toEqual([]);
+        expect(await createdEventsOf(scene.tokensId)).toEqual([]);
+        const ended = (await db().select().from(session)).find(
+          (row) => row.id === sessionId,
+        )!;
+        expect(ended.revokedReason).toBe('access-reset');
+      });
+
+      it('is made and then revoked by the use when the making holds the person’s row first, and the use counts it', async () => {
+        await turn(true, false);
+        const sessionId = await seedSession(database, scene.tokensId);
+        const link = await linkFor(scene.tokensId);
+        const usedAt = next();
+        const outcomes = await interleave(
+          db(),
+          (tx) => makeFrom(tx, scene.tokensId, sessionId),
+          (tx) => useAccessReset(tx, link.token, usedAt),
+        );
+        const made = valueOf<Awaited<ReturnType<typeof makeFrom>>>(outcomes[0]);
+        expect(outcomes[1].status).toBe('fulfilled');
+        // The use could see the new token because it waited for the person's row.
+        expect(await workingOf(scene.tokensId)).toEqual([]);
+        const row = (await db().select().from(apiToken)).find(
+          (found) => found.id === made.apiToken.id,
+        )!;
+        expect(row.revokeReason).toBe('access-reset');
+        const used = (await db().select().from(auditEvent)).filter(
+          (event) =>
+            event.category === AUTH_AUDIT.accessResetUsed &&
+            event.occurredAt.getTime() === usedAt.getTime(),
+        );
+        expect(used).toHaveLength(1);
+        expect(used[0]!.details).toMatchObject({ tokensRevoked: 1 });
+      });
+    });
+
+    describe('writers of tokens against the use of their own admin reset link', () => {
+      /**
+       * What a transaction that is waiting for a person's row must not be doing: holding a
+       * token row. The use of a reset link takes the person's row and then their token
+       * rows, so a writer that holds a token row while it waits for the person's row makes
+       * a deadlock. A `NOWAIT` lock from another connection says at once whether the row
+       * is held.
+       */
+      const expectTokenRowFree = async (tokenId: string) => {
+        const state = await db()
+          .transaction((tx) =>
+            tx.execute(
+              sql`select id from api_token where id = ${tokenId} for update nowait`,
+            ),
+          )
+          .then(
+            () => 'free',
+            () => 'held by the waiting transaction',
+          );
+        expect(state).toBe('free');
+      };
+
+      it('revoking your own token waits for your row before it takes the token row', async () => {
+        const token = await seedApiToken(
+          database,
+          scene.organisationId,
+          scene.tokensId,
+        );
+        const outcomes = await interleave(
+          db(),
+          // The use takes the person's row first and their token rows after it.
+          (tx) => lockUser(tx, scene.tokensId, { strength: 'update' }),
+          (tx) =>
+            revokeOwnApiToken(
+              tx,
+              { userId: scene.tokensId },
+              scene.organisationId,
+              token.id,
+              next(),
+            ),
+          () => expectTokenRowFree(token.id),
+        );
+        expect(outcomes.map((outcome) => outcome.status)).toEqual([
+          'fulfilled',
+          'fulfilled',
+        ]);
+        const row = (await db().select().from(apiToken)).find(
+          (found) => found.id === token.id,
+        )!;
+        expect(row).toMatchObject({
+          revokeReason: 'manual',
+          revokedBy: scene.tokensId,
+        });
+      });
+
+      it('revoking someone else’s token waits for the administrator’s row before it takes the token row', async () => {
+        const token = await seedApiToken(
+          database,
+          scene.organisationId,
+          scene.tokensId,
+        );
+        const outcomes = await interleave(
+          db(),
+          (tx) => lockUser(tx, scene.managerId, { strength: 'update' }),
+          (tx) =>
+            revokeAnyApiToken(
+              tx,
+              { userId: scene.managerId },
+              scene.organisationId,
+              token.id,
+              next(),
+            ),
+          () => expectTokenRowFree(token.id),
+        );
+        expect(outcomes.map((outcome) => outcome.status)).toEqual([
+          'fulfilled',
+          'fulfilled',
+        ]);
+        const row = (await db().select().from(apiToken)).find(
+          (found) => found.id === token.id,
+        )!;
+        expect(row.revokedBy).toBe(scene.managerId);
+      });
+
+      it('turning tokens off waits for the administrator’s row before it takes the token rows', async () => {
+        // The owner wrote the switches once already, so changing them again changes no
+        // key that points at the owner, and the first thing that could wait for the
+        // owner's row is the revoking of the tokens: the case this has to get right.
+        await turn(true, false);
+        const own = await seedApiToken(
+          database,
+          scene.organisationId,
+          scene.ownerId,
+        );
+        const outcomes = await interleave(
+          db(),
+          (tx) => lockUser(tx, scene.ownerId, { strength: 'update' }),
+          (tx) => turn(false, false, tx),
+          () => expectTokenRowFree(own.id),
+        );
+        expect(outcomes[0].status).toBe('fulfilled');
+        expect(valueOf<ApiTokenSwitchesResult>(outcomes[1]).revoked).toBe(1);
+      });
+
+      it('a person revoking their own token and using their own reset link, started together, both finish and the token ends revoked', async () => {
+        for (let round = 0; round < 8; round += 1) {
+          const label = `round ${round}`;
+          const token = await seedApiToken(
+            database,
+            scene.organisationId,
+            scene.tokensId,
+          );
+          const link = await linkFor(scene.tokensId);
+          const outcomes = await Promise.allSettled([
+            db().transaction((tx) =>
+              revokeOwnApiToken(
+                tx,
+                { userId: scene.tokensId },
+                scene.organisationId,
+                token.id,
+                next(),
+              ),
+            ),
+            db().transaction((tx) => useAccessReset(tx, link.token, next())),
+          ]);
+          // The use never loses. The revoke went first, or found the token already ended
+          // by the use, which is a not found: never a deadlock or another database failure.
+          expect(outcomes[1].status, label).toBe('fulfilled');
+          if (outcomes[0].status === 'rejected') {
+            expect(reasonOf(outcomes[0]), label).toBeInstanceOf(
+              RecordNotFoundError,
+            );
+          }
+          const row = (await db().select().from(apiToken)).find(
+            (found) => found.id === token.id,
+          )!;
+          expect(row.revokedAt, label).not.toBeNull();
+        }
       });
     });
   },

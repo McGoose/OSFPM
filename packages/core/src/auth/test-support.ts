@@ -36,6 +36,7 @@ import {
   passwordCredential,
   role,
   rolePermission,
+  session,
   totpCredential,
   user,
   type OrgMembershipStatus,
@@ -1031,4 +1032,37 @@ export async function seedApiToken(
     })
     .returning();
   return row!;
+}
+
+let sessionCounter = 0;
+
+/**
+ * A session row written directly as fixtures do (the service that makes one is under test
+ * elsewhere): live, of method `password` and scope `full`, for `userId`, and ending in
+ * the year 2100 unless `overrides` say otherwise, so a test that moves its clock does not
+ * end it. Its token hash is a fixture value, so it cannot be presented to a route: it is
+ * for the services that are told which session a call is made from. Answers the row's id.
+ */
+export async function seedSession(
+  database: Database,
+  userId: string,
+  overrides: Partial<typeof session.$inferInsert> = {},
+): Promise<string> {
+  sessionCounter += 1;
+  const [row] = await database.db
+    .insert(session)
+    .values({
+      originServer: ORIGIN,
+      userId,
+      tokenHash: `fixture-session-hash-${sessionCounter}-${newId()}`,
+      method: 'password',
+      scope: 'full',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      lastSeenAt: new Date('2026-01-01T00:00:00.000Z'),
+      idleExpiresAt: new Date('2100-01-01T00:00:00.000Z'),
+      absoluteExpiresAt: new Date('2100-01-01T00:00:00.000Z'),
+      ...overrides,
+    })
+    .returning({ id: session.id });
+  return row!.id;
 }

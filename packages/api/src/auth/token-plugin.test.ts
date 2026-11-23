@@ -7,6 +7,7 @@ import {
 } from '@osfpm/core/src/auth/api-tokens.js';
 import { createSession } from '@osfpm/core/src/auth/sessions.js';
 import {
+  seedSession,
   seedTokenScene,
   setMembershipStatus,
   setUserStatus,
@@ -140,10 +141,11 @@ describe.each(testTargets)(
       userId: string,
       input: Partial<Parameters<typeof createApiToken>[3]> = {},
     ) {
+      const sessionId = await seedSession(ctx.database, userId);
       const made = await ctx.database.db.transaction((tx) =>
         createApiToken(
           tx,
-          { userId },
+          { userId, sessionId },
           scene.organisationId,
           { name: 'Call sheet export', access: 'read', ...input },
           new Date(),

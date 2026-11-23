@@ -33,6 +33,7 @@ import {
   apiToken,
   orgMembership,
   permission,
+  session,
   settingValue,
   user,
   type ApiTokenAccess,
@@ -61,7 +62,7 @@ import {
   TokenReadOnlyScopeError,
   type ApiTokenFailureReason,
 } from './api-token-errors.js';
-import { AuthInputError } from './errors.js';
+import { AuthInputError, AuthStateError } from './errors.js';
 import { uncoveredPermissions } from './escalation.js';
 import {
   SESSION_DEFAULTS,
@@ -72,6 +73,7 @@ import {
   AUTH_AUDIT,
   guardedAuth,
   isOneOf,
+  lockUser,
   recordAuthAudit,
   serverId,
 } from './shared.js';
@@ -105,26 +107,22 @@ import { generateToken, hashToken } from './tokens.js';
  * organisation: a token is its owner's access, narrowed, and an owner who may no longer
  * make tokens has none to lend a script.
  *
- * Lock order (CLAUDE.md, Data rules). Anything that writes a switch or reads one to decide
- * on a token takes the organisation's change counter first (`lockOrganisationChanges`):
- * `setApiTokenSwitches` and `createApiToken`. So a token being made and a switch being
- * turned off queue on the counter, and either the token is made and then revoked, or the
- * switch is read off and the token refused: never a live token the switches do not
- * allow. A bulk revocation locks the token rows in id order before it changes them, so two
- * of them (a switch turned off, an admin reset link used) cannot deadlock. Revoking one
- * token is one conditional UPDATE: it locks that row and then, for the foreign key of
- * `revoked_by`, takes a key-share lock on the revoker's user row. `createApiToken` and
- * `setApiTokenSwitches` hold the counter and may wait for a user row the same way (the
- * keys of the new token; the setting row), which is the order CLAUDE.md gives: counter,
- * then the user row. No writer that holds a counter waits for an invite row or a reset row.
- *
- * Known limit. `useAccessReset` takes the user row `FOR UPDATE` and then the token rows,
- * the reverse of a single revoke, so a person who revokes their own token at the very
- * moment their own reset link is used can deadlock with it; so can an administrator whose
- * own reset link is used while they turn a switch off. PostgreSQL ends one of the two and
- * a retry goes through. A fix would take the acting user's row `FOR KEY SHARE` before the
- * token rows in `revokeOne` and `setApiTokenSwitches`; CLAUDE.md's lock order does not
- * name token rows yet.
+ * Lock order (CLAUDE.md, Data rules): the counter, then the user row, then the token rows.
+ * Anything that writes a switch or reads one to decide on a token takes the organisation's
+ * change counter first (`lockOrganisationChanges`): `setApiTokenSwitches` and
+ * `createApiToken`. So a token being made and a switch being turned off queue on the
+ * counter, and either the token is made and then revoked, or the switch is read off and
+ * the token refused: never a live token the switches do not allow. Next comes the acting
+ * person's user row, `FOR KEY SHARE` (`lockUser`), which `createApiToken`,
+ * `setApiTokenSwitches` and every revoke (`revokeOne`) take before any token row.
+ * `useAccessReset` takes a person's user row `FOR UPDATE` and then that person's token
+ * rows (`revokeApiTokensOfUser`); a writer that took a token row first and the person's row
+ * after it (the foreign key of `revoked_by` takes a key-share lock on that row) could
+ * deadlock with a reset used at that moment, and taking the row first, in the reset's own
+ * order, removes that. It also lines a make up behind a reset used for the same person: see
+ * `createApiToken`. A bulk revocation locks the token rows in id order before it changes
+ * them, so two of them (a switch turned off, an admin reset link used) cannot deadlock
+ * either. No writer that holds a counter waits for an invite row or a reset row.
  */
 
 /** What a token starts with, so a leaked one can be recognised by a secret scanner. */
@@ -190,6 +188,16 @@ const PREFIX_UNIQUE_KEY = 'api_token_prefix_unique';
 export type ApiTokenActor = {
   /** The signed-in user. The permission is checked for them, in the organisation. */
   readonly userId: string;
+};
+
+/** The person making a token, and the session they make it from. */
+export type ApiTokenMaker = ApiTokenActor & {
+  /**
+   * The session the request came in on. It is read again under the lock on the person's
+   * row, and the token is not made if it has ended since the request was let in (an admin
+   * reset link was used for the person, they signed out everywhere).
+   */
+  readonly sessionId: string;
 };
 
 /** What `createApiToken` is given. */
@@ -543,6 +551,41 @@ async function insertWithFreshToken(
 }
 
 /**
+ * Refuses unless `sessionId` is a session of `userId` that is live at `now`: not
+ * revoked and not past its idle or absolute end, as `validateSession` reads it. Called
+ * with the person's user row held (`FOR KEY SHARE`), after any use of their admin reset
+ * link has finished, so a session a reset revoked is seen as revoked: the statement runs
+ * after the wait, and PostgreSQL reads what has been committed by then. The answer is the
+ * same for a session that ended, one that is another person's, and one that is not there.
+ *
+ * @throws AuthStateError `session-ended`.
+ */
+async function requireLiveSession(
+  tx: Tx,
+  userId: string,
+  sessionId: string,
+  now: Date,
+): Promise<void> {
+  if (typeof sessionId !== 'string' || !UUID_SHAPE.test(sessionId)) {
+    throw new AuthStateError('session-ended');
+  }
+  const [live] = await tx
+    .select({ id: session.id })
+    .from(session)
+    .where(
+      and(
+        eq(session.id, sessionId),
+        eq(session.userId, userId),
+        isNull(session.revokedAt),
+        gt(session.idleExpiresAt, now),
+        gt(session.absoluteExpiresAt, now),
+      ),
+    )
+    .limit(1);
+  if (live === undefined) throw new AuthStateError('session-ended');
+}
+
+/**
  * Makes a personal API token for the person asking, and returns it with the token, which
  * exists nowhere else: the caller shows it once. Needs `api:tokens` in the organisation,
  * and the organisation's switch for personal tokens on (`ApiTokensDisabledError`). The
@@ -563,11 +606,18 @@ async function insertWithFreshToken(
  * The organisation's change counter is taken before the switches are read, after the
  * permission, which reads without a lock (the roles of the person changing a moment later
  * is not what that guards). So this and the turning off of a switch (`setApiTokenSwitches`)
- * queue on it, and a token is never left live that the switches do not allow. Audited as
+ * queue on it, and a token is never left live that the switches do not allow. Then the
+ * person's user row is taken `FOR KEY SHARE` and the session the call is made from is read
+ * again (`requireLiveSession`): the use of the person's admin reset link holds that row
+ * `FOR UPDATE` while it revokes their sessions and their tokens, so a make that comes
+ * first is revoked by the reset, and one that comes after finds its session revoked and
+ * makes nothing. Never a live token made by a session the reset ended. Audited as
  * `auth.api-token-created` with the token's id, owner, project, access, sensitive keys,
  * expiry (or `never`) and prefix, and never the token, its hash or its name.
  *
  * @throws AccessDeniedError, with no scope, without the permission.
+ * @throws AuthStateError `session-ended` when the session the call is made from is no
+ * longer live, and `user-not-found` for a person who was deleted.
  * @throws AuthInputError `name`, `access`, `expiresInDays`, `noExpiry`, `projectId` or
  * `sensitivePermissions` for a value that is not acceptable in shape (a project id that is
  * not an id, a scope that is not a list of keys). It names the field and never the value.
@@ -580,7 +630,7 @@ async function insertWithFreshToken(
  */
 export async function createApiToken(
   tx: Tx,
-  actor: ApiTokenActor,
+  actor: ApiTokenMaker,
   organisationId: string,
   input: CreateApiTokenInput,
   now: Date,
@@ -597,6 +647,11 @@ export async function createApiToken(
       );
       // Before the switches are read, so this cannot race a switch being turned off.
       await lockOrganisationChanges(inner, organisationId);
+      // The person's row, after the counter and before anything of the token's
+      // (CLAUDE.md, Data rules). `useAccessReset` holds it `FOR UPDATE`, which this
+      // waits for, so what the session check reads next is what the reset left.
+      await lockUser(inner, actor.userId, { strength: 'key-share' });
+      await requireLiveSession(inner, actor.userId, actor.sessionId, now);
       const switches = await readApiTokenSwitches(inner, organisationId);
       if (!switches.personalTokens) throw new ApiTokensDisabledError();
       if (
@@ -754,6 +809,12 @@ async function revokeOne(
   ) {
     throw new RecordNotFoundError('api_token', tokenId);
   }
+  // The acting person's row before the token's, the order of `useAccessReset`, which
+  // holds a person's row `FOR UPDATE` and then their token rows. Without it the UPDATE
+  // below locks the token row first and then waits for this row (the key-share lock that
+  // the foreign key of `revoked_by` takes), and a person who revokes their own token while
+  // their own reset link is used would deadlock with it.
+  await lockUser(tx, actorId, { strength: 'key-share' });
   const [row] = await tx
     .update(apiToken)
     .set({
@@ -1049,6 +1110,10 @@ export async function setApiTokenSwitches(
       // The counter first, through the write helper's own function: every writer of a
       // record of the organisation takes it before any row lock.
       await lockOrganisationChanges(inner, organisationId);
+      // Then the acting person's row, before the token rows that switching a switch off
+      // revokes, for the reason `revokeOne` gives: an administrator whose own reset link is
+      // used while they turn a switch off must not deadlock with it.
+      await lockUser(inner, actor.userId, { strength: 'key-share' });
       const rows = await apiTokenSettingRows(inner, organisationId);
       const before = switchesFromRows(rows);
 
