@@ -16,6 +16,7 @@ import {
 import {
   AccessResetInvalidError,
   CannotResetSelfError,
+  MembershipNotActiveError,
   OwnerResetNeedsOwnerError,
   ResetExceedsOwnAccessError,
   ResetNotAllowedError,
@@ -164,6 +165,7 @@ const fixtures = new Map<abstract new (...args: never[]) => Error, () => Error>(
       () => new ResetExceedsOwnAccessError(['accounts:edit']),
     ],
     [UserNotActiveError, () => new UserNotActiveError()],
+    [MembershipNotActiveError, () => new MembershipNotActiveError()],
     [OriginMismatchError, () => new OriginMismatchError()],
     [RateLimitedError, () => new RateLimitedError()],
     [StartingError, () => new StartingError()],

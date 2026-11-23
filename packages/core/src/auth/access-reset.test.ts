@@ -25,6 +25,7 @@ import { cleanupAccessResets } from './access-reset-cleanup.js';
 import {
   AccessResetInvalidError,
   CannotResetSelfError,
+  MembershipNotActiveError,
   OwnerResetNeedsOwnerError,
   ResetExceedsOwnAccessError,
   UserInOtherOrganisationsError,
@@ -45,6 +46,7 @@ import {
   seedMembership,
   seedOrganisationRole,
   seedResetScene,
+  setMembershipStatus,
   setUserStatus,
   type ResetScene,
 } from './test-support.js';
@@ -114,10 +116,11 @@ describe.each(testTargets)('admin reset links on $name', (target) => {
     return made;
   };
 
+  /** The events of one category in the order they were written: ids are UUIDv7, and a table has no order of its own. */
   const audits = async (category: string) =>
-    (await db().select().from(auditEvent)).filter(
-      (event) => event.category === category,
-    );
+    (await db().select().from(auditEvent))
+      .filter((event) => event.category === category)
+      .sort((a, b) => a.id.localeCompare(b.id));
   const row = async (id: string) =>
     (await db().select().from(accessReset).where(eq(accessReset.id, id)))[0]!;
   const rowsOfUser = async (userId: string) =>
@@ -522,6 +525,66 @@ describe.each(testTargets)('admin reset links on $name', (target) => {
         await expect(link(scene.ownerId, deleted)).rejects.toBeInstanceOf(
           UserNotActiveError,
         );
+      });
+    });
+
+    describe('rule 7: the person’s membership of this organisation is active', () => {
+      it('refuses a membership that was removed and one that is still only an invitation, with membership-not-active, and writes nothing', async () => {
+        for (const membershipStatus of ['removed', 'invited'] as const) {
+          const person = await makeTarget({ membershipStatus });
+          const before = await totals();
+          await expect(
+            link(scene.ownerId, person),
+            membershipStatus,
+          ).rejects.toBeInstanceOf(MembershipNotActiveError);
+          expect(await rowsOfUser(person), membershipStatus).toEqual([]);
+          expect(await totals(), membershipStatus).toEqual(before);
+        }
+      });
+
+      it('makes the link once the membership is active', async () => {
+        const person = await makeTarget({ membershipStatus: 'invited' });
+        await expect(link(scene.ownerId, person)).rejects.toBeInstanceOf(
+          MembershipNotActiveError,
+        );
+        await setMembershipStatus(
+          database,
+          scene.organisationId,
+          person,
+          'active',
+        );
+        const made = await link(scene.ownerId, person);
+        expect(made.reset.userId).toBe(person);
+      });
+
+      it('answers the other rules first: an account that is disabled, or a membership elsewhere, is the answer for a person whose membership here is removed too', async () => {
+        const disabled = await makeTarget({ membershipStatus: 'removed' });
+        await setUserStatus(database, disabled, 'disabled');
+        await expect(link(scene.ownerId, disabled)).rejects.toBeInstanceOf(
+          UserNotActiveError,
+        );
+        const elsewhere = await makeTarget({ membershipStatus: 'removed' });
+        await seedMembership(
+          database,
+          scene.otherOrganisationId,
+          elsewhere,
+          'member',
+          [],
+        );
+        await expect(link(scene.ownerId, elsewhere)).rejects.toBeInstanceOf(
+          UserInOtherOrganisationsError,
+        );
+        // A creator without the permission is refused before any of it.
+        const removed = await makeTarget({ membershipStatus: 'removed' });
+        await expect(link(scene.plainId, removed)).rejects.toBeInstanceOf(
+          AccessDeniedError,
+        );
+      });
+
+      it('does not make a person who is not a member of this organisation at all the same refusal: that stays the uniform denial', async () => {
+        await expect(
+          link(scene.ownerId, scene.strangerId),
+        ).rejects.toBeInstanceOf(AccessDeniedError);
       });
     });
 
@@ -953,6 +1016,13 @@ describe.each(testTargets)('admin reset links on $name', (target) => {
       const afterDisabling = await link(scene.ownerId, disabled);
       await setUserStatus(database, disabled, 'disabled');
       await expectRefused(afterDisabling, 'target-not-active');
+
+      for (const status of ['removed', 'invited'] as const) {
+        const left = await makeTarget();
+        const afterLeaving = await link(scene.ownerId, left);
+        await setMembershipStatus(database, scene.organisationId, left, status);
+        await expectRefused(afterLeaving, 'target-membership-not-active');
+      }
 
       const creator = await seedUser(database);
       await seedMembership(database, scene.organisationId, creator, 'member', [

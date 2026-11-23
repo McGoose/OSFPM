@@ -18,6 +18,7 @@ import { MEMBERS_RESET_ACCESS_PERMISSION } from '../members/permissions.js';
 import {
   AccessResetInvalidError,
   CannotResetSelfError,
+  MembershipNotActiveError,
   OwnerResetNeedsOwnerError,
   ResetExceedsOwnAccessError,
   UserInOtherOrganisationsError,
@@ -70,7 +71,10 @@ import { generateToken, hashToken } from './tokens.js';
  * 4. an owner can only be reset by an owner;
  * 5. no escalation: the actor holds every permission the person holds in the
  *    organisation, at the same reach or wider (`escalation.ts`, the rule invites use);
- * 6. the person's account is active.
+ * 6. the person's account is active;
+ * 7. the person's membership of the organisation is active: not removed, and not
+ *    still only an invitation. It is checked last, so that an account that is
+ *    disabled, or a membership elsewhere, is the answer first.
  *
  * Lock order (CLAUDE.md, Data rules). Making and revoking a link take no change
  * counter and no user lock, only the rows of the links they replace, and no writer
@@ -231,7 +235,8 @@ type RuleFailure =
   | { readonly rule: 'other-organisations' }
   | { readonly rule: 'owner' }
   | { readonly rule: 'exceeds'; readonly permissions: readonly string[] }
-  | { readonly rule: 'not-active' };
+  | { readonly rule: 'not-active' }
+  | { readonly rule: 'membership-not-active' };
 
 /**
  * Checks the rules for who may reset whom (see the header), in order, and answers
@@ -276,6 +281,7 @@ async function checkRules(
     .select({
       organisationId: orgMembership.organisationId,
       tier: orgMembership.orgRole,
+      status: orgMembership.status,
       deletedAt: orgMembership.deletedAt,
     })
     .from(orgMembership)
@@ -331,6 +337,11 @@ async function checkRules(
   ) {
     return { rule: 'not-active' };
   }
+
+  // Rule 7. Last, so that the answers about the account and about who holds what
+  // come first; a member who is not active holds nothing, so rules 4 and 5 are
+  // silent about one.
+  if (here.status !== 'active') return { rule: 'membership-not-active' };
   return null;
 }
 
@@ -355,6 +366,8 @@ function creationError(failure: RuleFailure): Error {
       return new ResetExceedsOwnAccessError(failure.permissions);
     case 'not-active':
       return new UserNotActiveError();
+    case 'membership-not-active':
+      return new MembershipNotActiveError();
   }
 }
 
@@ -375,6 +388,8 @@ function useRefusalReason(failure: RuleFailure): AccessResetRefusalReason {
       return 'target-exceeds-creator';
     case 'not-active':
       return 'target-not-active';
+    case 'membership-not-active':
+      return 'target-membership-not-active';
   }
 }
 
@@ -463,7 +478,8 @@ async function revokeLiveLinks(
  * `members:reset-access` in the organisation, and the rules for who may reset whom
  * (see the header) must hold: the person is a member of the organisation, is not the
  * actor, belongs to no other organisation, is not an owner unless the actor is one,
- * holds nothing the actor does not hold, and has an active account. The link lasts
+ * holds nothing the actor does not hold, has an active account, and has an active
+ * membership of this organisation (not removed, not still an invitation). The link lasts
  * `expiresInHours` (1 to 72, 24 when left out) from `now`, and `removePasskeys` says
  * whether using it also revokes the person's passkeys.
  *
@@ -480,7 +496,8 @@ async function revokeLiveLinks(
  * for all, so ids cannot be probed.
  * @throws CannotResetSelfError, UserInOtherOrganisationsError,
  * OwnerResetNeedsOwnerError, ResetExceedsOwnAccessError (its `permissions` lists the
- * keys) and UserNotActiveError, for rules 2 to 6, in that order. Nothing is written.
+ * keys), UserNotActiveError and MembershipNotActiveError, for rules 2 to 7, in that
+ * order. Nothing is written.
  * @throws AuthInputError `expiresInHours` or `removePasskeys` for a value that is
  * not acceptable. It names the field and never the value.
  * @throws AuthStateError `installation-missing` before the installation row exists.

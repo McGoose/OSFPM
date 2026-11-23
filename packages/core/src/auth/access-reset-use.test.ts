@@ -39,6 +39,7 @@ import {
   seedPassword,
   seedResetScene,
   seedTotp,
+  setMembershipStatus,
   setUserStatus,
   type ResetScene,
 } from './test-support.js';
@@ -142,10 +143,11 @@ describe.each(testTargets)('using an admin reset link on $name', (target) => {
     return { ...made, when };
   };
 
+  /** The events of one category in the order they were written: ids are UUIDv7, and a table has no order of its own. */
   const audits = async (category: string) =>
-    (await db().select().from(auditEvent)).filter(
-      (event) => event.category === category,
-    );
+    (await db().select().from(auditEvent))
+      .filter((event) => event.category === category)
+      .sort((a, b) => a.id.localeCompare(b.id));
   const row = async (id: string) =>
     (await db().select().from(accessReset).where(eq(accessReset.id, id)))[0]!;
   const sessionsOf = async (userId: string) =>
@@ -769,6 +771,29 @@ describe.each(testTargets)('using an admin reset link on $name', (target) => {
       });
     });
 
+    it('refuses when the person’s membership is no longer active, because it was removed or is now only an invitation, and works again once it is active', async () => {
+      for (const status of ['removed', 'invited'] as const) {
+        await refusedAfter('target-membership-not-active', {
+          change: async (userId) => {
+            await setMembershipStatus(
+              database,
+              scene.organisationId,
+              userId,
+              status,
+            );
+          },
+          undo: async (userId) => {
+            await setMembershipStatus(
+              database,
+              scene.organisationId,
+              userId,
+              'active',
+            );
+          },
+        });
+      }
+    });
+
     it('gives the same error and message for every one of these refusals', async () => {
       const reasons = new Set<string>();
       const messages = new Set<string>();
@@ -790,6 +815,16 @@ describe.each(testTargets)('using an admin reset link on $name', (target) => {
           'target-not-active',
           async (userId: string) => setUserStatus(database, userId, 'disabled'),
         ],
+        [
+          'target-membership-not-active',
+          async (userId: string) =>
+            setMembershipStatus(
+              database,
+              scene.organisationId,
+              userId,
+              'removed',
+            ),
+        ],
       ] as const) {
         const error = await refusedAfter(reason, { change });
         reasons.add(error.reason);
@@ -797,7 +832,7 @@ describe.each(testTargets)('using an admin reset link on $name', (target) => {
         names.add(error.name);
       }
       // The reasons differ for the audit trail; nothing else does.
-      expect(reasons.size).toBe(2);
+      expect(reasons.size).toBe(3);
       expect(messages.size).toBe(1);
       expect(names.size).toBe(1);
     });

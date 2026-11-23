@@ -848,3 +848,25 @@ export async function setMembershipTier(
       ),
     );
 }
+
+/**
+ * Changes the status of a member's membership directly (`removed`, `invited` or
+ * `active`), as a later release's own service would, so a test can show what a
+ * reset link does when the membership stops being active after the link was made.
+ */
+export async function setMembershipStatus(
+  database: Database,
+  organisationId: string,
+  userId: string,
+  status: OrgMembershipStatus,
+): Promise<void> {
+  await database.db
+    .update(orgMembership)
+    .set({ status })
+    .where(
+      and(
+        eq(orgMembership.organisationId, organisationId),
+        eq(orgMembership.userId, userId),
+      ),
+    );
+}

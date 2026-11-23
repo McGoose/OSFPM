@@ -8,6 +8,7 @@ import { AccountInputError } from '@osfpm/core/src/accounts/service.js';
 import {
   AccessResetInvalidError,
   CannotResetSelfError,
+  MembershipNotActiveError,
   OwnerResetNeedsOwnerError,
   ResetExceedsOwnAccessError,
   ResetNotAllowedError,
@@ -541,6 +542,14 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
     title: 'Account not active',
     detail:
       'This person’s account is not active, so a reset link cannot be made for it.',
+  },
+  {
+    errorClass: MembershipNotActiveError,
+    status: 422,
+    code: 'membership-not-active',
+    title: 'Membership not active',
+    detail:
+      'This person’s membership of this organisation is not active: it was removed, or is still only an invitation. A reset link is only for an active member.',
   },
   {
     errorClass: RouteNotFoundError,

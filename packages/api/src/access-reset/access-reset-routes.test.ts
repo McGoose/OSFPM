@@ -21,6 +21,7 @@ import {
   seedPassword,
   seedResetScene,
   seedTotp,
+  setMembershipStatus,
   setMembershipTier,
   setUserStatus,
   type ResetScene,
@@ -208,7 +209,12 @@ describe.each(testTargets)(
       });
 
     /** A member of the organisation holding `accounts:read`, whose address is kept for the scans. */
-    async function makeTarget(options: { roleIds?: readonly string[] } = {}) {
+    async function makeTarget(
+      options: {
+        roleIds?: readonly string[];
+        membershipStatus?: 'active' | 'invited' | 'removed';
+      } = {},
+    ) {
       const userId = await seedUser(ctx.database);
       await seedMembership(
         ctx.database,
@@ -216,6 +222,9 @@ describe.each(testTargets)(
         userId,
         'member',
         options.roleIds ?? [scene.roles.crew],
+        options.membershipStatus === undefined
+          ? {}
+          : { status: options.membershipStatus },
       );
       const email = await emailOf(ctx.database, userId);
       emails.push(email);
@@ -482,6 +491,18 @@ describe.each(testTargets)(
           const response = await createRoute(person.userId, {});
           expect(response.statusCode).toBe(422);
           expect(response.json()).toMatchObject({ code: 'user-not-active' });
+        }
+      });
+
+      it('is a 422 membership-not-active for a person whose membership was removed or is only an invitation', async () => {
+        for (const membershipStatus of ['removed', 'invited'] as const) {
+          const person = await makeTarget({ membershipStatus });
+          const response = await createRoute(person.userId, {});
+          expect(response.statusCode, membershipStatus).toBe(422);
+          expect(response.json(), membershipStatus).toMatchObject({
+            code: 'membership-not-active',
+          });
+          expect(await linkRowsOf(person.userId)).toEqual([]);
         }
       });
 
@@ -909,6 +930,14 @@ describe.each(testTargets)(
           promoted.userId,
           'owner',
         );
+        const left = await lockedOut();
+        const leftLink = await makeLink(left.userId);
+        await setMembershipStatus(
+          ctx.database,
+          scene.organisationId,
+          left.userId,
+          'removed',
+        );
         vi.useFakeTimers({ toFake: ['Date'] });
         vi.setSystemTime(Date.now() + 2 * HOUR);
         const refusedBefore = (await eventsOf(AUTH_AUDIT.accessResetUseRefused))
@@ -921,6 +950,7 @@ describe.each(testTargets)(
           await useRoute(disabledLink.token),
           await useRoute(fromCreator.token),
           await useRoute(promotedLink.token),
+          await useRoute(leftLink.token),
         ];
         for (const response of answers) {
           expect(response.statusCode).toBe(401);
@@ -942,9 +972,10 @@ describe.each(testTargets)(
           'target-not-active',
           'creator-not-allowed',
           'target-is-owner',
+          'target-membership-not-active',
         ]);
         // The people were left as they were.
-        for (const person of [moved, disabled, promoted]) {
+        for (const person of [moved, disabled, promoted, left]) {
           expect(
             (await db().select().from(passwordCredential)).some(
               (p) => p.userId === person.userId,

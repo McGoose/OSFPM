@@ -24,6 +24,8 @@ export const ACCESS_RESET_REFUSAL_REASONS = [
   'target-exceeds-creator',
   /** The person's account is no longer active. */
   'target-not-active',
+  /** The person's membership of the organisation was removed, or is still only an invitation. */
+  'target-membership-not-active',
 ] as const;
 /** One value of `ACCESS_RESET_REFUSAL_REASONS`. */
 export type AccessResetRefusalReason =
@@ -118,5 +120,18 @@ export class UserNotActiveError extends ResetNotAllowedError {
   constructor() {
     super('The person’s account is not in use');
     this.name = 'UserNotActiveError';
+  }
+}
+
+/**
+ * The person's membership of the organisation is not active: it was removed, or is
+ * still only an invitation. A reset link is for someone who belongs to the
+ * organisation now, so it is refused whatever the person holds, which for a member
+ * who is not active is nothing. The API answers a 422 `membership-not-active`.
+ */
+export class MembershipNotActiveError extends ResetNotAllowedError {
+  constructor() {
+    super('The person does not belong to this organisation at present');
+    this.name = 'MembershipNotActiveError';
   }
 }
