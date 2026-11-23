@@ -32,6 +32,7 @@ import {
 import { organisationInviteRoutes } from './invites/organisation-routes.js';
 import { publicInviteRoutes } from './invites/public-routes.js';
 import { PACKAGE_VERSION } from './package-info.js';
+import { preferencesRoutes } from './preferences/routes.js';
 import { registerSetupGate } from './setup/gate.js';
 import { setupRoutes } from './setup/routes.js';
 import { safeValidatorCompiler } from './validation.js';
@@ -255,6 +256,7 @@ export function buildApp(options: BuildAppOptions) {
   void app.register(apiTokenRoutes, {
     prefix: `${API_PREFIX}/organisations`,
   });
+  void app.register(preferencesRoutes, { prefix: `${API_PREFIX}/me` });
 
   return app;
 }

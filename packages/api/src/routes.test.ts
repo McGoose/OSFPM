@@ -324,6 +324,7 @@ describe.each(testTargets)('the routes on $name', (target) => {
         [`${API_PREFIX}/organisations/{organisationId}/api-tokens/{tokenId}`]: [
           'delete',
         ],
+        [`${API_PREFIX}/me/preferences`]: ['get', 'put'],
       };
       expect(Object.keys(paths).sort()).toEqual(
         Object.keys(methodsByPath).sort(),
