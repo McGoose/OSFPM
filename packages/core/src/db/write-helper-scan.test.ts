@@ -262,6 +262,7 @@ describe('who may write security tables and service-written tables', () => {
         'installation',
         'user',
         'user_access_profile',
+        'user_preferences',
       ]);
       expect(tables.map((table) => getTableName(table)).sort()).toEqual(
         [...serviceWrittenTableNames()].sort(),

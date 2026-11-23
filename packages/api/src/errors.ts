@@ -53,6 +53,10 @@ import {
 import { InstallationMissingError } from '@osfpm/core/src/installation/server-id.js';
 import { LegalHoldInputError } from '@osfpm/core/src/legal-hold/service.js';
 import {
+  PreferencesInvalidError,
+  UseAccountPreferencesError,
+} from '@osfpm/core/src/preferences/errors.js';
+import {
   AccessGrantBusyError,
   AccessGrantRefusedError,
   AccessProfileExistsError,
@@ -694,6 +698,31 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
     title: 'Use the access profile',
     detail:
       'This person has an account, so their access needs are kept in their own access profile, which only they can change.',
+  },
+  {
+    // The preferences of a person with an account are theirs and kept on their account
+    // (decision D-69, P-02l2). It names no person and no choice.
+    errorClass: UseAccountPreferencesError,
+    status: 422,
+    code: 'use-account-preferences',
+    title: 'Use the person’s own preferences',
+    detail:
+      'This person has an account, so their preferences are kept on it, and only they can change them.',
+  },
+  {
+    // Where the preferences are wrong and why, from fixed field names and codes: never a
+    // value the caller sent.
+    errorClass: PreferencesInvalidError,
+    status: 422,
+    code: 'invalid-input',
+    title: 'Invalid input',
+    detail: null,
+    errors: (error: PreferencesInvalidError) =>
+      error.issues.map((issue) => ({
+        in: 'body',
+        path: issue.path,
+        code: issue.code,
+      })),
   },
   {
     // One body for a role that does not exist, was deleted, or belongs to another

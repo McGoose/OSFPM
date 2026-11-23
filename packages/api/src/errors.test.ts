@@ -59,6 +59,10 @@ import { testTargets } from '@osfpm/core/src/db/test-support.js';
 import { InstallationMissingError } from '@osfpm/core/src/installation/server-id.js';
 import { LegalHoldInputError } from '@osfpm/core/src/legal-hold/service.js';
 import {
+  PreferencesInvalidError,
+  UseAccountPreferencesError,
+} from '@osfpm/core/src/preferences/errors.js';
+import {
   AccessGrantBusyError,
   AccessGrantRefusedError,
   AccessProfileExistsError,
@@ -225,6 +229,15 @@ const fixtures = new Map<abstract new (...args: never[]) => Error, () => Error>(
         ]),
     ],
     [UseAccessProfileError, () => new UseAccessProfileError()],
+    [UseAccountPreferencesError, () => new UseAccountPreferencesError()],
+    [
+      PreferencesInvalidError,
+      () =>
+        new PreferencesInvalidError([
+          { path: 'textSize', code: 'invalid_value' },
+          { path: 'quietHours.end', code: 'custom' },
+        ]),
+    ],
     [RoleNotAvailableError, () => new RoleNotAvailableError()],
     [
       AccessGrantRefusedError,

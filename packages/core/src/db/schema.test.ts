@@ -211,8 +211,8 @@ const schemaTables = Object.values(schemaModule).filter((value) =>
 
 /**
  * The service-written tables that carry a retention class, with the default each
- * declares for it in the schema (`user` and `user_access_profile`; `installation` has
- * none). Read from the schema, not from a list kept here.
+ * declares for it in the schema (`user`, `user_access_profile` and `user_preferences`;
+ * `installation` has none). Read from the schema, not from a list kept here.
  */
 const serviceWrittenRetentionClasses = new Map<string, string>(
   schemaModule.SERVICE_WRITTEN_TABLES.flatMap((table): [string, string][] => {
@@ -613,6 +613,7 @@ describe.each(testTargets)('database schema on $name', (target) => {
           'unit',
           'user',
           'user_access_profile',
+          'user_preferences',
         ]);
       } finally {
         await cleanup();
@@ -677,7 +678,8 @@ describe.each(testTargets)('database schema on $name', (target) => {
                 and t.table_type = 'BASE TABLE'`,
         );
         // Every tenant table, security table and service-written table that has a
-        // retention class (`user` and `user_access_profile`, not `installation`)
+        // retention class (`user`, `user_access_profile` and `user_preferences`, not
+        // `installation`)
         // carries the column; nothing else does.
         expect(withColumn.map((r) => r.table_name as string).sort()).toEqual(
           [
@@ -970,10 +972,11 @@ describe.each(testTargets)('database schema on $name', (target) => {
       }
 
       it('gives every service-written table that has a retention class the standard columns except organisation_id, owner_org_id and visibility', async () => {
-        // `user` and `user_access_profile`: install-level, so no tenant trio.
+        // `user`, `user_access_profile` and `user_preferences`: install-level, so no tenant trio.
         expect([...serviceWrittenRetentionClasses.keys()].sort()).toEqual([
           'user',
           'user_access_profile',
+          'user_preferences',
         ]);
         for (const table of serviceWrittenRetentionClasses.keys()) {
           const columns = await columnsOf(database, table);

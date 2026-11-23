@@ -1,4 +1,5 @@
 import { recordAudit, type Tx } from '../db/write.js';
+import { eraseUserPreferences } from '../preferences/service.js';
 import { deleteProfileRow } from './access-profile.js';
 import { ACCESS_AUDIT } from './audit.js';
 import { revokeAccountGrants } from './grant-revocation.js';
@@ -29,8 +30,9 @@ export type AccountSharingEnded = {
  * account is going (decision D-69, carry-over A of P-02l2). It revokes every live
  * `accessibility` and `medical` grant of every person the account is, in every project of
  * every organisation, and erases the access profile, row and payload, as the person deleting
- * the profile does. Only the audit event stays, and it holds counts and the reason, never a
- * field name, a value or a role. The organisation's own medical record
+ * the profile does, and erases the account's delivery preferences (`eraseUserPreferences`,
+ * which writes an event of its own). Only the audit events stay, and they hold counts and the
+ * reason, never a field name, a value or a role. The organisation's own medical record
  * (`person_sensitive`) is not touched: the grants that opened it end, the record is the
  * organisation's. A grant is revoked, never deleted, with the account holder as the one who
  * ended it (`revoked_by` cannot be empty), because it is the end of their own account's
@@ -95,6 +97,10 @@ export async function endAccountAccessSharing(
         userId,
         now,
       );
+      // The account's delivery preferences go with it. The preferences service is their one
+      // writer, so it erases the row and writes its own event; the count below stays one of
+      // what was shared.
+      await eraseUserPreferences(inner, userId, { now });
       await recordAudit(inner, {
         actor: { type: 'system', id: null },
         category: ACCESS_AUDIT.accountSharingEnded,
