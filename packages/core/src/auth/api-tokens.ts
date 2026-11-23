@@ -235,6 +235,13 @@ export type AuthenticatingRequest = {
    * audit trail alone, and nothing said about whether the other organisation exists.
    */
   readonly organisationId?: string;
+  /**
+   * Whether a refusal is written to the audit trail (`auth.api-token-auth-failed`); it is
+   * unless this is `false`. The API says `false` for an address that is already over the
+   * strict limit, so a flood of bad tokens writes no more rows than the limit allows. The
+   * refusal itself is the same `ApiTokenInvalidError` either way.
+   */
+  readonly auditFailure?: boolean;
 };
 
 /** What `authenticateApiToken` answers for a token that works. */
@@ -1159,7 +1166,8 @@ type Outcome =
  * `auth.api-token-auth-failed` (from the system, the token's id and organisation when it
  * is one that exists, a reason code, and never any part of the value that was sent),
  * which is written before the error is thrown: the caller catches it inside its
- * transaction and commits, so the event survives (CLAUDE.md, Data rules).
+ * transaction and commits, so the event survives (CLAUDE.md, Data rules). A caller that
+ * says `request.auditFailure: false` gets the same error and no event.
  *
  * A token that works has `last_used_at` written, at most once a minute, in one conditional
  * UPDATE like a session's, so a busy token is not a write per request. That is no edit of
@@ -1275,18 +1283,20 @@ export async function authenticateApiToken(
   if (outcome.ok) {
     return { credential: outcome.credential, user: outcome.user };
   }
-  await guardedAuth('audit_event', 'insert', () =>
-    recordAuthAudit(tx, {
-      category: AUTH_AUDIT.apiTokenAuthFailed,
-      action: 'authenticate',
-      actor: { type: 'system', id: null },
-      targetType: outcome.known === null ? null : 'api_token',
-      targetId: outcome.known?.id ?? null,
-      organisationId: outcome.known?.organisationId ?? null,
-      details: { reason: outcome.reason },
-      occurredAt: now,
-    }),
-  );
+  if (request.auditFailure !== false) {
+    await guardedAuth('audit_event', 'insert', () =>
+      recordAuthAudit(tx, {
+        category: AUTH_AUDIT.apiTokenAuthFailed,
+        action: 'authenticate',
+        actor: { type: 'system', id: null },
+        targetType: outcome.known === null ? null : 'api_token',
+        targetId: outcome.known?.id ?? null,
+        organisationId: outcome.known?.organisationId ?? null,
+        details: { reason: outcome.reason },
+        occurredAt: now,
+      }),
+    );
+  }
   throw new ApiTokenInvalidError(outcome.reason);
 }
 

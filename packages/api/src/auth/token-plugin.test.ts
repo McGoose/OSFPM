@@ -517,7 +517,7 @@ describe.each(testTargets)(
     });
 
     describe('the strict limit per address', () => {
-      it('counts failed attempts, answers 429 with Retry-After past the limit, and stops looking at tokens from that address', async () => {
+      it('counts failed attempts, answers 429 with Retry-After past the limit, and writes no more audit events from that address', async () => {
         const address = '10.99.0.1';
         const made = await makeToken(scene.tokensId);
         const failuresBefore = (await auditRows()).filter(
@@ -540,7 +540,8 @@ describe.each(testTargets)(
           }
         }
         // Ten failures are answered 401; the eleventh makes the count past the limit and
-        // is answered 429, and every one after it is refused before the token is looked at.
+        // is answered 429, and so is every one after it, but those are not written to the
+        // audit trail: a flood of bad tokens writes no more rows than the limit allows.
         expect(statuses).toEqual([
           ...Array.from({ length: AUTH_RATE_LIMIT.max }, () => 401),
           ...Array.from({ length: 5 }, () => 429),
@@ -549,16 +550,76 @@ describe.each(testTargets)(
           (event) => event.category === 'auth.api-token-auth-failed',
         ).length;
         expect(failuresAfter - failuresBefore).toBe(AUTH_RATE_LIMIT.max + 1);
-        // A good token from that address is refused too, while it is closed; from
-        // another address it works.
+        // A token that works is not held up by the failures at its address, which are
+        // someone else's, and it is not counted: it works from that address and from
+        // another one.
         expect(
           (await call('GET', '/test/token/read', bearer(made.token), address))
             .statusCode,
-        ).toBe(429);
+        ).toBe(200);
         expect(
           (await call('GET', '/test/token/read', bearer(made.token)))
             .statusCode,
         ).toBe(200);
+      });
+
+      it('lets a token that works through while its address is over the limit, however many times, and keeps answering a bad one with a 429', async () => {
+        const address = '10.99.0.3';
+        const made = await makeToken(scene.tokensId);
+        // Someone at the same address fills the bucket: a script with a token that
+        // ended, or a handful of people signing in.
+        for (let i = 0; i <= AUTH_RATE_LIMIT.max; i += 1) {
+          await call(
+            'GET',
+            '/test/token/read',
+            bearer(`osfpm_pat_${String(i).padStart(43, 'J')}`),
+            address,
+          );
+        }
+        const failuresBefore = (await auditRows()).filter(
+          (event) => event.category === 'auth.api-token-auth-failed',
+        ).length;
+        for (let i = 0; i < AUTH_RATE_LIMIT.max * 2; i += 1) {
+          const good = await call(
+            'GET',
+            '/test/token/read',
+            bearer(made.token),
+            address,
+          );
+          expect(good.statusCode, `request ${i}`).toBe(200);
+        }
+        const bad = await call(
+          'GET',
+          '/test/token/read',
+          bearer(`osfpm_pat_${'L'.repeat(43)}`),
+          address,
+        );
+        expect(bad.statusCode).toBe(429);
+        expect(bad.json<{ code: string }>().code).toBe('rate-limited');
+        expect(Number(bad.headers['retry-after'])).toBeGreaterThanOrEqual(1);
+        // And a token that was revoked is a 429 as well, not a 401 that says it was.
+        const revoked = await makeToken(scene.tokensId);
+        await ctx.database.db.transaction((tx) =>
+          revokeOwnApiToken(
+            tx,
+            { userId: scene.tokensId },
+            scene.organisationId,
+            revoked.apiToken.id,
+            new Date(),
+          ),
+        );
+        const refused = await call(
+          'GET',
+          '/test/token/read',
+          bearer(revoked.token),
+          address,
+        );
+        expect(refused.statusCode).toBe(429);
+        // None of those refusals was written down: the log holds the 429s.
+        const failuresAfter = (await auditRows()).filter(
+          (event) => event.category === 'auth.api-token-auth-failed',
+        ).length;
+        expect(failuresAfter).toBe(failuresBefore);
       });
 
       it('does not count a token that works, or a request that is refused before the token is looked up', async () => {

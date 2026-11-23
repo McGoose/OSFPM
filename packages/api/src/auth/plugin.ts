@@ -351,12 +351,17 @@ const implementation: FastifyPluginAsync<AuthPluginOptions> = (
    * 2. A route that does not say `tokenAccess`: 403, before the token is looked up, so
    *    the answer says nothing about the token.
    * 3. The strict limit per address is looked at before the token is, without counting
-   *    (`increment: false`): an address that has failed too often is a 429 and its token
-   *    is not evaluated, so a flood of bad tokens costs a count and no database query, no
-   *    audit event and no answer that says whether a token was right.
+   *    (`increment: false`). It decides only what a token that fails is told, and whether
+   *    that failure is written down. A token that works is answered whatever its address
+   *    has done, and is not counted: the limit is for guessing, a token that works has
+   *    guessed nothing, and one broken script behind a shared address must not stop the
+   *    others.
    * 4. The token is looked up in a transaction that commits whatever the answer, so
    *    the audit event of a failure is kept (CLAUDE.md, Data rules). A token that does not
-   *    work is one 401 for every cause, and counts against the strict limit.
+   *    work is one 401 for every cause, and counts against the strict limit. From an
+   *    address that is already over the limit it is a 429 instead, and is not written to
+   *    the audit trail, so a flood of bad tokens writes no more rows than the limit allows
+   *    (the 429s are in the request log).
    * 5. A token that works is counted against its own limit, and a token that can only
    *    read is refused on a route that says `write`.
    *
@@ -374,10 +379,7 @@ const implementation: FastifyPluginAsync<AuthPluginOptions> = (
     }
     if (access === undefined) throw new TokenNotAcceptedError();
     const looked = await authLimit(request, { increment: false });
-    if (!looked.isAllowed && looked.isExceeded) {
-      reply.header('retry-after', String(Math.max(1, looked.ttlInSeconds)));
-      throw new RateLimitedError();
-    }
+    const overTheLimit = !looked.isAllowed && looked.isExceeded;
     // A route under `/organisations/:organisationId` names the organisation it is for,
     // and a token works in its own only: asked about another, it is the same 401 as a
     // token that does not work, so a token says nothing about organisations that are not
@@ -391,12 +393,10 @@ const implementation: FastifyPluginAsync<AuthPluginOptions> = (
       try {
         return {
           ok: true,
-          found: await authenticateApiToken(
-            tx,
-            bearer,
-            new Date(),
-            organisationId === undefined ? {} : { organisationId },
-          ),
+          found: await authenticateApiToken(tx, bearer, new Date(), {
+            ...(organisationId === undefined ? {} : { organisationId }),
+            auditFailure: !overTheLimit,
+          }),
         } as const;
       } catch (error) {
         // Committed with its audit event, and thrown after.
@@ -407,6 +407,10 @@ const implementation: FastifyPluginAsync<AuthPluginOptions> = (
       }
     });
     if (!outcome.ok) {
+      if (overTheLimit) {
+        reply.header('retry-after', String(Math.max(1, looked.ttlInSeconds)));
+        throw new RateLimitedError();
+      }
       await enforce(authLimit, request, reply);
       throw outcome.error;
     }

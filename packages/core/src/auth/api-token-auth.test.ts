@@ -116,7 +116,7 @@ describe.each(testTargets)('using a personal API token on $name', (target) => {
   const authenticate = (
     token: string,
     now: Date,
-    options: { organisationId?: string } = {},
+    options: { organisationId?: string; auditFailure?: boolean } = {},
   ) =>
     db().transaction(async (tx) => {
       try {
@@ -394,6 +394,50 @@ describe.each(testTargets)('using a personal API token on $name', (target) => {
         expect([...answers][0]).not.toMatch(
           /unknown|expired|revoked|switch|user|member|sensitive/i,
         );
+      });
+
+      it('writes no audit event when the caller says the address is over its limit, and refuses all the same', async () => {
+        await turn(true);
+        const revoked = await make(scene.tokensId);
+        await db().transaction((tx) =>
+          revokeOwnApiToken(
+            tx,
+            { userId: scene.tokensId },
+            scene.organisationId,
+            revoked.apiToken.id,
+            next(),
+          ),
+        );
+        const failures = async () =>
+          (await db().select().from(auditEvent)).filter(
+            (event) => event.category === AUTH_AUDIT.apiTokenAuthFailed,
+          ).length;
+        const before = await failures();
+        for (const token of [
+          revoked.token,
+          `osfpm_pat_${'Q'.repeat(43)}`,
+          'not-a-token',
+        ]) {
+          const now = next();
+          const result = await authenticate(token, now, {
+            auditFailure: false,
+          });
+          expect(result.ok).toBe(false);
+          if (!result.ok) {
+            expect(result.error).toBeInstanceOf(ApiTokenInvalidError);
+          }
+          expect(await failuresAt(now)).toEqual([]);
+        }
+        expect(await failures()).toBe(before);
+        // Left out or true, the refusal is written as ever.
+        const now = next();
+        await authenticate(revoked.token, now, { auditFailure: true });
+        expect(await failuresAt(now)).toHaveLength(1);
+        // A token that works is answered whatever the flag says.
+        const good = await make(scene.tokensId);
+        expect(
+          (await authenticate(good.token, next(), { auditFailure: false })).ok,
+        ).toBe(true);
       });
 
       it('refuses a value that cannot be a token without looking it up, as unknown', async () => {
