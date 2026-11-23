@@ -208,7 +208,7 @@ export async function verifyRecoveryLogin(
       let locked: { status: string };
       try {
         // FOR UPDATE: a right code ends every session of the user (see `setPassword`).
-        locked = await lockUser(inner, found.id, { strength: 'update' });
+        locked = await lockUser(inner, found.id);
       } catch (error) {
         // Deleted since it was found: as if the address were not known.
         if (error instanceof AuthStateError) {
