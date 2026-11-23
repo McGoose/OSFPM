@@ -58,9 +58,10 @@ function toProfile(row: ProfileRow): AccessProfile {
  * takes the profile with it. Checks no permission: it is the door's own helper, for code
  * that has already decided who may ask. It reads without a lock, unless `lock` is
  * `'share'`: then the profile row is held `FOR SHARE` until the transaction ends, and
- * nothing else is locked (not the user row), so a deletion of the profile, which takes the
- * row `FOR UPDATE`, waits for a caller that is about to write something derived from what
- * it reads. When the profile is deleted while this waits, it answers `undefined`.
+ * nothing else is locked (not the user row, which a caller that writes takes first, with
+ * `holdAccount`), so a deletion of the profile, which takes the row `FOR UPDATE`, waits for
+ * a caller that is about to write something derived from what it reads. When the profile is
+ * deleted while this waits, it answers `undefined`.
  */
 export async function loadProfile(
   tx: Tx,

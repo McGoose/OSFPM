@@ -59,12 +59,12 @@ export type AccountSharingEnded = {
  * this. Accounts are soft-deleted only, and the only code that does it is a test helper.
  * When that service is written, it must call this in the transaction that marks the account
  * deleted, under the user row taken `FOR UPDATE` (`lockUser` with `strength: 'update'`, as
- * every service that ends a user's sessions does; CLAUDE.md, Data rules). Mind the lock
- * order when it does: this takes the profile row after the user row, and a share
- * holds the profile row `FOR SHARE` and then waits for the user row's key-share lock that
- * the grant it inserts takes, so the two can deadlock. PostgreSQL ends one of them
- * (SQLSTATE 40P01) and nothing is stranded, but the deletion's design must say who goes
- * first.
+ * every service that ends a user's sessions does; CLAUDE.md, Data rules). The lock order
+ * is the user row, then the profile row, then the grants (CLAUDE.md, Data rules), and a share
+ * with the usual roles follows it: `holdAccount` takes the user row `FOR KEY SHARE` first, so
+ * the two queue on the user row and cannot deadlock or leave a grant of a deleted account
+ * behind. `createAccessGrant`, `revokeAccessGrant`, `createAccessProfile`,
+ * `updateAccessProfile` and `deleteAccessProfile` do not take the user row first yet.
  *
  * @throws RangeError when `reason` is not on the closed list or `userId` is not an id (a
  * bug in the caller); nothing was written.

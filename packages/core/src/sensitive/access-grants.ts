@@ -14,6 +14,7 @@ import {
   type AccessGrantCategory,
 } from '../db/schema/index.js';
 import { recordAudit, RecordNotFoundError, type Tx } from '../db/write.js';
+import { holdAccount } from './account-lock.js';
 import { ACCESS_AUDIT, auditActor, tokenMark } from './audit.js';
 import {
   AccessGrantBusyError,
@@ -387,9 +388,10 @@ type GrantToWrite = {
  * `AccessGrantBusyError`, whatever else happens. The `FOR UPDATE` on the earlier grant
  * only orders the work, so that two changes of one role queue behind each other instead
  * of racing to the index. Grants are not written through the write helper, so no change
- * counter is taken, and the only row locked before this one is the profile row that a
- * confirmed share holds `FOR SHARE` (`shareWithSuggestedRoles`), so the order is always
- * profile first, then grants, as in `deleteAccessProfile` (CLAUDE.md, Data rules).
+ * counter is taken, and the rows a confirmed share locks before this one are the person's
+ * user row (`FOR KEY SHARE`) and then the profile row (`FOR SHARE`;
+ * `shareWithSuggestedRoles`), so the order is user row, then profile row, then grants
+ * (CLAUDE.md, Data rules).
  */
 async function writeGrant(
   tx: Tx,
@@ -782,11 +784,14 @@ function filledKeys(
  * with `invalid-groups` for a group the category does not have. A call that is not a
  * preview by staff for a person without an account needs the consent.
  *
- * A call that writes holds the person's access profile `FOR SHARE` from the moment it reads
- * it until the transaction ends, because deleting the profile ends the person's
- * accessibility grants and must not commit between this read and the writes it leads to: it
- * waits for the call, and a call that meets a deletion in progress waits for it and finds
- * no profile, so it shares nothing.
+ * A call that writes first holds the person's user row `FOR KEY SHARE` (`holdAccount`), and
+ * then, from the moment it reads it, their access profile `FOR SHARE`, until the
+ * transaction ends. Deleting the account takes the user row `FOR UPDATE` and then the
+ * profile row, and deleting the profile ends the person's accessibility grants, so neither
+ * may commit between this read and the writes it leads to. Both go user row first, so they
+ * queue and cannot deadlock: a deletion waits for a call that has started and then ends the
+ * grants it made, and a call that meets a deletion in progress waits for it, finds the
+ * account deleted and shares nothing, whichever category (CLAUDE.md, Data rules: lock order).
  *
  * @throws SensitiveAccessDeniedError, AccessGrantRefusedError, AccessGrantBusyError and
  * RecordWriteError, as for `createAccessGrant`. Nothing is written when one is thrown.
@@ -856,6 +861,20 @@ export async function shareWithSuggestedRoles(
       granted: 0,
       reason: 'no-suggested-roles',
     };
+  }
+
+  // A call that will write holds the person's user row `FOR KEY SHARE` before it reads or
+  // locks anything else of theirs (CLAUDE.md, Data rules: lock order). The deletion of the
+  // account takes that row `FOR UPDATE` and then the profile row, so both go user row first,
+  // and a call that waits here holds nothing on the profile and cannot deadlock with it. An
+  // account that is deleted shares nothing, whichever category: a grant made now would be
+  // live for a deleted account.
+  if (
+    !preview &&
+    subject.person.userId !== null &&
+    !(await holdAccount(tx, subject.person.userId))
+  ) {
+    return { preview: false, shares: [], granted: 0 };
   }
 
   // The caller is allowed to see all of it: the person, or staff who edit it. A call that

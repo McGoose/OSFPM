@@ -59,6 +59,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
   2. Then invite or reset rows. A writer that already holds a user row never waits for an invite or reset row: it reads them with SKIP LOCKED.
   3. Then the user row. Take it FOR UPDATE when the decision depends on rows that reference the user (memberships, sign-in methods), and in every service that ends a user's sessions in bulk: only FOR UPDATE blocks the foreign-key lock their inserts take, and the key-share lock `createApiToken` holds while it checks its session. Otherwise lockUser's default.
   4. Then that user's token rows.
+  5. Then that user's access profile row.
 
 ## Code rules
 
