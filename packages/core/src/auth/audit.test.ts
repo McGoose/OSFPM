@@ -571,17 +571,22 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
       { personalTokens: true, sensitive: true },
       at(55 * MINUTE),
     );
-    const scriptAccess = await createApiToken(
-      db(),
-      inviter,
-      setupOrganisationId,
-      {
-        name: API_TOKEN_NAME,
-        access: 'read',
-        sensitivePermissions: ['sensitive:read:medical'],
-        expiresInDays: 30,
-      },
-      at(56 * MINUTE),
+    // In a transaction of its own, as the other tests make a token: the token then reaches
+    // `authenticateApiToken` below through a callback, and not by a direct call, which a
+    // scanner reads as a password reaching `hashToken` (see tokens.ts).
+    const scriptAccess = await db().transaction((tx) =>
+      createApiToken(
+        tx,
+        inviter,
+        setupOrganisationId,
+        {
+          name: API_TOKEN_NAME,
+          access: 'read',
+          sensitivePermissions: ['sensitive:read:medical'],
+          expiresInDays: 30,
+        },
+        at(56 * MINUTE),
+      ),
     );
     apiTokenId = scriptAccess.apiToken.id;
     apiTokenPrefix = scriptAccess.apiToken.prefix;
