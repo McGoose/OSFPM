@@ -12,6 +12,7 @@ import type { TokenCredential } from '../access/credential.js';
 import type { Database } from '../db/client.js';
 import { auditEvent, changeEvent, settingValue } from '../db/schema/index.js';
 import { createMigratedDatabase, testTargets } from '../db/test-support.js';
+import { createAccessGrant } from './access-grants.js';
 import { VALID_PAYLOADS } from './payload-fixtures.js';
 import {
   complianceReport,
@@ -53,7 +54,7 @@ describe.each(testTargets)(
       ({ database, cleanup } = await createMigratedDatabase(target));
       scene = await seedTokenScene(database, T0);
       writerId = await seedUser(database);
-      await grantOnProject(
+      const { roleId } = await grantOnProject(
         database,
         scene.organisationId,
         scene.projectId,
@@ -71,6 +72,18 @@ describe.each(testTargets)(
         scene.projectId,
         personId,
       );
+      // A token that can only read passes the read permission, not the edit one that
+      // lets its owner read the whole record of a person without an account. So it reads
+      // medical data only through a grant to a role its owner holds, as everyone who only
+      // reads does (decision D-69): the person agreed to share all of it with that role.
+      await createAccessGrant(database.db, ctx(writerId), {
+        projectId: scene.projectId,
+        personId,
+        category: 'medical',
+        roleId,
+        fields: ['conditions', 'medication', 'notes'],
+        consent: { method: 'phone', at: new Date(T0.getTime() - MINUTE) },
+      });
       // The writer puts the person's data in, as a session.
       await writeSensitive(
         database.db,
@@ -196,9 +209,13 @@ describe.each(testTargets)(
       expect(last[0]).toMatchObject({
         actorType: 'user',
         actorId: writerId,
-        details: { category: 'medical' },
+        details: { category: 'medical', fieldCount: 3 },
       });
-      expect(Object.keys(last[0]!.details!)).toEqual(['category']);
+      // The category and the number of fields, never their names.
+      expect(Object.keys(last[0]!.details!).sort()).toEqual([
+        'category',
+        'fieldCount',
+      ]);
     });
 
     it('refuses a token without the scope, though the owner holds the permission, and audits the refusal with the token’s id', async () => {

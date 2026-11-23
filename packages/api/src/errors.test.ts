@@ -59,6 +59,13 @@ import { testTargets } from '@osfpm/core/src/db/test-support.js';
 import { InstallationMissingError } from '@osfpm/core/src/installation/server-id.js';
 import { LegalHoldInputError } from '@osfpm/core/src/legal-hold/service.js';
 import {
+  AccessGrantBusyError,
+  AccessGrantRefusedError,
+  AccessProfileExistsError,
+  RoleNotAvailableError,
+  UseAccessProfileError,
+} from '@osfpm/core/src/sensitive/errors.js';
+import {
   ComplianceReportDeniedError,
   SensitiveAccessDeniedError,
   SensitivePayloadInvalidError,
@@ -217,6 +224,14 @@ const fixtures = new Map<abstract new (...args: never[]) => Error, () => Error>(
           { path: 'allergies.0', code: 'invalid_type' },
         ]),
     ],
+    [UseAccessProfileError, () => new UseAccessProfileError()],
+    [RoleNotAvailableError, () => new RoleNotAvailableError()],
+    [
+      AccessGrantRefusedError,
+      () => new AccessGrantRefusedError('invalid-fields'),
+    ],
+    [AccessProfileExistsError, () => new AccessProfileExistsError()],
+    [AccessGrantBusyError, () => new AccessGrantBusyError()],
   ],
 );
 

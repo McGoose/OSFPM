@@ -216,7 +216,11 @@ describe.each(testTargets)('sensitive data service on $name', (target) => {
   });
 
   describe('the person themselves', () => {
-    it.each(SENSITIVE_CATEGORIES)('can write and read %s', async (category) => {
+    // The adjustments of a person with an account live in their access profile (decision
+    // D-69), which `access-profile.test.ts` covers, so `accessibility` is not written here.
+    it.each(
+      SENSITIVE_CATEGORIES.filter((category) => category !== 'accessibility'),
+    )('can write and read %s', async (category) => {
       const self = await seedUser(database);
       const personId = await newPerson({ userId: self });
       const written = await writeSensitive(
@@ -335,18 +339,24 @@ describe.each(testTargets)('sensitive data service on $name', (target) => {
         representation: 'crew-personal',
         compliance: 'financial-record',
       };
+      // A person with an account keeps their adjustments in a profile (decision D-69), so
+      // the production record of `accessibility` is one of a person without an account,
+      // which staff write.
+      const withoutAccount = await newPerson();
       for (const category of SENSITIVE_CATEGORIES) {
+        const staffRecord = category === 'accessibility';
         await writeSensitive(
           db(),
-          ctxFor(self),
-          personId,
+          ctxFor(staffRecord ? editorAll : self),
+          staffRecord ? withoutAccount : personId,
           category,
           VALID_PAYLOADS[category],
           OPTIONS,
         );
       }
       const found = (await db().execute(
-        sql`select category, retention_class from person_sensitive where person_id = ${personId}`,
+        sql`select category, retention_class from person_sensitive
+            where person_id = ${personId} or person_id = ${withoutAccount}`,
       )) as { rows: { category: string; retention_class: string }[] };
       expect(
         Object.fromEntries(

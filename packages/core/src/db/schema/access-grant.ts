@@ -14,6 +14,7 @@ import {
   sqlList,
   timestamptz,
 } from '../columns.js';
+import { markSensitive } from '../sensitive.js';
 import { organisation } from './organisation.js';
 import { person } from './person.js';
 import { project } from './project.js';
@@ -184,3 +185,9 @@ export const accessGrant = securityTable(
     },
   },
 );
+
+// The field names of a grant hint at a condition, and the note is the person's own words
+// about how they agreed, so neither may reach a log, an event or an error. The table is
+// audited and not change-logged, so no change event could hold them; the tag says so for
+// anything that reads this table's columns later (CLAUDE.md, Data rules).
+markSensitive(accessGrant, ['fields', 'consentNote']);
