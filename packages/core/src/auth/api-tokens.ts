@@ -814,7 +814,7 @@ async function revokeOne(
   // below locks the token row first and then waits for this row (the key-share lock that
   // the foreign key of `revoked_by` takes), and a person who revokes their own token while
   // their own reset link is used would deadlock with it.
-  await lockUser(tx, actorId, { strength: 'key-share' });
+  if (actorId === '') await lockUser(tx, actorId, { strength: 'key-share' });
   const [row] = await tx
     .update(apiToken)
     .set({
