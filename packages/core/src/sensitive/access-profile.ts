@@ -1,9 +1,11 @@
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { user, userAccessProfile } from '../db/schema/index.js';
 import { recordAudit, RecordNotFoundError, type Tx } from '../db/write.js';
+import { holdAccount } from './account-lock.js';
 import { ACCESS_AUDIT, auditActor, tokenMark } from './audit.js';
 import {
   AccessProfileExistsError,
+  AccountDeletedError,
   SensitiveAccessDeniedError,
   type SensitiveOperation,
 } from './errors.js';
@@ -21,6 +23,16 @@ import type { SensitiveContext } from './service.js';
  * organisation owner and not an administrator. What a production sees of it is only what
  * the person has granted to a role of that project (`createAccessGrant`), and the profile
  * itself stays when a project wraps.
+ *
+ * The three that write take the account's user row `FOR KEY SHARE` first (`holdAccount`) and
+ * the profile row after it, the order of the lock rules (CLAUDE.md, Data rules). Deleting the
+ * account takes the user row `FOR UPDATE` and then the profile row, so a write that took the
+ * profile first and reached the user row later, through the foreign key of a row it inserts or
+ * of a grant it revokes, could wait for the deletion while the deletion waited for it. Both
+ * go user row first, so they queue. A profile is made only for an account that is live
+ * (`AccountDeletedError`), or a creation that came after the account's erasure would leave a
+ * profile behind; deleting or changing one does not look at the account, because a deleted
+ * account may always end what it shared.
  *
  * Every allowed read writes one `sensitive.read` event and every denial one
  * `sensitive.denied` event, and a change writes `access.profile-created`,
@@ -160,14 +172,42 @@ function auditChange(
 }
 
 /**
+ * Audits the refusal of a profile for an account that is deleted, as `access.refused` with
+ * the reason code and the category, as the refusals of the grant model are, and throws it.
+ * The event is written before the error is thrown, so a caller catches the error inside its
+ * transaction and commits (CLAUDE.md, Data rules). It names the user and holds no value.
+ */
+async function refuseDeletedAccount(
+  tx: Tx,
+  ctx: SensitiveContext,
+  userId: string,
+  now: Date,
+): Promise<never> {
+  await recordAudit(tx, {
+    actor: auditActor(ctx),
+    category: ACCESS_AUDIT.refused,
+    action: 'account-deleted',
+    targetType: 'user',
+    targetId: isUuid(userId) ? userId : null,
+    details: { reason: 'account-deleted', category: 'accessibility' },
+    requestId: ctx.requestId ?? null,
+    occurredAt: now,
+  });
+  throw new AccountDeletedError();
+}
+
+/**
  * Makes the signed-in person's access profile. The payload is checked against the
  * `accessibility` schema before anything is written. Audited as
- * `access.profile-created`, with the user and nothing else.
+ * `access.profile-created`, with the user and nothing else. It holds the account's user row
+ * `FOR KEY SHARE` before it takes anything else, and refuses an account that is deleted: the
+ * deletion of the account erases the profile, so one made after it would be left behind.
  *
  * @throws SensitiveAccessDeniedError (after auditing it) for anyone but the person, and
  * for a personal API token.
  * @throws SensitivePayloadInvalidError for a payload that breaks the schema; it lists
  * paths and codes, never values.
+ * @throws AccountDeletedError (after auditing the refusal) when the account is deleted.
  * @throws AccessProfileExistsError when the person already has a profile.
  * @throws RecordWriteError when the database refuses the row; it carries the SQLSTATE and
  * constraint name only.
@@ -181,6 +221,11 @@ export async function createAccessProfile(
   await authoriseOwner(tx, ctx, userId, 'write');
   const parsed = parsePayload('accessibility', payload);
   const now = ctx.clock();
+  // The user row first (CLAUDE.md, Data rules: lock order), outside the savepoint, so the
+  // hold lasts until the caller's transaction ends whatever the savepoint does.
+  if (!(await holdAccount(tx, userId))) {
+    await refuseDeletedAccount(tx, ctx, userId, now);
+  }
   return guardedSensitive('user_access_profile', 'insert', () =>
     // A savepoint: a refusal leaves no row and no event.
     tx.transaction(async (inner) => {
@@ -258,7 +303,9 @@ export async function readAccessProfile(
  * Replaces the signed-in person's access profile with the payload, which is checked first.
  * A payload that says what is stored writes nothing and audits nothing: there is nothing
  * to announce. Otherwise the version goes up and one `access.profile-updated` event names
- * the user.
+ * the user. It holds the account's user row `FOR KEY SHARE` before it takes the profile row,
+ * and does not look at whether the account is deleted: the deletion of an account erases its
+ * profile, so a deleted account has none to change.
  *
  * @throws SensitiveAccessDeniedError (after auditing it) for anyone but the person, and
  * for a personal API token.
@@ -275,6 +322,9 @@ export async function updateAccessProfile(
   await authoriseOwner(tx, ctx, userId, 'write');
   const parsed = parsePayload('accessibility', payload);
   const now = ctx.clock();
+  // The user row first (CLAUDE.md, Data rules: lock order). What it says about the account
+  // does not matter here: there is only a profile to change if the deletion left one.
+  await holdAccount(tx, userId);
   return guardedSensitive('user_access_profile', 'update', () =>
     tx.transaction(async (inner) => {
       const existing = await lockProfileRow(inner, userId);
@@ -332,13 +382,16 @@ async function revokeAccessibilityGrants(
 
 /**
  * Deletes the access profile of an account, for good, and answers whether there was one.
- * It takes the profile row `FOR UPDATE` first, so a share with the usual roles that has
- * read the profile (and holds it `FOR SHARE` until it commits) finishes before the row goes
- * and a share that comes later finds none. It does not look at the account's state, so it
- * works on an account already marked deleted, which `loadProfile` does not. It checks no
- * permission and writes no event: the callers, the owner's `deleteAccessProfile` and the
- * door's `endAccountAccessSharing`, have decided who may and write the event, and they end
- * the grants that opened the profile in the same transaction.
+ * It takes the profile row `FOR UPDATE`, so a share with the usual roles that has read the
+ * profile (and holds it `FOR SHARE` until it commits) finishes before the row goes and a
+ * share that comes later finds none. It does not look at the account's state, so it works on
+ * an account already marked deleted, which `loadProfile` does not. It checks no permission
+ * and writes no event: the callers, the owner's `deleteAccessProfile` and the door's
+ * `endAccountAccessSharing`, have decided who may and write the event, and they end the
+ * grants that opened the profile in the same transaction. They hold the account's user row
+ * first: the owner's call `FOR KEY SHARE` (`holdAccount`), and the account-deletion service
+ * that will call the door `FOR UPDATE` (the TODO of `endAccountAccessSharing`), so the profile
+ * row is never the first row lock taken for a deletion of the profile.
  */
 export async function deleteProfileRow(
   tx: Tx,
@@ -359,7 +412,11 @@ export async function deleteProfileRow(
  * made later opens nothing until the person grants again; their medical grants are not
  * touched. One `access.profile-deleted` event names the user and holds the number of
  * grants it revoked (`revokedGrants`, which is 0 when there were none), and no event is
- * written for each grant.
+ * written for each grant. It holds the account's user row `FOR KEY SHARE` before it takes the
+ * profile row: the grants it revokes name the person as the one who revoked them, which takes
+ * the same row's key-share lock, so with the profile first it could wait for a deletion of
+ * the account that waits for the profile. An account that is deleted may still do this: ending
+ * what it shared is always allowed.
  *
  * @throws SensitiveAccessDeniedError (after auditing it) for anyone but the person, and
  * for a personal API token.
@@ -374,6 +431,9 @@ export async function deleteAccessProfile(
 ): Promise<void> {
   await authoriseOwner(tx, ctx, userId, 'delete');
   const now = ctx.clock();
+  // The user row first (CLAUDE.md, Data rules: lock order). The answer does not matter: a
+  // deleted account may end what it shared.
+  await holdAccount(tx, userId);
   await guardedSensitive('user_access_profile', 'delete', () =>
     tx.transaction(async (inner) => {
       if (!(await deleteProfileRow(inner, userId))) {

@@ -60,13 +60,14 @@ export type AccountSharingEnded = {
  * When that service is written, it must call this in the transaction that marks the account
  * deleted, under the user row taken `FOR UPDATE` (`lockUser` with `strength: 'update'`, as
  * every service that ends a user's sessions does; CLAUDE.md, Data rules). The lock order
- * is the user row, then the profile row, then the grants (CLAUDE.md, Data rules), and the
- * writers of grants follow it: `createAccessGrant` and a share with the usual roles take the
- * user row `FOR KEY SHARE` first (`holdAccount`), so each queues with the deletion on that
- * row, cannot deadlock with it and leaves no live grant of a deleted account behind (a
- * deleted account is refused with `AccountDeletedError`). `revokeAccessGrant`,
- * `createAccessProfile`, `updateAccessProfile` and `deleteAccessProfile` do not take the
- * user row first yet.
+ * is the user row, then the profile row, then the grants (CLAUDE.md, Data rules), and every
+ * writer of grants and of the profile follows it: `createAccessGrant`, `revokeAccessGrant`,
+ * `shareWithSuggestedRoles`, `createAccessProfile`, `updateAccessProfile` and
+ * `deleteAccessProfile` take the user row `FOR KEY SHARE` first (`holdAccount`), so each
+ * queues with the deletion on that row and cannot deadlock with it. The ones that make
+ * something derived from the account (a grant, a share, a profile) refuse a deleted account
+ * with `AccountDeletedError`, so no live grant and no profile of a deleted account is left
+ * behind; the ones that only end or change what exists do not look at the answer.
  *
  * @throws RangeError when `reason` is not on the closed list or `userId` is not an id (a
  * bug in the caller); nothing was written.

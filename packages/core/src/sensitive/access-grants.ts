@@ -655,6 +655,14 @@ export async function createAccessGrant(
  * for a grant that does not exist, so the answer says nothing about whether one exists.
  * Audited as `access.grant-revoked`.
  *
+ * For a person with an account it holds the account's user row `FOR KEY SHARE`
+ * (`holdAccount`) before it locks the grant. Deleting the account takes that row
+ * `FOR UPDATE` and then ends the account's grants, and the revoke names its caller as the one
+ * who ended the grant, which takes the same row's key-share lock, so with the grant first it
+ * could wait for a deletion that waits for the grant. It does not look at whether the account
+ * is deleted: ending a grant is always allowed, and one the deletion already ended is the
+ * same not found as any other that is gone.
+ *
  * @throws SensitiveAccessDeniedError (after auditing it) when the caller has no standing
  * on this person and project: neither the person nor a holder of the permission.
  * @throws RecordNotFoundError when there is no live grant the caller may revoke.
@@ -671,6 +679,11 @@ export async function revokeAccessGrant(
   const missing = () =>
     new RecordNotFoundError('access_grant', `${subject.person.id}/${category}`);
   if (!isUuid(key.roleId)) throw missing();
+  // The user row first (CLAUDE.md, Data rules: lock order), whoever revokes: the account the
+  // grant derives from, not the caller's own. The answer does not matter, as above.
+  if (subject.person.userId !== null) {
+    await holdAccount(tx, subject.person.userId);
+  }
   await guardedSensitive('access_grant', 'update', () =>
     tx.transaction(async (inner) => {
       const lockLive = async () =>
