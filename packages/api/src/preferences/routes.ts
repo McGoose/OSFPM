@@ -50,7 +50,7 @@ export const preferencesRoutes: FastifyPluginAsyncZod = (app) => {
   app.get(
     '/preferences',
     {
-      config: { sessionRateLimit: true },
+      config: { sessionRateLimit: true, tokenAccess: 'read' },
       schema: {
         summary: 'Read my delivery preferences',
         description:
