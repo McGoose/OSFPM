@@ -20,4 +20,4 @@ Crew personal data: dietary, medical, accessibility, emergency, identity, financ
 - An unknown or deleted person is denied like any other, so ids cannot be probed.
 - A new category needs a payload schema, a retention class in `service.ts` and a migration for the table's CHECK.
 
-**Tests:** `service.test.ts`, `schemas.test.ts`, `table.test.ts`, `compliance-report.test.ts` and `source-scan.test.ts`. `payload-fixtures.ts` holds invented payloads for people in _The Last Withdrawal_.
+**Tests:** `service.test.ts`, `schemas.test.ts`, `table.test.ts`, `compliance-report.test.ts`, `token-access.test.ts` (reads and writes through a personal API token: only with the scope, the switch and the owner's access, and every read audited with the token id) and `source-scan.test.ts`. `payload-fixtures.ts` holds invented payloads for people in _The Last Withdrawal_.
