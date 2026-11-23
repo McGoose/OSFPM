@@ -106,8 +106,19 @@ import { generateToken, hashToken } from './tokens.js';
  * switch is read off and the token refused: never a live token the switches do not
  * allow. A bulk revocation locks the token rows in id order before it changes them, so two
  * of them (a switch turned off, an admin reset link used) cannot deadlock. Revoking one
- * token is one conditional UPDATE and takes only that row. No writer that holds a counter
- * waits for a user row, an invite row or a reset row.
+ * token is one conditional UPDATE: it locks that row and then, for the foreign key of
+ * `revoked_by`, takes a key-share lock on the revoker's user row. `createApiToken` and
+ * `setApiTokenSwitches` hold the counter and may wait for a user row the same way (the
+ * keys of the new token; the setting row), which is the order CLAUDE.md gives: counter,
+ * then the user row. No writer that holds a counter waits for an invite row or a reset row.
+ *
+ * Known limit. `useAccessReset` takes the user row `FOR UPDATE` and then the token rows,
+ * the reverse of a single revoke, so a person who revokes their own token at the very
+ * moment their own reset link is used can deadlock with it; so can an administrator whose
+ * own reset link is used while they turn a switch off. PostgreSQL ends one of the two and
+ * a retry goes through. A fix would take the acting user's row `FOR KEY SHARE` before the
+ * token rows in `revokeOne` and `setApiTokenSwitches`; CLAUDE.md's lock order does not
+ * name token rows yet.
  */
 
 /** What a token starts with, so a leaked one can be recognised by a secret scanner. */
@@ -928,8 +939,9 @@ async function revokeLiveTokens(
  * records the count. Never touches a token that is already revoked or past its end.
  *
  * TODO(P-04b): member removal calls this with `membership-ended`. Until then a token whose
- * owner's membership is not active simply fails (`authenticateApiToken`), which is enough
- * to stop it; the revocation makes the end visible in the token list and the audit trail.
+ * owner's membership is not active simply fails (`authenticateApiToken`), which stops it
+ * for as long as the membership stays inactive; the revocation will make that permanent,
+ * so a membership that is made active again does not bring the token back.
  *
  * @throws RecordWriteError when the database refuses a write; it carries the SQLSTATE only.
  */
