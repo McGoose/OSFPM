@@ -11,7 +11,7 @@ Crew personal data: dietary, medical, accessibility, emergency, identity, financ
 
 **Rules you must not break**
 
-- Nothing else may name `person_sensitive`. `source-scan.test.ts` fails if other code does.
+- Nothing else may name `person_sensitive`, `user_access_profile` or `access_grant` (the last two are the tables the registry `tableWriters` says this service writes). `source-scan.test.ts` fails if other code does.
 - Access is the person themselves, or a holder of `sensitive:read:<category>` or `sensitive:edit:<category>` on a project where the person is `confirmed` or `released`. Owners and admins get nothing automatically.
 - A personal API token (`SensitiveContext.credential`) reaches the same data only through its explicit sensitive scope: it must list the permission's key, the organisation's sensitive switch must be on, and the token's owner must hold the permission on a shared project at that moment (`hasProjectPermission` narrows by the credential). A token never takes the person's own way in. Its writes are the token's in the change log (actor `token`, made for its owner), and every read and every denial through a token is audited with the token's id (actor `token`, details `tokenId` and `userId`).
 - Audit every allowed read and every denial, with the category and never a value. A denial throws after its audit event is written, so catch it inside the transaction and commit.

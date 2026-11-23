@@ -261,6 +261,7 @@ describe('who may write security tables and service-written tables', () => {
       expect(tables.map((table) => getTableName(table)).sort()).toEqual([
         'installation',
         'user',
+        'user_access_profile',
       ]);
       expect(tables.map((table) => getTableName(table)).sort()).toEqual(
         [...serviceWrittenTableNames()].sort(),
@@ -282,9 +283,11 @@ describe('who may write security tables and service-written tables', () => {
     inTempTree(
       {
         'core/src/auth/sessions.ts': 'await tx.update(user).set(x);',
-        'core/src/auth/oops.ts': 'await tx.insert(accessGrant).values(row);',
+        // A table declared for the sensitive service. Not a real one: the scan of
+        // who may name the sensitive tables reads this file too.
+        'core/src/auth/oops.ts': 'await tx.insert(probeLedger).values(row);',
         'core/src/sensitive/service.ts':
-          'await tx.insert(accessGrant).values(row);',
+          'await tx.insert(probeLedger).values(row);',
         'core/src/sensitive/oops.ts': 'await tx.update(session).set(x);',
         'core/src/projects/oops.ts':
           'await tx.update(user).set({ status: x });',
@@ -320,7 +323,7 @@ describe('who may write security tables and service-written tables', () => {
         expect(
           violations(
             root,
-            [table('accessGrant', 'access_grant')],
+            [table('probeLedger', 'probe_ledger')],
             [folderOf('sensitive')],
           ),
         ).toEqual(['core/src/auth/oops.ts']);

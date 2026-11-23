@@ -1,3 +1,4 @@
+export * from './access-grant.js';
 export * from './access-reset.js';
 export * from './account-chart.js';
 export * from './account.js';
@@ -45,4 +46,5 @@ export * from './setting-value.js';
 export * from './setup-code.js';
 export * from './totp-credential.js';
 export * from './unit.js';
+export * from './user-access-profile.js';
 export * from './user.js';

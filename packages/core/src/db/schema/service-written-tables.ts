@@ -1,5 +1,6 @@
 import { declareServiceWrittenTable } from '../columns.js';
 import { installation } from './installation.js';
+import { userAccessProfile } from './user-access-profile.js';
 import { user } from './user.js';
 
 /**
@@ -17,8 +18,16 @@ import { user } from './user.js';
  * `ensureInstallation` and `completeFirstRunSetup`), so it needed no other service.
  * Adding a table here, or changing a writer, is a change in the same commit as the
  * code.
+ *
+ * `user_access_profile` is the one whose writer is not the auth service: the
+ * sensitive service writes it, with the reason in the declaration.
  */
 export const SERVICE_WRITTEN_TABLES = [
   declareServiceWrittenTable(user, { service: 'auth' }),
   declareServiceWrittenTable(installation, { service: 'auth' }),
+  declareServiceWrittenTable(userAccessProfile, {
+    service: 'sensitive',
+    reason:
+      'A person’s own access needs are sensitive data, so the sensitive service is the only door to them, as it is for person_sensitive (decision D-69).',
+  }),
 ] as const;
