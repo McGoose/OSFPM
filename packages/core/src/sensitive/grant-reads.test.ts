@@ -484,37 +484,43 @@ describe.each(testTargets)('reading access needs on $name', (target) => {
 
     it('is denied when nothing is granted, with the scope or without it, and when its owner holds no granted role', async () => {
       await grantAsHolder(scene.roles.production, ['stepFreeRequired']);
+      // Functions, not promises: a promise that rejects before its handler is attached is an
+      // unhandled rejection, which on PostgreSQL's pool, where the reads overlap, fails the run.
       const refused = [
         // No grant for this person of this category.
-        read(
-          scene.users.producer,
-          crew().personId,
-          'accessibility',
-          tokenFor(scene.organisationId, scope),
-        ),
+        () =>
+          read(
+            scene.users.producer,
+            crew().personId,
+            'accessibility',
+            tokenFor(scene.organisationId, scope),
+          ),
         // The scope does not list the key.
-        read(
-          scene.users.producer,
-          holder().personId,
-          'accessibility',
-          tokenFor(scene.organisationId, ['sensitive:read:medical']),
-        ),
-        read(
-          scene.users.producer,
-          holder().personId,
-          'accessibility',
-          tokenFor(scene.organisationId, []),
-        ),
+        () =>
+          read(
+            scene.users.producer,
+            holder().personId,
+            'accessibility',
+            tokenFor(scene.organisationId, ['sensitive:read:medical']),
+          ),
+        () =>
+          read(
+            scene.users.producer,
+            holder().personId,
+            'accessibility',
+            tokenFor(scene.organisationId, []),
+          ),
         // The owner holds a permission, and no role a grant names.
-        read(
-          scene.users.plainReader,
-          holder().personId,
-          'accessibility',
-          tokenFor(scene.organisationId, scope),
-        ),
+        () =>
+          read(
+            scene.users.plainReader,
+            holder().personId,
+            'accessibility',
+            tokenFor(scene.organisationId, scope),
+          ),
       ];
       for (const attempt of refused) {
-        await expect(attempt).rejects.toBeInstanceOf(
+        await expect(attempt()).rejects.toBeInstanceOf(
           SensitiveAccessDeniedError,
         );
       }
