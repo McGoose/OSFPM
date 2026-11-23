@@ -11,6 +11,7 @@ import {
 } from '../db/test-support.js';
 import type { Tx } from '../db/write.js';
 import { shareWithSuggestedRoles } from './access-grants.js';
+import { AccountDeletedError } from './errors.js';
 import { VALID_PAYLOADS } from './payload-fixtures.js';
 import { writeSensitive } from './service.js';
 import { ACCESS_SUGGESTED_ROLES_SETTING } from './suggested-roles.js';
@@ -125,7 +126,7 @@ describe.skipIf(postgres === undefined)(
     });
 
     it.each(['accessibility', 'medical'] as const)(
-      'makes a %s share that meets a deletion in progress wait for it, share nothing and leave no grant behind',
+      'makes a %s share that meets a deletion in progress wait for it, refuse the account and leave no grant behind',
       async (category) => {
         const ines = await newHolder();
 
@@ -136,11 +137,7 @@ describe.skipIf(postgres === undefined)(
         );
 
         expect(outcomes[0].status).toBe('fulfilled');
-        expect(resultOf(outcomes[1])).toEqual({
-          preview: false,
-          shares: [],
-          granted: 0,
-        });
+        expect(resultOf(outcomes[1])).toBeInstanceOf(AccountDeletedError);
         expect(await grantsOf(ines.personId)).toEqual([]);
       },
     );

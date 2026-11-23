@@ -59,10 +59,10 @@ import {
  * A grant is derived from the account of the person who makes it, so a call that writes one
  * for a person with an account holds that account's user row `FOR KEY SHARE`
  * (`holdAccount`) before it writes, and a deleted account is refused
- * (`AccountDeletedError`) or, for the shortcut, shares nothing. The deletion of an account
- * takes the same row `FOR UPDATE` and ends the account's grants, so a grant is either made
- * before it and ended by it, or refused after it, and the lock order is the user row, then
- * the profile row, then the grants (CLAUDE.md, Data rules).
+ * (`AccountDeletedError`), for the shortcut too. The deletion of an account takes the same
+ * row `FOR UPDATE` and ends the account's grants, so a grant is either made before it and
+ * ended by it, or refused after it, and the lock order is the user row, then the profile
+ * row, then the grants (CLAUDE.md, Data rules).
  *
  * A denial is audited as `sensitive.denied` and thrown; a rule that refuses a call is
  * audited as `access.refused` with a reason code from a closed list and thrown; both are
@@ -370,10 +370,11 @@ async function requireLiveProject(
  * For a person with an account, holds the account's user row `FOR KEY SHARE` until the
  * transaction ends (`holdAccount`) and refuses a grant when the account is deleted: it
  * would be live for an account whose sharing the deletion has ended, and for a medical
- * grant it would open the organisation's record, which the deletion leaves in place. It runs
- * after the other refusals and before anything is written, and takes nothing else of the
- * person's first, so a call that waits on a deletion in progress holds no other lock and
- * cannot deadlock with it. A person without an account has no row to hold.
+ * grant it would open the organisation's record, which the deletion leaves in place. Both
+ * callers, `createAccessGrant` and `shareWithSuggestedRoles`, run it after their other
+ * refusals and before anything else of the person's is read or locked, so a call that waits
+ * on a deletion in progress holds no other lock and cannot deadlock with it. A person
+ * without an account has no row to hold.
  */
 async function requireLiveAccount(
   tx: Tx,
@@ -818,7 +819,7 @@ function filledKeys(
  * the answer is an empty preview with `reason: 'no-suggested-roles'`, whether or not the
  * call asked for a preview. It reads none of the person's data and writes nothing, not even
  * the `access.shortcut-used` event, and a client tells the person that the usual roles have
- * not been chosen. The refusals below still come first.
+ * not been chosen. The refusals below still come first, a deleted account's among them.
  *
  * With `preview: true` it writes nothing and says who would see what, so a client can show
  * the person before they confirm. What a confirmed call makes is what the preview said at
@@ -831,17 +832,22 @@ function filledKeys(
  * with `invalid-groups` for a group the category does not have. A call that is not a
  * preview by staff for a person without an account needs the consent.
  *
- * A call that writes first holds the person's user row `FOR KEY SHARE` (`holdAccount`), and
- * then, from the moment it reads it, their access profile `FOR SHARE`, until the
- * transaction ends. Deleting the account takes the user row `FOR UPDATE` and then the
- * profile row, and deleting the profile ends the person's accessibility grants, so neither
- * may commit between this read and the writes it leads to. Both go user row first, so they
- * queue and cannot deadlock: a deletion waits for a call that has started and then ends the
- * grants it made, and a call that meets a deletion in progress waits for it, finds the
- * account deleted and shares nothing, whichever category (CLAUDE.md, Data rules: lock order).
+ * For a person with an account it holds the account's user row `FOR KEY SHARE`
+ * (`holdAccount`) once its other checks have passed, a preview too, and refuses an account
+ * that is deleted, whichever category. A call that writes then holds the person's access
+ * profile `FOR SHARE` from the moment it reads it, until the transaction ends. Deleting the
+ * account takes the user row `FOR UPDATE` and then the profile row, and deleting the profile
+ * ends the person's accessibility grants, so neither may commit between this read and the
+ * writes it leads to. Both go user row first, so they queue and cannot deadlock: a deletion
+ * waits for a call that has started and then ends the grants it made, and a call that meets
+ * a deletion in progress waits for it, finds the account deleted and is refused (CLAUDE.md,
+ * Data rules: lock order).
  *
  * @throws SensitiveAccessDeniedError, AccessGrantRefusedError, AccessGrantBusyError and
  * RecordWriteError, as for `createAccessGrant`. Nothing is written when one is thrown.
+ * @throws AccountDeletedError (after auditing the refusal) when the person's account is
+ * deleted, for a preview as for a confirmed call, and before any answer that no role is
+ * suggested. Only the holder of the account reaches this, since nobody else shares for them.
  */
 export async function shareWithSuggestedRoles(
   tx: Tx,
@@ -891,6 +897,14 @@ export async function shareWithSuggestedRoles(
         now,
       );
   await requireLiveProject(tx, ctx, subject, checkedCategory, now);
+  // The last refusal, and the first hold on the person's rows, before anything else of
+  // theirs is read or locked (CLAUDE.md, Data rules: lock order). The deletion of the account
+  // takes the user row `FOR UPDATE` and then the profile row, so both go user row first, and
+  // a call that waits here holds nothing on the profile and cannot deadlock with it. A
+  // preview is refused and holds the same row, so a client is never shown a share that a
+  // confirmed call would refuse; the hold is the weakest row lock, and only the deletion of
+  // the account waits for it.
+  await requireLiveAccount(tx, ctx, subject, checkedCategory);
 
   // When the organisation suggests no role for the groups asked about, there is nobody to
   // share with: say so, as an empty preview, and neither read the person's data nor write
@@ -908,20 +922,6 @@ export async function shareWithSuggestedRoles(
       granted: 0,
       reason: 'no-suggested-roles',
     };
-  }
-
-  // A call that will write holds the person's user row `FOR KEY SHARE` before it reads or
-  // locks anything else of theirs (CLAUDE.md, Data rules: lock order). The deletion of the
-  // account takes that row `FOR UPDATE` and then the profile row, so both go user row first,
-  // and a call that waits here holds nothing on the profile and cannot deadlock with it. An
-  // account that is deleted shares nothing, whichever category: a grant made now would be
-  // live for a deleted account.
-  if (
-    !preview &&
-    subject.person.userId !== null &&
-    !(await holdAccount(tx, subject.person.userId))
-  ) {
-    return { preview: false, shares: [], granted: 0 };
   }
 
   // The caller is allowed to see all of it: the person, or staff who edit it. A call that

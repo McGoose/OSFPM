@@ -64,8 +64,9 @@ export type AccountSharingEnded = {
  * writers of grants follow it: `createAccessGrant` and a share with the usual roles take the
  * user row `FOR KEY SHARE` first (`holdAccount`), so each queues with the deletion on that
  * row, cannot deadlock with it and leaves no live grant of a deleted account behind (a
- * deleted account is refused, or shares nothing). `revokeAccessGrant`, `createAccessProfile`,
- * `updateAccessProfile` and `deleteAccessProfile` do not take the user row first yet.
+ * deleted account is refused with `AccountDeletedError`). `revokeAccessGrant`,
+ * `createAccessProfile`, `updateAccessProfile` and `deleteAccessProfile` do not take the
+ * user row first yet.
  *
  * @throws RangeError when `reason` is not on the closed list or `userId` is not an id (a
  * bug in the caller); nothing was written.
