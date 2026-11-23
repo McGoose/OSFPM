@@ -133,11 +133,13 @@ export const accessGrant = securityTable(
       columns: [t.revokedBy],
       foreignColumns: [user.id],
     }),
-    // One live grant per role, person and category on a project: the backstop for the
-    // service, which revokes the earlier grant of a role before it makes the next. All
-    // four key columns are NOT NULL, so the NULLS NOT DISTINCT rule of CLAUDE.md (Data
-    // rules) does not apply. It also finds a project's live grants without reading the
-    // whole table.
+    // One live grant per role, person and category on a project. This index is what
+    // guarantees it, whatever the service does: the service revokes the earlier grant of
+    // a role before it makes the next, and locks that grant `FOR UPDATE` so that two
+    // changes of one role queue, but the lock only orders the work and the index is the
+    // rule. All four key columns are NOT NULL, so the NULLS NOT DISTINCT rule of CLAUDE.md
+    // (Data rules) does not apply. It also finds a project's live grants without reading
+    // the whole table.
     uniqueIndex(ACCESS_GRANT_LIVE_INDEX)
       .on(t.projectId, t.personId, t.category, t.roleId)
       .where(sql`${t.revokedAt} is null`),

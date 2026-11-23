@@ -20,9 +20,10 @@ const reasonOf = (outcome: PromiseSettledResult<unknown>): unknown =>
 
 /**
  * Changes to one access grant racing each other (decision D-69; CLAUDE.md, Data rules). A
- * role has one live grant: a change locks the live grant of the role `FOR UPDATE` before it
- * revokes it, the partial unique index is the backstop, and a change that still loses to the
- * index is `AccessGrantBusyError` and writes nothing. Each ordered case holds one
+ * role has one live grant, and the partial unique index guarantees it: a change that would
+ * make a second one loses to the index and is `AccessGrantBusyError`, and writes nothing. A
+ * change also locks the live grant of the role `FOR UPDATE` before it revokes it, which only
+ * orders the work, so that two changes queue instead of racing. Each ordered case holds one
  * transaction open after its work while the other starts, and waits until the second is
  * blocked on a lock (`interleave`), so the two really overlap and the order is the one the
  * test names. They need two real sessions, so they run on PostgreSQL and are skipped on PGlite.

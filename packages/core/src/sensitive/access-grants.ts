@@ -381,14 +381,15 @@ type GrantToWrite = {
 
 /**
  * Writes one grant: revokes the live grant of the same role, if there is one, and makes
- * the new one, in one savepoint, so a role has one live grant at a time and a failure
- * leaves the old one as it was. The earlier grant is locked `FOR UPDATE` first, so two
- * changes of one role queue; the partial unique index is the backstop, and a change that
- * still loses to it is `AccessGrantBusyError`. Grants are not written through the write
- * helper, so no change counter is taken, and the only row locked before this one is the
- * profile row that a confirmed share holds `FOR SHARE` (`shareWithSuggestedRoles`), so the
- * order is always profile first, then grants, as in `deleteAccessProfile` (CLAUDE.md,
- * Data rules).
+ * the new one, in one savepoint, so a failure leaves the old one as it was. The partial
+ * unique index (`access_grant_live_unique`) is what guarantees a role never has two live
+ * grants: a change that would make a second one loses to the index and is
+ * `AccessGrantBusyError`, whatever else happens. The `FOR UPDATE` on the earlier grant
+ * only orders the work, so that two changes of one role queue behind each other instead
+ * of racing to the index. Grants are not written through the write helper, so no change
+ * counter is taken, and the only row locked before this one is the profile row that a
+ * confirmed share holds `FOR SHARE` (`shareWithSuggestedRoles`), so the order is always
+ * profile first, then grants, as in `deleteAccessProfile` (CLAUDE.md, Data rules).
  */
 async function writeGrant(
   tx: Tx,
@@ -405,6 +406,10 @@ async function writeGrant(
   };
   return guardedSensitive('access_grant', 'insert', () =>
     tx.transaction(async (inner) => {
+      // The earlier live grant of this role, locked `FOR UPDATE` so that two changes of
+      // one role queue behind each other. The lock only orders the work. What guarantees
+      // one live grant per role is the partial unique index (`access_grant_live_unique`):
+      // a change that would make a second one loses to it (`AccessGrantBusyError`, below).
       const [earlier] = await inner
         .select({ id: accessGrant.id, onBehalf: accessGrant.onBehalf })
         .from(accessGrant)
