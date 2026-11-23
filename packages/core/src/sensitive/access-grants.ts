@@ -414,8 +414,7 @@ async function writeGrant(
             isNull(accessGrant.revokedAt),
           ),
         )
-        .limit(1)
-        .for('update');
+        .limit(1);
       const base = {
         actor: auditActor(ctx),
         organisationId: subject.person.organisationId,
