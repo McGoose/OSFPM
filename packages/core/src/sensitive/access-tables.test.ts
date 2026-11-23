@@ -304,7 +304,7 @@ describe.each(testTargets)(
         payload: { stepFreeRequired: true },
       });
 
-      it('holds one profile per user, in the crew-health class', async () => {
+      it('holds one profile per user, in the account-lifetime class', async () => {
         const owner = await seedUser(database);
         await db().insert(userAccessProfile).values(profile(owner));
         expect(
@@ -320,7 +320,7 @@ describe.each(testTargets)(
           .from(userAccessProfile)
           .where(eq(userAccessProfile.userId, owner));
         expect(row).toMatchObject({
-          retentionClass: 'crew-health',
+          retentionClass: 'account-lifetime',
           version: 1,
         });
       });

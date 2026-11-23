@@ -253,6 +253,13 @@
       "when": 1795448977508,
       "tag": "0035_access_needs",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1795453969380,
+      "tag": "0036_account_lifetime_retention_class",
+      "breakpoints": true
     }
   ]
 }

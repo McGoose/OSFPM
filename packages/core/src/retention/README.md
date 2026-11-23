@@ -31,6 +31,10 @@ Each table has its cleanup, and `TRANSIENT_CLEANUPS` lists them. A cleanup takes
 - `access_reset`: `cleanupAccessResets` deletes every admin reset link that was used, revoked or has expired, with the same cut-off as invites.
 - `api_token`: `cleanupApiTokens` deletes every personal API token that was revoked or has expired, with the same cut-off as reset links. A token that never expires (`expires_at` NULL) is live until it is revoked, so it is never deleted for being old.
 
+**The `account-lifetime` class**
+
+For a row that belongs to an account and not to a production: `user_access_profile` uses it (decision D-69). The row is kept while the account exists, and ends when the person deletes it or the account goes. The class counts from `record-created`, the one anchor that names no project, and has no period, so `retentionEndDate` returns `null` for it: no wrap, delivery or exploitation date and no purge by class reaches these rows, and no cleanup lists them. The grants a profile opens (`access_grant`) are not in this class: they stay `crew-health`, the class of the data a production sees.
+
 **The `security-log` class**
 
 Reserved for audit rows that hold IP addresses, as its description in `0013_seed_retention_classes` says. No table uses it yet.
@@ -39,9 +43,10 @@ Reserved for audit rows that hold IP addresses, as its description in `0013_seed
 
 - Legal and financial periods live only in `SHIPPED_RETENTION_DEFAULTS`, each marked `verified: false`, until the rule-pack engine replaces them. Never repeat a shipped period anywhere else.
 - Never give `transient` a period, and never use it for a row that is the only record of something: cleanup deletes the row and the audit log is the record (maintainer decision, P-03b3a).
+- Never give `account-lifetime` a period, and never use it for a row that belongs to a project: a project's wrap must not reach a row that outlives projects (decision D-69, P-02l1).
 - A table whose default class is `transient` has an entry in `TRANSIENT_CLEANUPS`. `transient-cleanups.test.ts` finds those tables from the schema, so it fails when one has no cleanup, and when an entry names a table that is not transient. A new transient table adds its cleanup to the list in the same change.
 - A missing anchor date, a `null` period or no periods at all means no automatic purge. The longest period wins.
 - An unknown anchor is an error, not "no date". Returning `null` would keep a record forever without anyone being told.
 - Years are added to the calendar date. 29 February plus whole years is 28 February in a non-leap year.
 
-**Tests:** `retention.test.ts`, `transient-cleanups.test.ts` (every transient table has a cleanup, and running the whole list clears each table), and `../db/retention-class.test.ts` for the `retention_class` table and for what the `transient` migrations do to sessions, login challenges and setup codes that already exist. Each cleanup is tested with its service, in `../auth/`.
+**Tests:** `retention.test.ts`, `transient-cleanups.test.ts` (every transient table has a cleanup, and running the whole list clears each table), `../db/retention-class.test.ts` for the `retention_class` table and for what the `transient` and `account-lifetime` migrations do to rows that already exist, and `../sensitive/profile-retention.test.ts` (a project's wrap and every cleanup leave an access profile as it was). Each cleanup is tested with its service, in `../auth/`.

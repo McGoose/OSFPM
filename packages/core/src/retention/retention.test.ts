@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { RETENTION_ANCHORS } from '../db/schema/retention-class.js';
 import {
   RETENTION_CLASS_KEYS,
   SHIPPED_RETENTION_DEFAULTS,
@@ -45,6 +46,35 @@ describe('SHIPPED_RETENTION_DEFAULTS', () => {
         dates: { ...NO_DATES, recordCreated: '2026-03-05' },
       }),
     ).toBeNull();
+  });
+
+  it('gives the account-lifetime class no period: no date ends it, only the person or the account', () => {
+    expect(SHIPPED_RETENTION_DEFAULTS['account-lifetime']).toEqual({
+      periodYears: null,
+      verified: false,
+    });
+    // Every date known and long past, under every anchor: still no end date. A
+    // project's wrap, delivery or first exploitation cannot end a row that
+    // belongs to an account and not to a project.
+    const everyDate: RetentionDates = {
+      recordCreated: '2000-01-01',
+      lastActivity: '2000-01-01',
+      wrapDate: '2000-01-01',
+      deliveryDate: '2000-01-01',
+      firstExploitationDate: '2000-01-01',
+    };
+    for (const anchor of RETENTION_ANCHORS) {
+      expect(
+        retentionEndDate({
+          anchor,
+          periodsYears: [
+            SHIPPED_RETENTION_DEFAULTS['account-lifetime'].periodYears,
+          ],
+          dates: everyDate,
+        }),
+        anchor,
+      ).toBeNull();
+    }
   });
 });
 

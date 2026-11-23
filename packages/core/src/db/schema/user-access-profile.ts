@@ -30,14 +30,17 @@ import { user } from './user.js';
  * `payload` is marked sensitive, so a change event could never hold its value, and it
  * is validated by the `accessibility` schema before it is stored. `key_id` is reserved
  * for later end-to-end encryption, as in `person_sensitive`. Retention class
- * `crew-health`, the class of the data it holds: its anchor is the project wrap, and a
- * profile belongs to no project, so no wrap date applies and `retentionEndDate` has
- * nothing to count from: it is kept until the person deletes it, or their account goes.
+ * `account-lifetime`: kept while the account exists, deleted with it or when the person
+ * deletes the profile. It has no period and counts from no project date, so a project's
+ * wrap, a purge by class or a cleanup never reaches it (decision D-69, P-02l1). The
+ * grants it opens stay `crew-health`, the class of the data a production sees.
  */
 export const userAccessProfile = pgTable(
   'user_access_profile',
   {
-    ...baseColumns(() => user.id, { defaultRetentionClass: 'crew-health' }),
+    ...baseColumns(() => user.id, {
+      defaultRetentionClass: 'account-lifetime',
+    }),
     userId: uuid('user_id').notNull(),
     payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
     keyId: text('key_id'),
