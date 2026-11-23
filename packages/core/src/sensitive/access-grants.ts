@@ -916,13 +916,6 @@ export async function shareWithSuggestedRoles(
   // and a call that waits here holds nothing on the profile and cannot deadlock with it. An
   // account that is deleted shares nothing, whichever category: a grant made now would be
   // live for a deleted account.
-  if (
-    !preview &&
-    subject.person.userId !== null &&
-    !(await holdAccount(tx, subject.person.userId))
-  ) {
-    return { preview: false, shares: [], granted: 0 };
-  }
 
   // The caller is allowed to see all of it: the person, or staff who edit it. A call that
   // will write holds the profile `FOR SHARE` from this read to its commit: deleting the
@@ -931,6 +924,13 @@ export async function shareWithSuggestedRoles(
   const source = await loadGovernedSource(tx, subject.person, checkedCategory, {
     lockProfile: !preview,
   });
+  if (
+    !preview &&
+    subject.person.userId !== null &&
+    !(await holdAccount(tx, subject.person.userId))
+  ) {
+    return { preview: false, shares: [], granted: 0 };
+  }
   const payload = source?.payload ?? {};
   await recordAudit(tx, {
     actor: auditActor(ctx),

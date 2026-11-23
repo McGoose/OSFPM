@@ -128,6 +128,7 @@ export async function liveGrants(
         eq(person.organisationId, filter.organisationId),
         inArray(person.id, personIds),
         isNull(person.deletedAt),
+        isNull(user.deletedAt),
       ),
     );
   const livePeople = new Set(people.map((row) => row.id));
