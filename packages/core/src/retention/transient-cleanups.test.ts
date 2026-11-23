@@ -178,18 +178,22 @@ describe.each(testTargets)(
         ago(HOUR),
         new Date(now.getTime() + 6 * DAY),
       );
-      // Reset links, for a member of the organisation: one that expired, and one
-      // with time left. Written directly, as above; the service comes with the
-      // reset flow.
-      await grantOnOrganisation(
-        database,
-        organisationId,
-        otherId,
-        'member',
-        [],
-      );
+      // Reset links: one that expired, and one with time left, for two members of
+      // the organisation, because the table keeps one link per person that is
+      // neither used nor revoked. Written directly, as above.
+      const expiredPersonId = await seedActiveUser(database);
+      for (const memberId of [otherId, expiredPersonId]) {
+        await grantOnOrganisation(
+          database,
+          organisationId,
+          memberId,
+          'member',
+          [],
+        );
+      }
       const seedReset = async (
         name: string,
+        memberId: string,
         createdAt: Date,
         expiresAt: Date,
       ) => {
@@ -198,7 +202,7 @@ describe.each(testTargets)(
           .values({
             originServer: base(organisationId).originServer,
             organisationId,
-            userId: otherId,
+            userId: memberId,
             tokenHash: `cleanup-reset-${name}`,
             createdAt,
             createdBy: userId,
@@ -207,9 +211,10 @@ describe.each(testTargets)(
           .returning();
         return row!;
       };
-      await seedReset('expired', ago(60 * DAY), ago(59 * DAY));
+      await seedReset('expired', expiredPersonId, ago(60 * DAY), ago(59 * DAY));
       const liveReset = await seedReset(
         'live',
+        otherId,
         ago(HOUR),
         new Date(now.getTime() + 23 * HOUR),
       );

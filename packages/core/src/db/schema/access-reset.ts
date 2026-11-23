@@ -6,6 +6,7 @@ import {
   index,
   text,
   unique,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 import { baseColumns, securityTable, timestamptz } from '../columns.js';
@@ -30,7 +31,9 @@ import { user } from './user.js';
  * their recovery codes). `remove_passkeys` says whether using the link also
  * revokes the person's passkeys, for the case where a device was lost or stolen.
  * The rules for who may reset whom are checked by the service, when the link is
- * made and again when it is used (`auth/access-reset.ts`), not by this table.
+ * made and again when it is used (`auth/access-reset.ts`), not by this table. The
+ * table does keep one live link per person per organisation
+ * (`access_reset_live_unique`: at most one row that is neither used nor revoked).
  *
  * A security table: only `auth/access-reset.ts` writes it, directly, and every
  * change is audited instead of change-logged (CLAUDE.md, Data rules). It is the
@@ -83,6 +86,15 @@ export const accessReset = securityTable(
     // Finds the live link of a member without reading the whole table, and
     // covers the composite key above.
     index('access_reset_organisation_user_idx').on(t.organisationId, t.userId),
+    // One link per member per organisation that is neither used nor revoked: the
+    // backstop for `createAccessReset`, which locks the person's row and revokes the
+    // earlier link before it makes the next. The expiry is not part of "live" here,
+    // because `now()` cannot be in an index predicate: a link past its end holds the
+    // place until something revokes it, and the next link does. Both key columns are
+    // NOT NULL, so the NULLS NOT DISTINCT rule of CLAUDE.md (Data rules) does not apply.
+    uniqueIndex('access_reset_live_unique')
+      .on(t.organisationId, t.userId)
+      .where(sql`${t.usedAt} is null and ${t.revokedAt} is null`),
     check(
       'access_reset_revoked_pair_check',
       sql`(${t.revokedAt} is null) = (${t.revokedBy} is null)`,

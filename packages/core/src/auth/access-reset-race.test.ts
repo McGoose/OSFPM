@@ -13,17 +13,22 @@ import { RecordNotFoundError, type Tx } from '../db/write.js';
 import {
   createMigratedDatabase,
   interleave,
+  lockWaiters,
   succeeded,
   testTargets,
 } from '../db/test-support.js';
-import { AccessResetInvalidError } from './access-reset-errors.js';
+import {
+  AccessResetInvalidError,
+  UserInOtherOrganisationsError,
+  UserNotActiveError,
+} from './access-reset-errors.js';
 import {
   createAccessReset,
   revokeAccessReset,
   useAccessReset,
 } from './access-reset.js';
 import { acceptInvite, createInvite } from './invites.js';
-import { AUTH_AUDIT } from './shared.js';
+import { AUTH_AUDIT, lockUser } from './shared.js';
 import {
   seedMembership,
   seedOrganisationRole,
@@ -40,9 +45,10 @@ const at = (ms: number) => new Date(T0.getTime() + ms);
 const postgres = testTargets.find((target) => target.name === 'postgres');
 
 /**
- * Reset links racing: two uses of one token, a use and a revoke of one link, and a
- * use of a link against the same person accepting an invite into a second
- * organisation. Each case holds one transaction open after its work while the
+ * Reset links racing: two uses of one token, a use and a revoke of one link, a use
+ * of a link against the same person accepting an invite into a second
+ * organisation, and the making of a link against each of those and against another
+ * making of a link for the same person. Each case holds one transaction open after its work while the
  * other starts, and the call waits until the second is blocked on a lock
  * (`interleave`), so the two really overlap and the order is the one the test
  * names. They need two real sessions, so they run on PostgreSQL and are skipped on
@@ -50,10 +56,14 @@ const postgres = testTargets.find((target) => target.name === 'postgres');
  *
  * What they pin: a link is used once however many uses run at once; it ends used
  * or revoked, never both; and a link is never used for a person who already
- * belongs to two organisations. The reset row lock decides a use against a revoke
- * and against another use; the user row lock, `FOR UPDATE` and taken last (CLAUDE.md,
- * Data rules), decides a use against an accept that gives the person a second
- * membership: one finishes before the other starts, or the use is refused.
+ * belongs to two organisations, and a person never has two links that are neither
+ * used nor revoked. The reset row lock decides a use against a revoke and against
+ * another use; the user row lock, `FOR UPDATE` and taken last (CLAUDE.md, Data
+ * rules), decides a use against an accept that gives the person a second
+ * membership: one finishes before the other starts, or the use is refused. The same
+ * lock makes two links made for one person queue, and keeps a link from being made
+ * for a person who has just changed; a create never waits for a link row while it
+ * holds the person's row, which a use would turn into a deadlock.
  */
 describe.skipIf(postgres === undefined)(
   'admin reset links racing, on PostgreSQL',
@@ -129,6 +139,34 @@ describe.skipIf(postgres === undefined)(
     const membershipsOf = async (userId: string) =>
       (await db().select().from(orgMembership)).filter(
         (found) => found.userId === userId,
+      );
+    const linksOf = async (userId: string) =>
+      (await db().select().from(accessReset)).filter(
+        (found) => found.userId === userId,
+      );
+    const liveLinksOf = async (userId: string) =>
+      (await linksOf(userId)).filter(
+        (found) => found.usedAt === null && found.revokedAt === null,
+      );
+    const revokedEvents = async (linkId: string) =>
+      (await db().select().from(auditEvent)).filter(
+        (event) =>
+          event.category === AUTH_AUDIT.accessResetRevoked &&
+          event.targetId === linkId,
+      );
+    /** What `createAccessReset` returns. */
+    type Made = Awaited<ReturnType<typeof createAccessReset>>;
+    const madeBy = (outcome: PromiseSettledResult<unknown>) =>
+      (outcome as PromiseFulfilledResult<Made>).value;
+    /** A link made by the owner, `minutes` after the last one, in the caller's transaction. */
+    const create = (tx: Tx, userId: string, minutes: number) =>
+      createAccessReset(
+        tx,
+        { userId: scene.ownerId },
+        scene.organisationId,
+        userId,
+        {},
+        later(minutes),
       );
     const usedEvents = async (linkId: string) =>
       (await db().select().from(auditEvent)).filter(
@@ -365,6 +403,269 @@ describe.skipIf(postgres === undefined)(
       });
     });
 
+    describe('two links made for one person', () => {
+      it('makes both, and leaves the later one the only live link, when a create holds the person and another arrives', async () => {
+        const person = await makePerson();
+        const outcomes = await interleave(
+          db(),
+          (tx) => create(tx, person, 1),
+          (tx) => create(tx, person, 2),
+        );
+        // The second waited for the person's row and then replaced the first. Without
+        // the lock it would have run alongside, met the first on the unique index and failed.
+        expect(outcomes[0].status).toBe('fulfilled');
+        expect(outcomes[1], 'the second create').toMatchObject({
+          status: 'fulfilled',
+        });
+        const first = madeBy(outcomes[0]);
+        const second = madeBy(outcomes[1]);
+        expect((await liveLinksOf(person)).map((found) => found.id)).toEqual([
+          second.reset.id,
+        ]);
+        const earlier = await linkRow(first.reset.id);
+        expect(earlier.revokedAt).not.toBeNull();
+        expect(earlier.usedAt).toBeNull();
+        expect(await revokedEvents(first.reset.id)).toHaveLength(1);
+        expect(await revokedEvents(second.reset.id)).toHaveLength(0);
+      });
+
+      it('makes every link and leaves exactly one live, when many creates for one person start together', async () => {
+        const person = await makePerson();
+        const outcomes = await Promise.allSettled(
+          Array.from({ length: 6 }, () =>
+            db().transaction((tx) => create(tx, person, 3)),
+          ),
+        );
+        // None of them collided on the unique index or deadlocked: they queued.
+        expect(
+          outcomes.filter((outcome) => outcome.status === 'rejected'),
+        ).toEqual([]);
+        expect(succeeded(outcomes)).toBe(6);
+        expect(await liveLinksOf(person)).toHaveLength(1);
+        const links = await linksOf(person);
+        expect(links).toHaveLength(6);
+        // Each link but the last was revoked once, by the one made after it.
+        let revoked = 0;
+        for (const found of links) {
+          revoked += (await revokedEvents(found.id)).length;
+        }
+        expect(revoked).toBe(5);
+      });
+    });
+
+    describe('a create and a use of the person’s earlier link', () => {
+      it('leaves the earlier link used and makes the new one, when a use holds the link and a create arrives', async () => {
+        const person = await makePerson();
+        const first = await makeLink(person);
+        const outcomes = await interleave(
+          db(),
+          (tx) => useAccessReset(tx, first.token, later(1)),
+          (tx) => create(tx, person, 2),
+        );
+        expect(outcomes[0].status).toBe('fulfilled');
+        expect(outcomes[1], 'the create').toMatchObject({
+          status: 'fulfilled',
+        });
+        const earlier = await linkRow(first.reset.id);
+        expect(earlier.usedAt).not.toBeNull();
+        expect(earlier.revokedAt).toBeNull();
+        expect(await hasPassword(person)).toBe(false);
+        expect((await liveLinksOf(person)).map((found) => found.id)).toEqual([
+          madeBy(outcomes[1]).reset.id,
+        ]);
+      });
+
+      it('revokes the earlier link and refuses the use, when a create holds the link and a use arrives', async () => {
+        const person = await makePerson();
+        const first = await makeLink(person);
+        const outcomes = await interleave(
+          db(),
+          (tx) => create(tx, person, 1),
+          (tx) => useAccessReset(tx, first.token, later(2)),
+        );
+        expect(outcomes[0].status).toBe('fulfilled');
+        expect(outcomes[1]).toMatchObject({ status: 'rejected' });
+        expect((outcomes[1] as PromiseRejectedResult).reason).toMatchObject({
+          name: 'AccessResetInvalidError',
+          reason: 'revoked',
+        });
+        expect((await linkRow(first.reset.id)).revokedAt).not.toBeNull();
+        expect(await hasPassword(person)).toBe(true);
+        expect((await liveLinksOf(person)).map((found) => found.id)).toEqual([
+          madeBy(outcomes[0]).reset.id,
+        ]);
+      });
+
+      it('does not wait for a link a use holds while it holds the person: the index refuses the new link, nothing is written, and the use goes on', async () => {
+        // The case a wait would turn into a deadlock: the use holds the link and
+        // waits for the person's row, and the create, which holds that row, then
+        // meets the link. The create takes the person's row first, as `createAccessReset`
+        // does, and the test lets it go on only once the use is waiting for it.
+        const person = await makePerson();
+        const first = await makeLink(person);
+        let holding!: () => void;
+        const holdingPromise = new Promise<void>((resolve) => {
+          holding = resolve;
+        });
+        let useWaits!: () => void;
+        const useWaitsPromise = new Promise<void>((resolve) => {
+          useWaits = resolve;
+        });
+        const creating = db().transaction(async (tx) => {
+          await lockUser(tx, person, { strength: 'update' });
+          holding();
+          await useWaitsPromise;
+          return create(tx, person, 2);
+        });
+        await Promise.race([holdingPromise, creating]);
+        const using = db().transaction((tx) =>
+          useAccessReset(tx, first.token, later(2)),
+        );
+        using.catch(() => undefined);
+        for (let waited = 0; (await lockWaiters(db())) === 0; waited += 25) {
+          if (waited >= 10_000) {
+            throw new Error('The use never waited for the person’s row');
+          }
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        useWaits();
+        const outcomes = await Promise.allSettled([creating, using]);
+        // A wait for the link would have been a deadlock, which the database ends by
+        // failing one of the two with 40P01 after a second.
+        expect(outcomes[0]).toMatchObject({
+          status: 'rejected',
+          reason: {
+            name: 'RecordWriteError',
+            code: '23505',
+            constraint: 'access_reset_live_unique',
+          },
+        });
+        expect(outcomes[1].status).toBe('fulfilled');
+        expect((await linkRow(first.reset.id)).usedAt).not.toBeNull();
+        expect(await hasPassword(person)).toBe(false);
+        expect(await linksOf(person)).toHaveLength(1);
+      });
+    });
+
+    describe('a create and a revoke of the person’s earlier link', () => {
+      it('makes the new link once the revoke has ended, when a revoke holds the link and a create arrives', async () => {
+        const person = await makePerson();
+        const first = await makeLink(person);
+        const outcomes = await interleave(
+          db(),
+          (tx) =>
+            revokeAccessReset(
+              tx,
+              { userId: scene.adminId },
+              scene.organisationId,
+              person,
+              later(1),
+            ),
+          (tx) => create(tx, person, 2),
+        );
+        expect(outcomes[0].status).toBe('fulfilled');
+        expect(outcomes[1], 'the create').toMatchObject({
+          status: 'fulfilled',
+        });
+        // The create left the link to the revoke, and the index let the new link in
+        // when the revoke was done: the earlier link ended as revoked, not superseded.
+        const earlier = await linkRow(first.reset.id);
+        expect(earlier.revokedBy).toBe(scene.adminId);
+        const events = await revokedEvents(first.reset.id);
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({
+          details: { userId: person, reason: 'manual' },
+        });
+        expect((await liveLinksOf(person)).map((found) => found.id)).toEqual([
+          madeBy(outcomes[1]).reset.id,
+        ]);
+      });
+    });
+
+    describe('a create and a change to the person', () => {
+      const changes = {
+        disabled: (tx: Tx, userId: string) =>
+          tx
+            .update(user)
+            .set({ status: 'disabled' })
+            .where(eq(user.id, userId)),
+        deleted: (tx: Tx, userId: string) =>
+          tx
+            .update(user)
+            .set({ deletedAt: later(1), deletedBy: scene.ownerId })
+            .where(eq(user.id, userId)),
+      } as const;
+
+      it.each(['disabled', 'deleted'] as const)(
+        'judges the rules again under the person’s row, and makes no link, when a writer holds the person who was %s and a create arrives',
+        async (kind) => {
+          const person = await makePerson();
+          const outcomes = await interleave(
+            db(),
+            (tx) => changes[kind](tx, person),
+            (tx) => create(tx, person, 2),
+          );
+          expect(outcomes[0].status).toBe('fulfilled');
+          expect(outcomes[1]).toMatchObject({ status: 'rejected' });
+          expect((outcomes[1] as PromiseRejectedResult).reason).toBeInstanceOf(
+            UserNotActiveError,
+          );
+          expect(await linksOf(person)).toHaveLength(0);
+        },
+      );
+
+      it('refuses the link, having seen the second membership under the person’s row, when an accept holds the person and a create arrives', async () => {
+        const person = await makePerson();
+        const invited = await makeInvite();
+        const outcomes = await interleave(
+          db(),
+          (tx) =>
+            acceptInvite(
+              tx,
+              invited.token,
+              { kind: 'signed-in', userId: person },
+              later(1),
+            ),
+          (tx) => create(tx, person, 2),
+        );
+        expect(outcomes[0].status).toBe('fulfilled');
+        expect(outcomes[1]).toMatchObject({ status: 'rejected' });
+        expect((outcomes[1] as PromiseRejectedResult).reason).toBeInstanceOf(
+          UserInOtherOrganisationsError,
+        );
+        expect(await linksOf(person)).toHaveLength(0);
+        expect(await membershipsOf(person)).toHaveLength(2);
+      });
+
+      it('makes the link, which a use then refuses, when a create holds the person and an accept arrives', async () => {
+        const person = await makePerson();
+        const invited = await makeInvite();
+        const outcomes = await interleave(
+          db(),
+          (tx) => create(tx, person, 1),
+          (tx) =>
+            acceptInvite(
+              tx,
+              invited.token,
+              { kind: 'signed-in', userId: person },
+              later(2),
+            ),
+        );
+        expect(outcomes[0].status).toBe('fulfilled');
+        expect(outcomes[1].status).toBe('fulfilled');
+        expect(await membershipsOf(person)).toHaveLength(2);
+        // Made while the person belonged to one organisation: refused when used,
+        // since they belong to two now, and nothing of theirs is cleared.
+        await expect(
+          useAccessReset(db(), madeBy(outcomes[0]).token, later(3)),
+        ).rejects.toMatchObject({
+          name: 'AccessResetInvalidError',
+          reason: 'target-in-other-organisations',
+        });
+        expect(await hasPassword(person)).toBe(true);
+      });
+    });
+
     describe('the strength of the lock on the person’s row', () => {
       // A transaction that holds a key-share lock on the user row is what the
       // foreign key check of any insert that points at the user takes. A lock that
@@ -381,6 +682,18 @@ describe.skipIf(postgres === undefined)(
         expect(outcomes[0].status).toBe('fulfilled');
         expect(outcomes[1].status).toBe('fulfilled');
         expect((await linkRow(made.reset.id)).usedAt).not.toBeNull();
+      });
+
+      it('makes the making of a link wait for such a writer too, so that it is FOR UPDATE as well', async () => {
+        const person = await makePerson();
+        const outcomes = await interleave(db(), holdKeyShare(person), (tx) =>
+          create(tx, person, 1),
+        );
+        expect(outcomes[0].status).toBe('fulfilled');
+        expect(outcomes[1], 'the create').toMatchObject({
+          status: 'fulfilled',
+        });
+        expect(await liveLinksOf(person)).toHaveLength(1);
       });
 
       it('makes the accept of an invite wait for such a writer too', async () => {

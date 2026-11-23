@@ -76,18 +76,29 @@ import { generateToken, hashToken } from './tokens.js';
  *    still only an invitation. It is checked last, so that an account that is
  *    disabled, or a membership elsewhere, is the answer first.
  *
- * Lock order (CLAUDE.md, Data rules). Making and revoking a link take no change
- * counter and no user lock, only the rows of the links they replace, and no writer
- * that holds a counter ever waits for such a row. A use takes the link row first
- * (`FOR UPDATE`) and the person's user row last (`FOR UPDATE`, `lockUser` with
+ * Lock order (CLAUDE.md, Data rules). None of the three takes a change counter, and
+ * no writer that holds a counter ever waits for a link row. A use takes the link row
+ * first (`FOR UPDATE`) and the person's user row last (`FOR UPDATE`, `lockUser` with
  * `strength: 'update'`), and nothing in between: that row is also what an
  * `acceptInvite` for the same person takes last. Whichever of the two gets the user
  * row first, the other waits; the use then re-reads the person's memberships under
  * the lock, so it either finishes before a second membership exists or sees it and
  * is refused. `FOR UPDATE` also holds off every other insert that points at the
  * user, which a foreign key check blocks, so the exclusion does not rest on one
- * writer. The permission, tier and role checks read without a lock: the roles of
- * the people involved changing a moment later is not what they guard.
+ * writer. A revoke takes only the link rows.
+ *
+ * Making a link takes the person's user row `FOR UPDATE` too: what it decides
+ * depends on rows that point at the person (their memberships), and two links made
+ * for one person at the same moment queue on that row instead of colliding on the
+ * index. Holding it, a create reads the person's earlier links with `SKIP LOCKED` and
+ * never waits for one: a use holds its link row while it waits for the person's row,
+ * so a create that waited for that link would deadlock with it. A link a create
+ * skips is one a use or a revoke is working on at that moment. If that transaction
+ * has already changed it the index lets the new link through once it ends; if it has
+ * not, the index refuses the new link, nothing is written, and the caller is given a
+ * `RecordWriteError` (an unlikely race, and a retry works). The permission, tier and
+ * role checks read without a lock: the roles of the people involved changing a
+ * moment later is not what they guard.
  */
 
 /**
@@ -420,34 +431,19 @@ async function requireResetPermission(
 }
 
 /**
- * Locks the live links of one person in one organisation (`FOR UPDATE`, in id
- * order) and revokes them, audited one by one with `reason`. Returns how many it
- * revoked. Takes the rows it replaces and nothing else, so it cannot form a cycle
- * with a use, which takes the link row before the user row.
+ * Revokes the links `ids` of one person, which the caller holds locked, and audits
+ * each as revoked with `reason`. Takes no lock of its own.
  */
-async function revokeLiveLinks(
+async function revokeLinks(
   tx: Tx,
   actorId: string,
   organisationId: string,
   userId: string,
+  ids: readonly string[],
   reason: 'manual' | 'superseded',
   now: Date,
-): Promise<number> {
-  const live = await tx
-    .select({ id: accessReset.id })
-    .from(accessReset)
-    .where(
-      and(
-        eq(accessReset.organisationId, organisationId),
-        eq(accessReset.userId, userId),
-        isNull(accessReset.usedAt),
-        isNull(accessReset.revokedAt),
-        gt(accessReset.expiresAt, now),
-      ),
-    )
-    .orderBy(asc(accessReset.id))
-    .for('update');
-  for (const found of live) {
+): Promise<void> {
+  for (const id of ids) {
     await tx
       .update(accessReset)
       .set({
@@ -457,19 +453,60 @@ async function revokeLiveLinks(
         updatedBy: actorId,
         version: sql`${accessReset.version} + 1`,
       })
-      .where(eq(accessReset.id, found.id));
+      .where(eq(accessReset.id, id));
     await recordAuthAudit(tx, {
       category: AUTH_AUDIT.accessResetRevoked,
       action: 'revoke',
       actor: { type: 'user', id: actorId },
       targetType: 'access_reset',
-      targetId: found.id,
+      targetId: id,
       organisationId,
       details: { userId, reason },
       occurredAt: now,
     });
   }
-  return live.length;
+}
+
+/**
+ * Revokes every earlier link of one person in one organisation that was neither
+ * used nor revoked, expired ones included, audited as revoked with the reason
+ * `superseded`: the table keeps one such link per person (`access_reset_live_unique`)
+ * and `now()` cannot be in that index, so a link past its end still holds the place.
+ * The caller holds the person's user row. The links are read `FOR UPDATE SKIP
+ * LOCKED`, in id order, so this never waits for a link row: a use holds its link row
+ * while it waits for the person's row, so waiting here would be a deadlock (see the
+ * lock order in the header). A link another transaction holds is left to it, and the
+ * unique index decides what happens to the link made next.
+ */
+async function supersedeEarlierLinks(
+  tx: Tx,
+  actorId: string,
+  organisationId: string,
+  userId: string,
+  now: Date,
+): Promise<void> {
+  const earlier = await tx
+    .select({ id: accessReset.id })
+    .from(accessReset)
+    .where(
+      and(
+        eq(accessReset.organisationId, organisationId),
+        eq(accessReset.userId, userId),
+        isNull(accessReset.usedAt),
+        isNull(accessReset.revokedAt),
+      ),
+    )
+    .orderBy(asc(accessReset.id))
+    .for('update', { skipLocked: true });
+  await revokeLinks(
+    tx,
+    actorId,
+    organisationId,
+    userId,
+    earlier.map((found) => found.id),
+    'superseded',
+    now,
+  );
 }
 
 /**
@@ -483,13 +520,17 @@ async function revokeLiveLinks(
  * `expiresInHours` (1 to 72, 24 when left out) from `now`, and `removePasskeys` says
  * whether using it also revokes the person's passkeys.
  *
- * Any earlier live link for the same person in the organisation is revoked first,
- * audited as revoked with the reason `superseded`; links that were used, revoked or
- * have expired are left as they are. Audited as `auth.access-reset-created` with the
- * link id, the organisation, the person, the expiry and `removePasskeys`, and never
- * the token or an address. Takes no change counter and no user lock, so it cannot
- * deadlock with a use or an accept. Two links made for one person at the very same
- * moment can both stay live; each works until it is used or ends.
+ * Any earlier link for the same person in the organisation that was neither used nor
+ * revoked is revoked first, expired ones too, audited as revoked with the reason
+ * `superseded`: a person has one live link (`access_reset_live_unique`). Links that
+ * were used or revoked are left as they are. Audited as `auth.access-reset-created`
+ * with the link id, the organisation, the person, the expiry and `removePasskeys`,
+ * and never the token or an address. The rules are judged once without a lock, so a
+ * caller who may not make this link never takes the person's row, and again after
+ * the person's user row is taken `FOR UPDATE` (the lock order is in the header), which
+ * is the check that counts. No change counter is taken. Two links made for one
+ * person at the same moment queue on that row: both are made, and the later one is
+ * the live one.
  *
  * @throws AccessDeniedError, with no scope, without the permission, and for a
  * person who is not a member of the organisation or is not a user: the same answer
@@ -497,12 +538,17 @@ async function revokeLiveLinks(
  * @throws CannotResetSelfError, UserInOtherOrganisationsError,
  * OwnerResetNeedsOwnerError, ResetExceedsOwnAccessError (its `permissions` lists the
  * keys), UserNotActiveError and MembershipNotActiveError, for rules 2 to 7, in that
- * order. Nothing is written.
+ * order, also when the rule only stops holding while this waits for the person's
+ * row (the person was deleted, or lost the membership, a moment ago). Nothing is
+ * written.
  * @throws AuthInputError `expiresInHours` or `removePasskeys` for a value that is
  * not acceptable. It names the field and never the value.
  * @throws AuthStateError `installation-missing` before the installation row exists.
  * @throws RecordWriteError when the database refuses a write; it carries the
- * SQLSTATE and constraint name only, never the token, its hash or an address.
+ * SQLSTATE and constraint name only, never the token, its hash or an address. Rarely
+ * this is the unique index on live links: a use or a revoke held the earlier link at
+ * that moment and had not changed it yet, so it could not be superseded. Nothing is
+ * written, and making the link again works.
  */
 export async function createAccessReset(
   tx: Tx,
@@ -524,6 +570,26 @@ export async function createAccessReset(
       ) {
         throw new AccessDeniedError(MEMBERS_RESET_ACCESS_PERMISSION);
       }
+      // Without a lock first: a caller who may not make this link, or a person
+      // outside the organisation, is refused here and never takes anyone's row.
+      const early = await checkRules(
+        inner,
+        actor.userId,
+        organisationId,
+        userId,
+      );
+      if (early !== null) throw creationError(early);
+
+      // The person's row, `FOR UPDATE` (CLAUDE.md, Data rules): the rules depend on
+      // rows that point at the person, and only this strength holds off the insert of
+      // one. Two creates for the same person queue here.
+      try {
+        await lockUser(inner, userId, { strength: 'update' });
+      } catch (error) {
+        // Deleted since the first look: a person who is not in use.
+        if (error instanceof AuthStateError) throw new UserNotActiveError();
+        throw error;
+      }
       const failure = await checkRules(
         inner,
         actor.userId,
@@ -532,12 +598,11 @@ export async function createAccessReset(
       );
       if (failure !== null) throw creationError(failure);
 
-      await revokeLiveLinks(
+      await supersedeEarlierLinks(
         inner,
         actor.userId,
         organisationId,
         userId,
-        'superseded',
         now,
       );
 
@@ -610,15 +675,34 @@ export function revokeAccessReset(
       if (!UUID_SHAPE.test(userId)) {
         throw new RecordNotFoundError('access_reset', userId);
       }
-      const revoked = await revokeLiveLinks(
+      // The link that still works, locked. One at most, since the table keeps one
+      // link per person that is neither used nor revoked; an expired one is not
+      // "live" here, and making the next link is what revokes it.
+      const live = await inner
+        .select({ id: accessReset.id })
+        .from(accessReset)
+        .where(
+          and(
+            eq(accessReset.organisationId, organisationId),
+            eq(accessReset.userId, userId),
+            isNull(accessReset.usedAt),
+            isNull(accessReset.revokedAt),
+            gt(accessReset.expiresAt, now),
+          ),
+        )
+        .orderBy(asc(accessReset.id))
+        .for('update');
+      if (live.length === 0)
+        throw new RecordNotFoundError('access_reset', userId);
+      await revokeLinks(
         inner,
         actor.userId,
         organisationId,
         userId,
+        live.map((found) => found.id),
         'manual',
         now,
       );
-      if (revoked === 0) throw new RecordNotFoundError('access_reset', userId);
     }),
   );
 }

@@ -643,11 +643,10 @@ describe.each(testTargets)('admin reset links on $name', (target) => {
         });
       });
 
-      it('leaves other people’s links, used links, revoked links and expired links as they are', async () => {
+      it('leaves other people’s links, used links and revoked links as they are', async () => {
         const person = await makeTarget();
         const bystander = await makeTarget();
         const theirs = await link(scene.ownerId, bystander);
-        const old = await link(scene.ownerId, person, { expiresInHours: 1 });
         // A used link and a revoked link of the person, made directly.
         const [used] = await db()
           .insert(accessReset)
@@ -676,22 +675,64 @@ describe.each(testTargets)('admin reset links on $name', (target) => {
             revokedBy: scene.ownerId,
           })
           .returning();
-        // The first link has expired by the time the new one is made.
-        const later = at(10 * HOUR);
         const events = (await audits(AUTH_AUDIT.accessResetRevoked)).length;
-        const fresh = await link(scene.adminId, person, {}, later);
+        const fresh = await link(scene.adminId, person, {}, at(10 * HOUR));
         expect((await row(theirs.reset.id)).revokedAt).toBeNull();
         expect((await row(used!.id)).usedAt).not.toBeNull();
         expect((await row(used!.id)).revokedAt).toBeNull();
         expect((await row(gone!.id)).revokedBy).toBe(scene.ownerId);
-        // The expired link is not live, so it is not revoked (and not "superseded").
-        expect((await row(old.reset.id)).revokedAt).toBeNull();
-        expect(
-          (await liveRowsOfUser(person)).map((found) => found.id),
-        ).toContain(fresh.reset.id);
+        expect((await liveRowsOfUser(person)).map((found) => found.id)).toEqual(
+          [fresh.reset.id],
+        );
+        // Nothing earlier was live, so nothing was superseded.
         expect((await audits(AUTH_AUDIT.accessResetRevoked)).length).toBe(
           events,
         );
+      });
+
+      it('revokes an earlier link that has expired too, since it is still neither used nor revoked, audited as superseded', async () => {
+        const person = await makeTarget();
+        const expired = await link(scene.ownerId, person, {
+          expiresInHours: 1,
+        });
+        const later = at(10 * HOUR);
+        // Past its end the link does not work, but the table still counts it as the
+        // person's live link until something revokes it: making the next one does.
+        await expect(
+          inspectAccessReset(db(), expired.token, later),
+        ).rejects.toMatchObject({ reason: 'expired' });
+        const before = (await audits(AUTH_AUDIT.accessResetRevoked)).length;
+        const fresh = await link(scene.adminId, person, {}, later);
+        const earlier = await row(expired.reset.id);
+        expect(earlier.revokedAt).toEqual(later);
+        expect(earlier.revokedBy).toBe(scene.adminId);
+        expect(earlier.usedAt).toBeNull();
+        expect((await liveRowsOfUser(person)).map((found) => found.id)).toEqual(
+          [fresh.reset.id],
+        );
+        const revoked = (await audits(AUTH_AUDIT.accessResetRevoked)).slice(
+          before,
+        );
+        expect(revoked).toHaveLength(1);
+        expect(revoked[0]).toMatchObject({
+          action: 'revoke',
+          targetId: expired.reset.id,
+          details: { userId: person, reason: 'superseded' },
+        });
+      });
+
+      it('never leaves a person with two links that are neither used nor revoked, however many are made', async () => {
+        const person = await makeTarget();
+        const made = [];
+        for (let round = 0; round < 4; round += 1) {
+          made.push(await link(scene.ownerId, person));
+          expect(await liveRowsOfUser(person)).toHaveLength(1);
+        }
+        expect((await liveRowsOfUser(person)).map((found) => found.id)).toEqual(
+          [made[3]!.reset.id],
+        );
+        // The three earlier ones were revoked, none deleted.
+        expect(await rowsOfUser(person)).toHaveLength(4);
       });
     });
 

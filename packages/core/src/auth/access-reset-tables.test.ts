@@ -1,5 +1,5 @@
 import { eq, sql } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
   grantOnOrganisation,
   ORIGIN,
@@ -79,6 +79,12 @@ describe.each(testTargets)('access_reset table on $name', (target) => {
   });
 
   const db = () => database.db;
+
+  // Only one row per member may be live, so a test that leaves one behind would
+  // stop the next from making its own. A fixture may delete what it inserted.
+  afterEach(async () => {
+    await db().delete(accessReset);
+  });
 
   const resetValues = (
     overrides: Partial<typeof accessReset.$inferInsert> = {},
@@ -251,10 +257,14 @@ describe.each(testTargets)('access_reset table on $name', (target) => {
 
   it('has one row for a token hash, whatever the organisation', async () => {
     const tokenHash = `duplicate-${next()}`;
-    await made({ tokenHash });
+    // Used, so the row is not also the one live row, which would make the
+    // database free to report either key first.
+    await made({ tokenHash, usedAt: at(HOUR) });
     expect(
       await failureOf(() =>
-        db().insert(accessReset).values(resetValues({ tokenHash })),
+        db()
+          .insert(accessReset)
+          .values(resetValues({ tokenHash, usedAt: at(2 * HOUR) })),
       ),
     ).toEqual(unique('access_reset_token_hash_unique'));
   });
@@ -272,12 +282,73 @@ describe.each(testTargets)('access_reset table on $name', (target) => {
     ]);
   });
 
-  it('may hold several rows for one member: the service, not the table, keeps one live', async () => {
-    await made();
-    await made();
-    const rows = (await db().select().from(accessReset)).filter(
-      (row) => row.userId === memberId && row.usedAt === null,
-    );
-    expect(rows.length).toBeGreaterThanOrEqual(2);
+  describe('one live link per member per organisation', () => {
+    it('is a partial unique index on organisation and member, for rows neither used nor revoked', async () => {
+      const [index] = await rowsOf(
+        database,
+        sql`select indexdef from pg_indexes
+            where tablename = 'access_reset' and indexname = 'access_reset_live_unique'`,
+      );
+      expect(index?.indexdef).toContain('UNIQUE');
+      expect(index?.indexdef).toContain('(organisation_id, user_id)');
+      expect(index?.indexdef).toContain('used_at IS NULL');
+      expect(index?.indexdef).toContain('revoked_at IS NULL');
+    });
+
+    it('refuses a second row that is neither used nor revoked, whatever its expiry', async () => {
+      await made();
+      for (const expiresAt of [at(HOUR), at(72 * HOUR)]) {
+        expect(
+          await failureOf(() =>
+            db().insert(accessReset).values(resetValues({ expiresAt })),
+          ),
+        ).toEqual(unique('access_reset_live_unique'));
+      }
+    });
+
+    it('frees the place when the live row is used or revoked, and allows any number of those', async () => {
+      const first = await made();
+      await db()
+        .update(accessReset)
+        .set({ usedAt: at(HOUR) })
+        .where(eq(accessReset.id, first.id));
+      const second = await made();
+      await db()
+        .update(accessReset)
+        .set({ revokedAt: at(2 * HOUR), revokedBy: adminId })
+        .where(eq(accessReset.id, second.id));
+      await made({ usedAt: at(HOUR) });
+      await made({ usedAt: at(2 * HOUR) });
+      await made({ revokedAt: at(HOUR), revokedBy: adminId });
+      await made({ revokedAt: at(2 * HOUR), revokedBy: adminId });
+      const live = await made();
+      expect(live.usedAt).toBeNull();
+      expect(
+        (await db().select().from(accessReset)).filter(
+          (row) => row.usedAt === null && row.revokedAt === null,
+        ),
+      ).toHaveLength(1);
+    });
+
+    it('is per member: another member of the organisation has a live row of their own', async () => {
+      const colleagueId = await seedActiveUser(database);
+      await grantOnOrganisation(
+        database,
+        organisationA,
+        colleagueId,
+        'member',
+        [],
+      );
+      await made();
+      await made({ userId: colleagueId });
+      // The same member is still refused a second.
+      expect(
+        await failureOf(() =>
+          db()
+            .insert(accessReset)
+            .values(resetValues({ userId: colleagueId })),
+        ),
+      ).toEqual(unique('access_reset_live_unique'));
+    });
   });
 });
