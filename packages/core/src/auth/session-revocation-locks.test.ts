@@ -8,7 +8,7 @@ import {
   testTargets,
 } from '../db/test-support.js';
 import type { Tx } from '../db/write.js';
-import { createApiToken } from './api-tokens.js';
+import { createApiToken, setApiTokenSwitches } from './api-tokens.js';
 import { AuthStateError } from './errors.js';
 import { revokePasskey } from './passkeys.js';
 import { setPassword } from './password-service.js';
@@ -98,6 +98,15 @@ describe.skipIf(postgres === undefined)(
         scene.organisationId,
         'session-lock-tokens',
         [['api:tokens', 'own-scope']],
+      );
+      // A new organisation has personal tokens off, and a token made in these cases
+      // has to be made, so the owner turns them on, as an administrator would.
+      await setApiTokenSwitches(
+        database.db,
+        { userId: scene.ownerId },
+        scene.organisationId,
+        { personalTokens: true, sensitive: false },
+        next(),
       );
     });
     afterAll(async () => {
