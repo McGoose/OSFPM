@@ -412,7 +412,7 @@ export async function effectivePreferences(
         ),
       )
       .limit(1);
-    if (account !== undefined) chosen = account.payload;
+    if (account !== undefined && chosen === null) chosen = account.payload;
   }
   return withDefaults(storedPreferences(chosen));
 }
