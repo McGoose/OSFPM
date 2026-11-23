@@ -1,4 +1,5 @@
 import { accessReset } from './access-reset.js';
+import { apiToken } from './api-token.js';
 import { invite, inviteRole } from './invite.js';
 import { loginChallenge } from './login-challenge.js';
 import { passkeyCredential } from './passkey-credential.js';
@@ -16,13 +17,15 @@ import { totpCredential } from './totp-credential.js';
  * (CLAUDE.md, Data rules). Each is defined with `securityTable`, and a schema
  * test requires this list to match the tables that were.
  *
- * `invite` and `access_reset` are the two that carry `organisation_id`, by
- * declaration (`organisationScoped`, see `securityTable`): an invite's role links,
- * and the membership a reset link's person must hold, must stay inside one
- * organisation. The write helper refuses them all the same.
+ * `invite`, `access_reset` and `api_token` are the three that carry
+ * `organisation_id`, by declaration (`organisationScoped`, see `securityTable`): an
+ * invite's role links, the membership a reset link's person must hold, and the
+ * membership and project of a personal API token must stay inside one organisation.
+ * The write helper refuses them all the same.
  */
 export const SECURITY_TABLES = [
   accessReset,
+  apiToken,
   invite,
   loginChallenge,
   passkeyCredential,

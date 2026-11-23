@@ -1,4 +1,5 @@
 import { ACCOUNT_PERMISSIONS } from '../accounts/permissions.js';
+import { API_PERMISSIONS } from '../auth/api-token-permissions.js';
 import { CONTRACT_PERMISSIONS } from '../contracts/permissions.js';
 import { COST_PERMISSIONS } from '../costs/permissions.js';
 import { LEGAL_HOLD_PERMISSIONS } from '../legal-hold/permissions.js';
@@ -18,6 +19,7 @@ import type { PermissionDefinition } from './permission-sync.js';
  */
 export const PERMISSION_LISTS: readonly (readonly PermissionDefinition[])[] = [
   ACCOUNT_PERMISSIONS,
+  API_PERMISSIONS,
   CONTRACT_PERMISSIONS,
   COST_PERMISSIONS,
   LEGAL_HOLD_PERMISSIONS,

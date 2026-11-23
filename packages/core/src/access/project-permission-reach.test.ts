@@ -42,6 +42,7 @@ describe.each(testTargets)(
           module: 'costs',
           description: 'Read cost lines',
           grantsSensitive: true,
+          access: 'read',
         },
       ]);
     });

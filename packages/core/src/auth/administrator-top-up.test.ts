@@ -45,12 +45,14 @@ const LATER: readonly PermissionDefinition[] = [
     key: 'later:read',
     module: 'later',
     description: 'Read what a later release adds',
+    access: 'read',
   },
   {
     key: 'later:read:secret',
     module: 'later',
     description: 'Read the sensitive data a later release adds',
     grantsSensitive: true,
+    access: 'read',
   },
 ];
 

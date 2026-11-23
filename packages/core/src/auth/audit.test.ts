@@ -1,7 +1,10 @@
 import { eq, like, or, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PERMISSION_LISTS } from '../access/permission-lists.js';
-import { syncPermissions } from '../access/permission-sync.js';
+import {
+  syncPermissions,
+  type PermissionDefinition,
+} from '../access/permission-sync.js';
 import { tenantTableNames } from '../db/columns.js';
 import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
@@ -83,11 +86,12 @@ const MINUTE = 60 * 1000;
 const at = (ms: number) => new Date(T0.getTime() + ms);
 
 /** A permission a later release adds, which the Administrator role is then topped up with. */
-const LATER_PERMISSIONS = [
+const LATER_PERMISSIONS: readonly PermissionDefinition[] = [
   {
     key: 'later:read',
     module: 'later',
     description: 'Read what a later release adds',
+    access: 'read',
   },
 ];
 const LATER_LISTS = [...PERMISSION_LISTS, LATER_PERMISSIONS];

@@ -3,9 +3,22 @@ import type { Tx } from '../db/write.js';
 import { permission, role, rolePermission } from '../db/schema/index.js';
 
 /**
+ * What a permission lets its holder do: `read` only looks at data, `write` also
+ * creates, changes, deletes or hands out access. A personal API token that can only
+ * read passes `read` permissions and no other (maintainer decision of 23 Nov, task
+ * P-03b5; SC-10, D-68), so a permission that both shows and changes something is
+ * `write`. The class lives in code only: it is not a column of the `permission`
+ * catalogue, `syncPermissions` does not store it, and no response serves it.
+ */
+export const PERMISSION_ACCESS = ['read', 'write'] as const;
+/** One value of `PERMISSION_ACCESS`. */
+export type PermissionAccess = (typeof PERMISSION_ACCESS)[number];
+
+/**
  * One permission a module declares, as a row of the `permission` catalogue.
  * Set `grantsSensitive` for any permission that exposes sensitive data
- * (CLAUDE.md, Privacy rule).
+ * (CLAUDE.md, Privacy rule). `access` is required, so a permission cannot be added
+ * without being classed (see `PERMISSION_ACCESS`).
  */
 export type PermissionDefinition = {
   /** `module:action`, for example `sensitive:read:dietary`. */
@@ -14,6 +27,20 @@ export type PermissionDefinition = {
   readonly description: string;
   /** Defaults to false. */
   readonly grantsSensitive?: boolean;
+  /**
+   * Whether the permission only reads or can also change things. Not stored: see
+   * `PERMISSION_ACCESS`. A permission that does both is `write`, so a read-only API
+   * token cannot hold it (fail closed).
+   */
+  readonly access: PermissionAccess;
+  /**
+   * Why `access` is what it is, when the key says otherwise: a mixed permission is
+   * `write` although its name says read. Required for a key that ends in `:read`
+   * and is `write` (`permission-lists.test.ts` fails without it), so a new read
+   * permission is not misclassed by accident. A comment in code, never stored or
+   * served.
+   */
+  readonly accessReason?: string;
 };
 
 /**

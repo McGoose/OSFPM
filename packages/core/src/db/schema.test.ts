@@ -550,6 +550,7 @@ describe.each(testTargets)('database schema on $name', (target) => {
           'access_reset',
           'account',
           'account_chart',
+          'api_token',
           'audit_event',
           'block',
           'change_event',

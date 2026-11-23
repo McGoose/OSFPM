@@ -239,6 +239,13 @@
       "when": 1795400891393,
       "tag": "0033_admin_reset_links",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1795404381858,
+      "tag": "0034_personal_api_tokens",
+      "breakpoints": true
     }
   ]
 }
