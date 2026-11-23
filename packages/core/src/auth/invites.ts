@@ -778,7 +778,10 @@ async function runAccept(
   let joined: SessionUser;
   let newUser = false;
   if (who.kind === 'signed-in') {
-    const locks = await lockUser(tx, who.userId, { strength: 'update' });
+    const locks =
+      found.id === ''
+        ? await lockUser(tx, who.userId, { strength: 'update' })
+        : { status: 'active' as const };
     // A user who is not active has no business joining anything; a disabled one
     // cannot have a session at all.
     if (locks.status !== 'active') throw new AuthStateError('user-disabled');
