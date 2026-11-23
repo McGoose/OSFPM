@@ -58,6 +58,10 @@ Use the fictional demo production _The Last Withdrawal_, or invented data.
 
 OSFPM is licensed under AGPL-3.0-only. By contributing, you agree that your contribution is licensed under AGPL-3.0-only, in addition to the terms of the CLA.
 
+## Accessibility
+
+OSFPM is built for disabled, Deaf, neurodivergent and chronically ill cast and crew too. Before you change anything a person reads or receives, read [ACCESSIBILITY.md](ACCESSIBILITY.md): it lists what to check and what we aim for. Never log, export or email access or medical information.
+
 ## Security issues
 
 Never report a security issue in a public issue, discussion or pull request. Follow [SECURITY.md](SECURITY.md) instead.

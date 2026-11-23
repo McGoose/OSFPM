@@ -113,6 +113,10 @@ The server applies pending migrations when it starts; set `OSFPM_AUTO_MIGRATE=fa
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) first. Every contributor signs the Contributor Licence Agreement ([CLA.md](CLA.md)) once, on their first pull request. Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
+## Accessibility
+
+OSFPM is built for everyone who works on a production, including disabled, Deaf, neurodivergent and chronically ill cast and crew. [ACCESSIBILITY.md](ACCESSIBILITY.md) says what we aim for, where the project stands today, how a person's access needs are kept and shared, and how to report a barrier.
+
 ## Security
 
 Never report a security issue in a public issue or pull request. See [SECURITY.md](SECURITY.md).
