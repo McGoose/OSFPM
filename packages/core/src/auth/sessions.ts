@@ -661,7 +661,7 @@ export function disableUser(
   return guardedAuth('user', 'update', () =>
     tx.transaction(async (inner) => {
       // FOR UPDATE: this ends every session of the user (see `setPassword`).
-      const found = await lockUser(inner, userId, { strength: 'update' });
+      const found = await lockUser(inner, userId);
       if (found.status === 'disabled') return false;
       await inner
         .update(user)
