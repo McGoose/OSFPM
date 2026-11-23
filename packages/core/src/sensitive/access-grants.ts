@@ -478,7 +478,7 @@ async function writeGrant(
         const found = driverErrorOf(error);
         if (
           found?.code === '23505' &&
-          found.constraint === ACCESS_GRANT_LIVE_INDEX
+          found.constraint !== ACCESS_GRANT_LIVE_INDEX
         ) {
           throw new AccessGrantBusyError();
         }
