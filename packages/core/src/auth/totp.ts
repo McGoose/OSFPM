@@ -367,7 +367,8 @@ export function removeTotp(
   const { userId, now } = input;
   return guardedAuth('totp_credential', 'delete', () =>
     tx.transaction(async (inner): Promise<RemoveTotpResult> => {
-      const locked = await lockUser(inner, userId);
+      // FOR UPDATE: this ends the user's other sessions (see `setPassword`).
+      const locked = await lockUser(inner, userId, { strength: 'update' });
       if (locked.status === 'disabled') {
         throw new AuthStateError('user-disabled');
       }

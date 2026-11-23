@@ -207,7 +207,8 @@ export async function verifyRecoveryLogin(
     tx.transaction(async (inner) => {
       let locked: { status: string };
       try {
-        locked = await lockUser(inner, found.id);
+        // FOR UPDATE: a right code ends every session of the user (see `setPassword`).
+        locked = await lockUser(inner, found.id, { strength: 'update' });
       } catch (error) {
         // Deleted since it was found: as if the address were not known.
         if (error instanceof AuthStateError) {

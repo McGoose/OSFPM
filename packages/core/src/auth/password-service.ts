@@ -321,7 +321,10 @@ export function setPassword(
   return guardedAuth('password_credential', 'update', () =>
     // A savepoint: a failure leaves the old password, the sessions and no event.
     tx.transaction(async (inner): Promise<SetPasswordResult> => {
-      const locked = await lockUser(inner, userId);
+      // FOR UPDATE, not the default: this ends the user's other sessions, and a token
+      // being made holds this row FOR KEY SHARE and reads its session after, so only
+      // FOR UPDATE queues the make behind us and lets it see the sessions ended.
+      const locked = await lockUser(inner, userId, { strength: 'update' });
       if (locked.status === 'disabled') {
         throw new AuthStateError('user-disabled');
       }
