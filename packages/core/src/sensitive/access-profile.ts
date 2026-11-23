@@ -1,10 +1,5 @@
-import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
-import {
-  accessGrant,
-  person,
-  user,
-  userAccessProfile,
-} from '../db/schema/index.js';
+import { and, eq, isNull, sql } from 'drizzle-orm';
+import { user, userAccessProfile } from '../db/schema/index.js';
 import { recordAudit, RecordNotFoundError, type Tx } from '../db/write.js';
 import { ACCESS_AUDIT, auditActor, tokenMark } from './audit.js';
 import {
@@ -12,6 +7,7 @@ import {
   SensitiveAccessDeniedError,
   type SensitiveOperation,
 } from './errors.js';
+import { revokeAccountGrants } from './grant-revocation.js';
 import { driverErrorOf, guardedSensitive, isUuid } from './guard.js';
 import { parsePayload, samePayload } from './payload.js';
 import type { SensitivePayload } from './schemas.js';
@@ -312,10 +308,9 @@ export async function updateAccessProfile(
  * of every organisation, and answers how many it ended. A grant only chooses who sees
  * which fields of the profile, so one that outlived the profile would open the next
  * profile the person makes, which they never agreed to (decision D-69). Medical grants
- * are not touched: they open the organisation's record, not the profile. It sets the
- * columns `revokeAccessGrant` sets, in one statement, and writes no event of its own: the
- * caller writes one for the lot. It reads and checks no permission, and runs in the
- * caller's transaction.
+ * are not touched: they open the organisation's record, not the profile. It writes no
+ * event of its own: the caller writes one for the lot. It reads and checks no permission,
+ * and runs in the caller's transaction (`revokeAccountGrants` does the work).
  */
 async function revokeAccessibilityGrants(
   tx: Tx,
@@ -323,30 +318,36 @@ async function revokeAccessibilityGrants(
   userId: string,
   now: Date,
 ): Promise<number> {
-  const ended = await tx
-    .update(accessGrant)
-    .set({
-      revokedAt: now,
-      revokedBy: ctx.userId,
-      version: sql`${accessGrant.version} + 1`,
-      updatedAt: now,
-      updatedBy: ctx.userId,
-    })
-    .where(
-      and(
-        eq(accessGrant.category, 'accessibility'),
-        isNull(accessGrant.revokedAt),
-        inArray(
-          accessGrant.personId,
-          tx
-            .select({ id: person.id })
-            .from(person)
-            .where(eq(person.userId, userId)),
-        ),
-      ),
-    )
-    .returning({ id: accessGrant.id });
-  return ended.length;
+  const ended = await revokeAccountGrants(
+    tx,
+    userId,
+    ['accessibility'],
+    ctx.userId,
+    now,
+  );
+  return ended.accessibility;
+}
+
+/**
+ * Deletes the access profile of an account, for good, and answers whether there was one.
+ * It takes the profile row `FOR UPDATE` first, so a share with the usual roles that has
+ * read the profile (and holds it `FOR SHARE` until it commits) finishes before the row goes
+ * and a share that comes later finds none. It does not look at the account's state, so it
+ * works on an account already marked deleted, which `loadProfile` does not. It checks no
+ * permission and writes no event: the callers, the owner's `deleteAccessProfile` and the
+ * door's `endAccountAccessSharing`, have decided who may and write the event, and they end
+ * the grants that opened the profile in the same transaction.
+ */
+export async function deleteProfileRow(
+  tx: Tx,
+  userId: string,
+): Promise<boolean> {
+  const existing = await lockProfileRow(tx, userId);
+  if (existing === undefined) return false;
+  await tx
+    .delete(userAccessProfile)
+    .where(eq(userAccessProfile.id, existing.id));
+  return true;
 }
 
 /**
@@ -373,13 +374,9 @@ export async function deleteAccessProfile(
   const now = ctx.clock();
   await guardedSensitive('user_access_profile', 'delete', () =>
     tx.transaction(async (inner) => {
-      const existing = await lockProfileRow(inner, userId);
-      if (existing === undefined) {
+      if (!(await deleteProfileRow(inner, userId))) {
         throw new RecordNotFoundError('user_access_profile', userId);
       }
-      await inner
-        .delete(userAccessProfile)
-        .where(eq(userAccessProfile.id, existing.id));
       const revokedGrants = await revokeAccessibilityGrants(
         inner,
         ctx,

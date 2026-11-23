@@ -11,6 +11,7 @@ export const ACCESS_AUDIT = {
   profileCreated: 'access.profile-created',
   profileUpdated: 'access.profile-updated',
   profileDeleted: 'access.profile-deleted',
+  accountSharingEnded: 'access.account-sharing-ended',
   grantCreated: 'access.grant-created',
   grantRevoked: 'access.grant-revoked',
   shortcutUsed: 'access.shortcut-used',
