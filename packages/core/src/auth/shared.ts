@@ -173,7 +173,11 @@ export async function serverId(
  * wait, because the foreign key check takes a key-share lock on the user row. A
  * writer whose check must not be overtaken by a new reference to the user takes it:
  * the use of an admin reset link, and the accept of an invite that gives the user a
- * membership, which exclude each other this way. `key-share` is the weakest: it
+ * membership, which exclude each other this way. So does every service that ends a
+ * user's sessions in bulk (a password change, removing the authenticator app, a
+ * recovery-code sign-in, disabling the user, revoking a passkey), so that a token being
+ * made, which holds the row `key-share` and reads its session afterwards, waits for it
+ * and finds the session ended. `key-share` is the weakest: it
  * conflicts only with `update`, so it queues behind a writer that holds the row
  * `FOR UPDATE` and nothing else, and any number of writers hold it at once. A writer
  * that only has to be ordered after the use of a reset link takes it, as the services

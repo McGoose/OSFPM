@@ -1,4 +1,4 @@
-import { sql } from 'drizzle-orm';
+import { getTableName, sql } from 'drizzle-orm';
 import type { BuildExtraConfigColumns } from 'drizzle-orm';
 import {
   check,
@@ -10,6 +10,7 @@ import {
   uuid,
   type AnyPgColumn,
   type PgColumnBuilderBase,
+  type PgTable,
   type PgTableExtraConfigValue,
 } from 'drizzle-orm/pg-core';
 import { newId } from './ids.js';
@@ -261,6 +262,126 @@ export function isSecurityTableName(name: string): boolean {
   return securityTableRegistry.has(name) || securityChildRegistry.has(name);
 }
 
+/**
+ * The folder of `packages/core/src/` that writes every security table and every
+ * service-written table unless the table declares another: the auth service
+ * (CLAUDE.md, Data rules).
+ */
+export const DEFAULT_TABLE_WRITER = 'auth';
+
+/**
+ * What a table declares about who writes it: the folder of `packages/core/src/`
+ * that is the only code allowed to write it. A folder other than the default also
+ * says why, in one line.
+ */
+export type WrittenBy = {
+  /** The folder, such as `auth` or `sensitive`. */
+  readonly service: string;
+  /** One line saying why the writer is not the default. Needed when it is not, and ignored when it is. */
+  readonly reason?: string;
+};
+
+/** The writer of one table, as `tableWriters` records it. */
+export type TableWriter = {
+  /** A security table, or an install-level table that only a named service writes. */
+  readonly kind: 'security' | 'service-written';
+  /** The folder of `packages/core/src/` that is the only code allowed to write the table. */
+  readonly service: string;
+  /** Why the writer is not the default, in one line; `null` when it is the default. */
+  readonly reason: string | null;
+};
+
+const tableWriterRegistry = new Map<string, TableWriter>();
+
+/**
+ * Who writes each security table and each service-written table, by table name: the
+ * one record, filled in where the tables are declared (`securityTable` and
+ * `declareServiceWrittenTable`). A table not listed here is a tenant table, written
+ * through the write helper, or a table with no named writer. `write-helper-scan.test.ts`
+ * reads it, and fails when a listed table is written from any other folder, and when a
+ * declared folder does not exist, so the record cannot drift from the code.
+ */
+export function tableWriters(): ReadonlyMap<string, TableWriter> {
+  return tableWriterRegistry;
+}
+
+/**
+ * The names of the service-written tables: install-level tables, apart from the
+ * security tables, that only one named core service writes (`SERVICE_WRITTEN_TABLES`).
+ */
+export function serviceWrittenTableNames(): ReadonlySet<string> {
+  return new Set(
+    [...tableWriterRegistry]
+      .filter(([, writer]) => writer.kind === 'service-written')
+      .map(([name]) => name),
+  );
+}
+
+/** A folder name of `packages/core/src/`: lower-case letters, digits and hyphens, starting with a letter. */
+const FOLDER_NAME = /^[a-z][a-z0-9-]*$/;
+
+/** Checks what a table declared about its writer and turns it into a record. */
+function resolveWriter(
+  kind: TableWriter['kind'],
+  name: string,
+  writtenBy: WrittenBy | undefined,
+): TableWriter {
+  const service = writtenBy?.service ?? DEFAULT_TABLE_WRITER;
+  if (!FOLDER_NAME.test(service)) {
+    throw new Error(`${name} declares a writer that is not a folder name`);
+  }
+  if (service === DEFAULT_TABLE_WRITER) return { kind, service, reason: null };
+  const reason = (writtenBy?.reason ?? '').trim();
+  if (reason === '') {
+    throw new Error(
+      `${name} declares ${service} as its writer without a reason`,
+    );
+  }
+  if (reason.includes('\n') || reason.includes('\r')) {
+    throw new Error(
+      `${name} gives the reason for its writer in more than one line`,
+    );
+  }
+  return { kind, service, reason };
+}
+
+/** Records a writer, and refuses a table that is already recorded with a different one. */
+function recordWriter(name: string, writer: TableWriter): void {
+  const known = tableWriterRegistry.get(name);
+  if (
+    known !== undefined &&
+    (known.kind !== writer.kind ||
+      known.service !== writer.service ||
+      known.reason !== writer.reason)
+  ) {
+    throw new Error(`${name} already has a different writer declared`);
+  }
+  tableWriterRegistry.set(name, writer);
+}
+
+/**
+ * Declares an install-level table, apart from the security tables, that only one named
+ * core service writes: never the write helper, and audited instead of change-logged
+ * (CLAUDE.md, Data rules). Records the table's writer in `tableWriters`, which is the
+ * auth service unless `writtenBy` names another folder and says why in one line, and
+ * returns the table, so `SERVICE_WRITTEN_TABLES` is a list of declarations.
+ *
+ * @throws Error when the writer is not a folder name, when a writer other than the
+ * default has no reason or one of more than one line, and when the table is a tenant
+ * table or already has a different writer.
+ */
+export function declareServiceWrittenTable<T extends PgTable>(
+  table: T,
+  writtenBy: WrittenBy,
+): T {
+  const name = getTableName(table);
+  if (tenantTableRegistry.has(name)) {
+    throw new Error(`${name} is a tenant table, so the write helper writes it`);
+  }
+  recordWriter(name, resolveWriter('service-written', name, writtenBy));
+  return table;
+}
+
 /** Throws unless `columns` has an `organisationId` column and `reason` says something. */
 function checkDeclaration(
   what: string,
@@ -288,9 +409,12 @@ function checkDeclaration(
  * table.
  *
  * A security table has no `organisation_id`, so the write helper cannot write
- * it. Only the auth service writes it, directly, and records each
- * security-relevant change as an `audit_event` instead of a `change_event`
- * (CLAUDE.md, Data rules). Add every new one to `SECURITY_TABLES`.
+ * it. Only one service writes it, directly, and records each security-relevant
+ * change as an `audit_event` instead of a `change_event` (CLAUDE.md, Data rules).
+ * That is the auth service unless the table declares another with
+ * `options.writtenBy`, which names the folder of `packages/core/src/` and says why
+ * in one line; either way the writer is recorded in `tableWriters`, which
+ * `write-helper-scan.test.ts` reads. Add every new one to `SECURITY_TABLES`.
  *
  * The one exception is declared with `options.organisationScoped`: a table whose
  * rows belong to one organisation, and which other tables point at through a
@@ -299,11 +423,13 @@ function checkDeclaration(
  * `organisationId`, and this adds the foreign key to the organisation, named
  * `<table>_organisation_fk` like every other table's, and records the table and the
  * `reason` (see `organisationScopedSecurityTables`). It gets no `owner_org_id` and
- * no `visibility`, and it is still only the auth service that writes it: the write
- * helper refuses it though it has an `organisation_id`.
+ * no `visibility`, and the write helper refuses it though it has an
+ * `organisation_id`.
  *
  * @throws Error when `organisationScoped` is given and the columns have no
- * `organisationId`, or the reason is empty.
+ * `organisationId`, or the reason is empty, and when `writtenBy` names a folder that
+ * is not a folder name, or one other than the default with no reason or one of more
+ * than one line.
  */
 export function securityTable<
   TName extends string,
@@ -319,12 +445,16 @@ export function securityTable<
       readonly organisationId: OrganisationIdRef;
       readonly reason: string;
     };
+    readonly writtenBy?: WrittenBy;
   } = {},
 ) {
   const scoped = options.organisationScoped;
   if (scoped !== undefined) {
     checkDeclaration('organisationScoped', name, columns, scoped.reason);
   }
+  // Checked before anything is recorded, so a refused declaration leaves no trace.
+  const writer = resolveWriter('security', name, options.writtenBy);
+  recordWriter(name, writer);
   securityTableRegistry.add(name);
   if (scoped !== undefined) {
     organisationScopedSecurityRegistry.set(name, scoped.reason);

@@ -53,6 +53,14 @@ import {
 import { InstallationMissingError } from '@osfpm/core/src/installation/server-id.js';
 import { LegalHoldInputError } from '@osfpm/core/src/legal-hold/service.js';
 import {
+  AccessGrantBusyError,
+  AccessGrantRefusedError,
+  AccessProfileExistsError,
+  RoleNotAvailableError,
+  UseAccessProfileError,
+  type AccessGrantRefusal,
+} from '@osfpm/core/src/sensitive/errors.js';
+import {
   ComplianceReportDeniedError,
   SensitiveAccessDeniedError,
   SensitivePayloadInvalidError,
@@ -364,6 +372,23 @@ const ROUTE_NOT_FOUND = {
   detail: 'There is no endpoint at this path and method.',
 } as const;
 
+/**
+ * The body field each reason an access grant is refused is about, for the `errors` of the
+ * answer: field paths only, never a value. A `Map`, so a reason is looked up and never
+ * used to index an object.
+ */
+const ACCESS_GRANT_REFUSAL_PATHS: ReadonlyMap<AccessGrantRefusal, string> =
+  new Map([
+    ['category-not-grantable', 'category'],
+    ['invalid-fields', 'fields'],
+    ['invalid-groups', 'groups'],
+    ['consent-required', 'consent'],
+    ['consent-not-allowed', 'consent'],
+    ['consent-invalid', 'consent'],
+    ['person-not-on-project', 'personId'],
+    ['project-closed', 'projectId'],
+  ]);
+
 /** One row of `PROBLEM_TABLE`. */
 export type ProblemRule = {
   /** Matched with `instanceof`, so a subclass takes its parent's row. */
@@ -659,6 +684,58 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
         code: 'project-not-available',
       },
     ],
+  },
+  {
+    // The adjustments of a person with an account are kept in their own profile
+    // (decision D-69). It names no person and no field.
+    errorClass: UseAccessProfileError,
+    status: 422,
+    code: 'use-access-profile',
+    title: 'Use the access profile',
+    detail:
+      'This person has an account, so their access needs are kept in their own access profile, which only they can change.',
+  },
+  {
+    // One body for a role that does not exist, was deleted, or belongs to another
+    // organisation or project, so the answer says nothing about which role ids exist.
+    errorClass: RoleNotAvailableError,
+    status: 422,
+    code: 'role-not-available',
+    title: 'Role not available',
+    detail: 'This role is not available for this project. Choose another role.',
+    errors: () => [{ in: 'body', path: 'roleId', code: 'role-not-available' }],
+  },
+  {
+    // The reason is a code from a closed list, and the path is the field it is about:
+    // never a field name of the access needs, a value or a note.
+    errorClass: AccessGrantRefusedError,
+    status: 422,
+    code: 'access-grant-refused',
+    title: 'Access grant refused',
+    detail:
+      'The grant breaks a rule of how access needs are shared. The reason is given.',
+    errors: (error: AccessGrantRefusedError) => [
+      {
+        in: 'body',
+        path: ACCESS_GRANT_REFUSAL_PATHS.get(error.reason) ?? 'body',
+        code: error.reason,
+      },
+    ],
+  },
+  {
+    errorClass: AccessProfileExistsError,
+    status: 409,
+    code: 'access-profile-exists',
+    title: 'Access profile exists',
+    detail: 'This person already has an access profile. Update it instead.',
+  },
+  {
+    errorClass: AccessGrantBusyError,
+    status: 409,
+    code: 'access-grant-busy',
+    title: 'Access grant changed at the same moment',
+    detail:
+      'This grant was changed at the same moment. Read it again, then try once more.',
   },
   {
     // People reset themselves with their recovery codes (SC-10).

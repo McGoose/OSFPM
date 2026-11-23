@@ -18,6 +18,7 @@ import {
   retentionClassForeignKeyName,
   securityChildTables,
   securityTableNames,
+  serviceWrittenTableNames,
   tenantTableNames,
 } from './columns.js';
 import { newId } from './ids.js';
@@ -206,6 +207,22 @@ async function uniqueKeysWithNullableColumns(database: Database) {
 
 const schemaTables = Object.values(schemaModule).filter((value) =>
   is(value, PgTable),
+);
+
+/**
+ * The service-written tables that carry a retention class, with the default each
+ * declares for it in the schema (`user` and `user_access_profile`; `installation` has
+ * none). Read from the schema, not from a list kept here.
+ */
+const serviceWrittenRetentionClasses = new Map<string, string>(
+  schemaModule.SERVICE_WRITTEN_TABLES.flatMap((table): [string, string][] => {
+    const column = getTableConfig(table).columns.find(
+      (c) => c.name === 'retention_class',
+    );
+    return column === undefined
+      ? []
+      : [[getTableName(table), column.default as string]];
+  }),
 );
 
 /** Every named constraint and index the schema declares, with its table. */
@@ -547,6 +564,7 @@ describe.each(testTargets)('database schema on $name', (target) => {
               where table_schema = 'public' order by table_name`,
         );
         expect(tables.map((t) => t.table_name)).toEqual([
+          'access_grant',
           'access_reset',
           'account',
           'account_chart',
@@ -594,6 +612,7 @@ describe.each(testTargets)('database schema on $name', (target) => {
           'totp_credential',
           'unit',
           'user',
+          'user_access_profile',
         ]);
       } finally {
         await cleanup();
@@ -657,10 +676,15 @@ describe.each(testTargets)('database schema on $name', (target) => {
                 and c.column_name = 'retention_class'
                 and t.table_type = 'BASE TABLE'`,
         );
-        // Every tenant table, security table and `user` carry the column;
-        // nothing else does.
+        // Every tenant table, security table and service-written table that has a
+        // retention class (`user` and `user_access_profile`, not `installation`)
+        // carries the column; nothing else does.
         expect(withColumn.map((r) => r.table_name as string).sort()).toEqual(
-          [...tenantTableNames(), ...securityTableNames(), 'user'].sort(),
+          [
+            ...tenantTableNames(),
+            ...securityTableNames(),
+            ...serviceWrittenRetentionClasses.keys(),
+          ].sort(),
         );
         const seeded = new Set(
           (await rows(database, sql`select key from retention_class`)).map(
@@ -670,8 +694,13 @@ describe.each(testTargets)('database schema on $name', (target) => {
         for (const column of withColumn) {
           const table = column.table_name as string;
           // Standard, unless the table passes `defaultRetentionClass`; then the
-          // migrated database must agree with what the schema declares.
-          const expected = declaredRetentionClasses().get(table) ?? 'standard';
+          // migrated database must agree with what the schema declares. A
+          // service-written table is a plain table, so its declaration is the
+          // default of its column in the schema.
+          const expected =
+            declaredRetentionClasses().get(table) ??
+            serviceWrittenRetentionClasses.get(table) ??
+            'standard';
           expect(column.is_nullable, table).toBe('NO');
           expect(column.column_default, table).toBe(`'${expected}'::text`);
           expect(
@@ -940,13 +969,20 @@ describe.each(testTargets)('database schema on $name', (target) => {
         });
       }
 
-      it('user has the standard columns except organisation_id, owner_org_id and visibility', async () => {
-        const columns = await columnsOf(database, 'user');
-        for (const [name, spec] of Object.entries(STANDARD_COLUMNS)) {
-          if (USER_OMITTED.includes(name)) {
-            expect(columns.has(name), `user.${name}`).toBe(false);
-          } else {
-            expect(columns.get(name), `user.${name}`).toMatchObject(spec);
+      it('gives every service-written table that has a retention class the standard columns except organisation_id, owner_org_id and visibility', async () => {
+        // `user` and `user_access_profile`: install-level, so no tenant trio.
+        expect([...serviceWrittenRetentionClasses.keys()].sort()).toEqual([
+          'user',
+          'user_access_profile',
+        ]);
+        for (const table of serviceWrittenRetentionClasses.keys()) {
+          const columns = await columnsOf(database, table);
+          for (const [name, spec] of Object.entries(STANDARD_COLUMNS)) {
+            if (USER_OMITTED.includes(name)) {
+              expect(columns.has(name), `${table}.${name}`).toBe(false);
+            } else {
+              expect(columns.get(name), `${table}.${name}`).toMatchObject(spec);
+            }
           }
         }
       });
@@ -989,7 +1025,7 @@ describe.each(testTargets)('database schema on $name', (target) => {
       it('never generates ids in the database', async () => {
         for (const table of [
           ...securityTableNames(),
-          'installation',
+          ...serviceWrittenTableNames(),
           'account',
           'account_chart',
           'contract',
@@ -1000,7 +1036,6 @@ describe.each(testTargets)('database schema on $name', (target) => {
           'legal_hold',
           'organisation',
           'project',
-          'user',
           'org_membership',
           'org_membership_role',
           'department',

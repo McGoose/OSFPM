@@ -1,13 +1,15 @@
-import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import type { AccessCredential } from '../access/credential.js';
 import { hasProjectPermission } from '../access/project-permission.js';
 import {
+  ACCESS_GRANT_CATEGORIES,
   department,
   PERSON_SENSITIVE_LEGAL_BASES,
   person,
   personSensitive,
   project,
   projectPerson,
+  type AccessGrantCategory,
   type PersonSensitiveLegalBasis,
 } from '../db/schema/index.js';
 import {
@@ -20,17 +22,39 @@ import {
   type Tx,
   type WriteContext,
 } from '../db/write.js';
+import { ACCESS_AUDIT, auditActor, tokenMark } from './audit.js';
+import {
+  SensitiveAccessDeniedError,
+  UseAccessProfileError,
+  type SensitiveOperation,
+} from './errors.js';
+import { grantedFieldsFor } from './grant-reads.js';
+import { parsePayload } from './payload.js';
 import {
   COMPLIANCE_REPORT_PERMISSION,
   editPermissionKey,
   readPermissionKey,
 } from './permissions.js';
 import {
+  findRow,
+  loadGovernedSource,
+  metaOf,
+  pickFields,
+  type PersonRow,
+  type SensitiveRecordMeta,
+} from './records.js';
+import {
   isSensitiveCategory,
   payloadSchemas,
   type SensitiveCategory,
   type SensitivePayload,
 } from './schemas.js';
+
+export {
+  SensitiveAccessDeniedError,
+  SensitivePayloadInvalidError,
+} from './errors.js';
+export type { SensitiveRecordMeta } from './records.js';
 
 /**
  * The only code that touches the `person_sensitive` table (CLAUDE.md, Data
@@ -41,6 +65,17 @@ import {
  * `sensitive:read:<category>` / `sensitive:edit:<category>` on a project where
  * the person has a confirmed or released `project_person` engagement. Org
  * owners and admins get nothing automatically.
+ *
+ * Two categories go further (decision D-69). A person's `accessibility` and `medical`
+ * data is read only through live, person-approved grants (`access-grants.ts`): the
+ * person themselves, and a holder of `sensitive:edit:<category>` for a person without an
+ * account (whose production record they enter and need to edit), read all of it, and
+ * everyone else holding `sensitive:read:<category>` reads only the fields that live
+ * grants to a role they hold on the project cover, and is denied when there are none: the
+ * permission alone is never enough. The adjustments of a person with an account live in
+ * their access profile (`access-profile.ts`), not in `person_sensitive`, so writing
+ * their `accessibility` row is refused with `UseAccessProfileError`. The audit event of a
+ * read of either category carries the number of fields returned, never their names.
  *
  * A personal API token (SC-10, decision D-68) reaches the same data only through its
  * explicit sensitive scope: the token must list the permission's key, the organisation's
@@ -103,53 +138,12 @@ export const noopSensitiveChangeNotifier: SensitiveChangeNotifier = {
   queueStaffChangeNotice: () => Promise.resolve(),
 };
 
-type Operation = 'read' | 'write' | 'delete';
-
-/** The caller may not do this. Carries no person id and no values. */
-export class SensitiveAccessDeniedError extends Error {
-  constructor(
-    readonly category: SensitiveCategory,
-    readonly operation: Operation,
-  ) {
-    super(`Access to sensitive ${category} data denied for ${operation}`);
-    this.name = 'SensitiveAccessDeniedError';
-  }
-}
-
-/** The payload does not fit its category. Lists where and why, never what. */
-export class SensitivePayloadInvalidError extends Error {
-  constructor(
-    readonly category: SensitiveCategory,
-    readonly issues: readonly { path: string; code: string }[],
-  ) {
-    super(
-      `Invalid ${category} payload` +
-        (issues.length > 0
-          ? ` at: ${issues.map((i) => i.path || '(root)').join(', ')}`
-          : ''),
-    );
-    this.name = 'SensitivePayloadInvalidError';
-  }
-}
-
-/** A stored record without its payload. */
-export type SensitiveRecordMeta = {
-  readonly id: string;
-  readonly personId: string;
-  readonly category: SensitiveCategory;
-  readonly version: number;
-  readonly legalBasis: PersonSensitiveLegalBasis;
-  readonly consentRecordedAt: Date | null;
-  readonly consentTextVersion: string | null;
-  readonly enteredByKind: 'self' | 'staff';
-  readonly enteredBy: string;
-  readonly lastConfirmedAt: Date | null;
-  readonly updatedAt: Date;
-};
-
 /**
  * A stored record with its payload. Only `readSensitive` returns one, after an
- * access check and an audit event.
+ * access check and an audit event. For `accessibility` and `medical` the payload holds
+ * only the fields the reader may see: all of them for the person themselves and for staff
+ * who edit the record of a person without an account, and the granted ones for everyone
+ * else.
  */
 export type SensitiveRecord<C extends SensitiveCategory = SensitiveCategory> =
   SensitiveRecordMeta & { readonly payload: SensitivePayload<C> };
@@ -183,8 +177,6 @@ const RETENTION_CLASS: Record<SensitiveCategory, string> = {
  * to a person's sensitive data and what the compliance report counts. */
 const ENGAGED_STATUSES = ['confirmed', 'released'] as const;
 
-type PersonRow = typeof person.$inferSelect;
-
 function assertCategory(
   category: unknown,
 ): asserts category is SensitiveCategory {
@@ -194,20 +186,13 @@ function assertCategory(
 }
 
 /**
- * Who an event names as the actor: the token when a personal API token made the request,
- * which is who really did it, and the user otherwise (as `WriteContext` has it).
+ * True for the two categories whose reads follow the grants (decision D-69): `accessibility`
+ * and `medical`. Checked against the constant list, never used as a key.
  */
-function auditActor(ctx: SensitiveContext) {
-  return ctx.credential?.kind === 'token'
-    ? ({ type: 'token', id: ctx.credential.tokenId } as const)
-    : ({ type: 'user', id: ctx.userId } as const);
-}
-
-/** What a token adds to the details of an event: its id, and the owner it acted for. Nothing for a session. */
-function tokenMark(ctx: SensitiveContext): Record<string, string> {
-  return ctx.credential?.kind === 'token'
-    ? { tokenId: ctx.credential.tokenId, userId: ctx.userId }
-    : {};
+function isGrantGoverned(
+  category: SensitiveCategory,
+): category is AccessGrantCategory {
+  return (ACCESS_GRANT_CATEGORIES as readonly string[]).includes(category);
 }
 
 function auditBase(ctx: SensitiveContext, personId: string, category: string) {
@@ -231,7 +216,7 @@ async function authorise(
   ctx: SensitiveContext,
   personId: string,
   category: SensitiveCategory,
-  operation: Operation,
+  operation: Extract<SensitiveOperation, 'read' | 'write' | 'delete'>,
 ): Promise<{ person: PersonRow; via: 'self' | 'staff' }> {
   const [found] = await tx
     .select()
@@ -278,7 +263,7 @@ async function holdsOnSharedProject(
   ctx: SensitiveContext,
   subject: PersonRow,
   category: SensitiveCategory,
-  operation: Operation,
+  operation: Extract<SensitiveOperation, 'read' | 'write' | 'delete'>,
 ): Promise<boolean> {
   const key =
     operation === 'read'
@@ -305,22 +290,6 @@ async function holdsOnSharedProject(
   return false;
 }
 
-function metaOf(row: typeof personSensitive.$inferSelect): SensitiveRecordMeta {
-  return {
-    id: row.id,
-    personId: row.personId,
-    category: row.category,
-    version: row.version,
-    legalBasis: row.legalBasis,
-    consentRecordedAt: row.consentRecordedAt,
-    consentTextVersion: row.consentTextVersion,
-    enteredByKind: row.enteredByKind,
-    enteredBy: row.enteredBy,
-    lastConfirmedAt: row.lastConfirmedAt,
-    updatedAt: row.updatedAt,
-  };
-}
-
 function writeContext(ctx: SensitiveContext): WriteContext {
   const shared = {
     originServer: ctx.originServer,
@@ -337,25 +306,100 @@ function writeContext(ctx: SensitiveContext): WriteContext {
     : { ...shared, actor: { type: 'user', id: ctx.userId } };
 }
 
-async function findRow(
+/** What a reader may see of a person's `accessibility` or `medical` data: everything, the fields some live grants cover, or nothing. */
+type GovernedAccess =
+  | { readonly kind: 'all' }
+  | { readonly kind: 'fields'; readonly fields: ReadonlySet<string> }
+  | { readonly kind: 'none' };
+
+/**
+ * Reads a person's `accessibility` or `medical` data by the rules of decision D-69, and
+ * writes the audit event of the read or of the denial. Three ways in, in this order:
+ *
+ * 1. The person themselves, signed in (a token never takes this way in), reads all of it:
+ *    their access profile for `accessibility` if they have an account, the production
+ *    record otherwise, and the `medical` record.
+ * 2. For a person without an account, a holder of `sensitive:edit:<category>` on a project
+ *    where the person is engaged reads the whole production record, which they need to
+ *    edit it.
+ * 3. Anyone else who holds `sensitive:read:<category>` reads only the fields that live
+ *    grants cover (`grantedFieldsFor`): grants to a role they hold in an active
+ *    membership of a project where they hold the permission, and the person is still on.
+ *
+ * With none of the three the read is denied: default deny, the permission alone is never
+ * enough. A denial is audited before it is thrown, the same for a person who does not
+ * exist. The `sensitive.read` event carries the category and the number of fields returned,
+ * never their names.
+ */
+async function readGoverned<C extends AccessGrantCategory>(
   tx: Tx,
+  ctx: SensitiveContext,
   personId: string,
-  category: SensitiveCategory,
-  options: { includeDeleted: boolean },
-) {
-  const [row] = await tx
+  category: C,
+): Promise<SensitiveRecord<C> | null> {
+  const [subject] = await tx
     .select()
-    .from(personSensitive)
-    .where(
-      and(
-        eq(personSensitive.personId, personId),
-        eq(personSensitive.category, category),
-        options.includeDeleted ? undefined : isNull(personSensitive.deletedAt),
-      ),
-    )
-    .orderBy(desc(personSensitive.version))
+    .from(person)
+    .where(and(eq(person.id, personId), isNull(person.deletedAt)))
     .limit(1);
-  return row;
+
+  // What the reader may see: all of it, the fields some grants cover, or nothing.
+  let access: GovernedAccess = { kind: 'none' };
+  if (subject !== undefined) {
+    if (
+      subject.userId !== null &&
+      subject.userId === ctx.userId &&
+      // A token never takes the person's own way in (decision D-68).
+      ctx.credential?.kind !== 'token'
+    ) {
+      access = { kind: 'all' };
+    } else if (
+      subject.userId === null &&
+      (await holdsOnSharedProject(tx, ctx, subject, category, 'write'))
+    ) {
+      access = { kind: 'all' };
+    } else {
+      const fields = await grantedFieldsFor(
+        tx,
+        ctx,
+        subject,
+        category,
+        ctx.clock(),
+      );
+      if (fields.size > 0) access = { kind: 'fields', fields };
+    }
+  }
+  if (subject === undefined || access.kind === 'none') {
+    await recordAudit(tx, {
+      ...auditBase(ctx, personId, category),
+      organisationId: subject?.organisationId ?? null,
+      category: 'sensitive.denied',
+      action: 'read',
+    });
+    throw new SensitiveAccessDeniedError(category, 'read');
+  }
+
+  const stored = await loadGovernedSource(tx, subject, category);
+  const payload =
+    stored === null
+      ? null
+      : access.kind === 'all'
+        ? stored.payload
+        : pickFields(stored.payload, access.fields);
+  const fieldCount = payload === null ? 0 : Object.keys(payload).length;
+  await recordAudit(tx, {
+    actor: auditActor(ctx),
+    targetType: 'person',
+    targetId: personId,
+    details: { category, fieldCount, ...tokenMark(ctx) },
+    requestId: ctx.requestId ?? null,
+    occurredAt: ctx.clock(),
+    organisationId: subject.organisationId,
+    category: 'sensitive.read',
+    action: 'read',
+  });
+  if (stored === null || payload === null || fieldCount === 0) return null;
+  return { ...stored.meta, payload: payload };
 }
 
 /**
@@ -363,6 +407,13 @@ async function findRow(
  * Writes one `sensitive.read` audit event, whether or not data exists.
  * Throws `SensitiveAccessDeniedError` (after auditing it) when not allowed.
  * The stored payload was validated on write and is returned as stored.
+ *
+ * `accessibility` and `medical` follow the grants (decision D-69): the person themselves
+ * and staff who edit the record of a person without an account read all of it, and
+ * everyone else reads only the fields that live grants to a role they hold cover, or is
+ * denied when there are none, whatever permission they hold. The audit event of those two
+ * carries the number of fields returned, never their names. The adjustments of a person
+ * with an account come from their access profile.
  */
 export async function readSensitive<C extends SensitiveCategory>(
   tx: Tx,
@@ -371,6 +422,9 @@ export async function readSensitive<C extends SensitiveCategory>(
   category: C,
 ): Promise<SensitiveRecord<C> | null> {
   assertCategory(category);
+  if (isGrantGoverned(category)) {
+    return readGoverned(tx, ctx, personId, category);
+  }
   const { person: subject } = await authorise(
     tx,
     ctx,
@@ -425,17 +479,25 @@ export async function writeSensitive<C extends SensitiveCategory>(
     category,
     'write',
   );
-
-  const parsed = payloadSchemas[category].safeParse(payload);
-  if (!parsed.success) {
-    throw new SensitivePayloadInvalidError(
-      category,
-      parsed.error.issues.map((issue) => ({
-        path: issue.path.map(String).join('.'),
-        code: issue.code,
-      })),
-    );
+  // The adjustments of a person with an account live in their access profile (decision
+  // D-69), which only they write. Refused after the permission is checked, so the answer
+  // is for someone allowed to know, and audited before it is thrown.
+  if (category === 'accessibility' && subject.userId !== null) {
+    await recordAudit(tx, {
+      ...auditBase(ctx, personId, category),
+      organisationId: subject.organisationId,
+      category: ACCESS_AUDIT.refused,
+      action: 'write',
+      details: {
+        reason: 'use-access-profile',
+        category,
+        ...tokenMark(ctx),
+      },
+    });
+    throw new UseAccessProfileError();
   }
+
+  const parsedPayload = parsePayload(category, payload);
   if (!LEGAL_BASES.includes(options.legalBasis)) {
     throw new Error('Unknown legal basis');
   }
@@ -444,7 +506,7 @@ export async function writeSensitive<C extends SensitiveCategory>(
   const wc = writeContext(ctx);
   const selfConsent = via === 'self' && options.legalBasis === 'consent';
   const fields = {
-    payload: parsed.data as Record<string, unknown>,
+    payload: parsedPayload as Record<string, unknown>,
     legalBasis: options.legalBasis,
     enteredByKind: via,
     enteredBy: ctx.userId,

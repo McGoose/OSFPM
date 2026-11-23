@@ -801,7 +801,8 @@ export function revokePasskey(
   return guardedAuth('passkey_credential', 'update', () =>
     // A savepoint: a refusal leaves the passkey and the trail as they were.
     tx.transaction(async (inner) => {
-      await lockUser(inner, userId);
+      // FOR UPDATE: this ends the sessions the passkey opened (see `setPassword`).
+      await lockUser(inner, userId, { strength: 'update' });
       const [target] = await inner
         .select({ id: passkeyCredential.id })
         .from(passkeyCredential)

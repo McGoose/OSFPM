@@ -61,6 +61,7 @@ describe.each(testTargets)('retention classes on $name', (target) => {
       'minor-record': 'project-wrap',
       'security-log': 'record-created',
       transient: 'record-created',
+      'account-lifetime': 'record-created',
     });
     for (const { text } of Object.values(byKey)) {
       expect(text.length).toBeGreaterThan(0);
@@ -69,6 +70,20 @@ describe.each(testTargets)('retention classes on $name', (target) => {
     expect(Object.keys(SHIPPED_RETENTION_DEFAULTS).sort()).toEqual(
       found.map((c) => c.key).sort(),
     );
+  });
+
+  it('seeds account-lifetime as kept while the account exists, counted from no project date', async () => {
+    const found = (await database.db.select().from(retentionClass)).find(
+      (c) => c.key === 'account-lifetime',
+    );
+    expect(found).toEqual({
+      key: 'account-lifetime',
+      description:
+        'Kept while the account exists; deleted with the account or when the person deletes it',
+      // The anchor list is fixed and has no "never": record-created is the one
+      // that names no project, and the class has no period, so nothing ends it.
+      anchor: 'record-created',
+    });
   });
 
   it('refuses an anchor outside the fixed list', async () => {
@@ -413,6 +428,151 @@ describe.each(testTargets)('retention classes on $name', (target) => {
           setup_code: 'transient',
           kept_setup_code: 'standard',
         });
+      } finally {
+        rmSync(folder, { recursive: true, force: true });
+        await drop();
+      }
+    });
+  });
+
+  describe('the account-lifetime class on an existing database', () => {
+    const ACCOUNT_LIFETIME_MIGRATION = '0036_account_lifetime_retention_class';
+
+    it('moves the access profiles written before it off crew-health, and leaves a class set on purpose and the grants, which stay crew-health', async () => {
+      const { database: existing, cleanup: drop } = await target.create();
+      const folder = mkdtempSync(join(tmpdir(), 'osfpm-migrations-'));
+      try {
+        // Stop one migration short: a copy of the folder whose journal ends
+        // before the migration that adds the class.
+        cpSync(MIGRATIONS_FOLDER, folder, { recursive: true });
+        const journalPath = join(folder, 'meta', '_journal.json');
+        const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as {
+          entries: { tag: string }[];
+        };
+        const cut = journal.entries.findIndex(
+          (e) => e.tag === ACCOUNT_LIFETIME_MIGRATION,
+        );
+        expect(cut).toBeGreaterThan(0);
+        writeFileSync(
+          journalPath,
+          JSON.stringify({
+            ...journal,
+            entries: journal.entries.slice(0, cut),
+          }),
+        );
+        await migrate(existing, folder);
+
+        // Plain SQL, so the rows do not depend on columns added later. A person
+        // with an access profile, one whose profile was given another class on
+        // purpose, and a grant of the first person's.
+        const origin = newId();
+        const organisationId = newId();
+        const projectId = newId();
+        const personId = newId();
+        const roleId = newId();
+        const userId = newId();
+        const otherUserId = newId();
+        const profileId = newId();
+        const keptProfileId = newId();
+        const grantId = newId();
+        for (const [id, email] of [
+          [userId, 'upgrade.mira@example.test'],
+          [otherUserId, 'upgrade.tomas@example.test'],
+        ]) {
+          await existing.db.execute(
+            sql`insert into "user" (id, origin_server, email, display_name, locale, timezone, status)
+                values (${id}, ${origin}, ${email}, 'Upgrade User',
+                  'en-GB', 'Europe/London', 'active')`,
+          );
+        }
+        await existing.db.execute(
+          sql`insert into organisation (id, organisation_id, owner_org_id, origin_server,
+                slug, name, country, default_locale, default_timezone, base_currency, status)
+              values (${organisationId}, ${organisationId}, ${organisationId}, ${origin},
+                'upgrade-org', 'Demo Pictures', 'GB', 'en-GB', 'Europe/London', 'GBP', 'active')`,
+        );
+        await existing.db.execute(
+          sql`insert into project (id, organisation_id, owner_org_id, origin_server,
+                code, title, format, status, timezone, locale, currency)
+              values (${projectId}, ${organisationId}, ${organisationId}, ${origin},
+                'TLW-UP', 'The Last Withdrawal', 'feature', 'development',
+                'Europe/London', 'en-GB', 'GBP')`,
+        );
+        await existing.db.execute(
+          sql`insert into person (id, organisation_id, owner_org_id, origin_server, display_name, user_id)
+              values (${personId}, ${organisationId}, ${organisationId}, ${origin},
+                'Mira Vukovic', ${userId})`,
+        );
+        await existing.db.execute(
+          sql`insert into role (id, origin_server, organisation_id, owner_org_id, key, name)
+              values (${roleId}, ${origin}, ${organisationId}, ${organisationId}, 'camera', 'Camera')`,
+        );
+        await existing.db.execute(
+          sql`insert into user_access_profile (id, origin_server, user_id, payload)
+              values (${profileId}, ${origin}, ${userId}, '{"stepFreeRequired": true}'::jsonb)`,
+        );
+        // Set on purpose, not left to the default.
+        await existing.db.execute(
+          sql`insert into user_access_profile (id, origin_server, user_id, payload, retention_class)
+              values (${keptProfileId}, ${origin}, ${otherUserId},
+                '{"stepFreeRequired": true}'::jsonb, 'standard')`,
+        );
+        await existing.db.execute(
+          sql`insert into access_grant (id, origin_server, organisation_id, project_id,
+                person_id, category, role_id, fields, granted_by, granted_at, on_behalf)
+              values (${grantId}, ${origin}, ${organisationId}, ${projectId}, ${personId},
+                'accessibility', ${roleId}, array['stepFreeRequired']::text[], ${userId},
+                now(), false)`,
+        );
+
+        const classes = async () =>
+          Object.fromEntries(
+            (
+              await rowsOf(
+                existing,
+                sql`select 'profile' as source, retention_class from user_access_profile
+                      where id = ${profileId}
+                    union all
+                    select 'kept_profile', retention_class from user_access_profile
+                      where id = ${keptProfileId}
+                    union all
+                    select 'grant', retention_class from access_grant
+                      where id = ${grantId}`,
+              )
+            ).map((row) => [
+              row.source as string,
+              row.retention_class as string,
+            ]),
+          );
+        // The starting point: a profile under the old default, one set on
+        // purpose, and a grant.
+        expect(await classes()).toEqual({
+          profile: 'crew-health',
+          kept_profile: 'standard',
+          grant: 'crew-health',
+        });
+
+        await migrate(existing);
+        expect(await classes()).toEqual({
+          profile: 'account-lifetime',
+          kept_profile: 'standard',
+          grant: 'crew-health',
+        });
+
+        // A profile written after the migration starts in the new class.
+        const laterUserId = newId();
+        await existing.db.execute(
+          sql`insert into "user" (id, origin_server, email, display_name, locale, timezone, status)
+              values (${laterUserId}, ${origin}, 'upgrade.later@example.test', 'Upgrade User',
+                'en-GB', 'Europe/London', 'active')`,
+        );
+        const [later] = await rowsOf(
+          existing,
+          sql`insert into user_access_profile (id, origin_server, user_id, payload)
+              values (${newId()}, ${origin}, ${laterUserId}, '{"stepFreeRequired": true}'::jsonb)
+              returning retention_class`,
+        );
+        expect(later).toEqual({ retention_class: 'account-lifetime' });
       } finally {
         rmSync(folder, { recursive: true, force: true });
         await drop();

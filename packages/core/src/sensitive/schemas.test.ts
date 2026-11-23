@@ -15,7 +15,12 @@ const INVALID: Record<SensitiveCategory, unknown[]> = {
     { restrictions: [], allergies: [], extra: true },
   ],
   medical: [{ conditions: 5 }, { unknown: 'x' }],
-  accessibility: [{}, { needs: 5 }, { needs: 'ramp', extra: 'x' }],
+  accessibility: [
+    {},
+    { stepFreeRequired: 'yes' },
+    { stepFreeRequired: true, extra: 'x' },
+    { needs: 'ramp' },
+  ],
   emergency: [
     { contacts: [] },
     { contacts: [{ name: 'Jo Example' }] },
@@ -97,9 +102,10 @@ describe('optional fields', () => {
         .success,
     ).toBe(true);
     expect(payloadSchemas.medical.safeParse({}).success).toBe(true);
-    expect(payloadSchemas.accessibility.safeParse({ needs: 'x' }).success).toBe(
-      true,
-    );
+    expect(
+      payloadSchemas.accessibility.safeParse({ stepFreeRequired: true })
+        .success,
+    ).toBe(true);
     expect(
       payloadSchemas.emergency.safeParse({
         contacts: [{ name: 'Jo Example', phone: '1' }],

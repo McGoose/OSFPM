@@ -396,6 +396,13 @@ export async function revokeSession(
  * that asked for it (a password change, a recovery sign-in, a disabling) has its
  * own event. `revokePasskeySessions` does the same.
  *
+ * The caller holds the user's row `FOR UPDATE` (`lockUser` with `strength: 'update'`),
+ * as every service that ends sessions in bulk does. Making a personal API token holds
+ * that row `FOR KEY SHARE` and reads its session afterwards, and only `FOR UPDATE`
+ * conflicts with that, so with it a token is never made from a session this call
+ * ended. This function does not take the lock itself: the caller takes it first,
+ * before it judges anything else (CLAUDE.md, Data rules).
+ *
  * @throws AuthInputError `reason` when the reason is not in
  * `SESSION_REVOKE_REASONS`.
  * @throws RecordWriteError when the database refuses a write.
@@ -459,8 +466,10 @@ export async function revokeUserSessions(
  * the revocation of the passkey is audited by its own event. `userId` is the
  * passkey's owner, and the event's target; `actor` defaults to that user.
  *
- * The caller (`revokePasskey`) holds the user's row lock, so a sign-in with the
- * passkey cannot make a session between the revocation and this.
+ * The caller (`revokePasskey`) holds the user's row `FOR UPDATE`, so a sign-in with
+ * the passkey cannot make a session between the revocation and this, and a token
+ * being made, which holds the row `FOR KEY SHARE`, is not made from a session this
+ * ended (see `revokeUserSessions`).
  *
  * @throws RecordWriteError when the database refuses a write.
  */
@@ -651,7 +660,8 @@ export function disableUser(
   const actor = options.actor ?? { type: 'system', id: null };
   return guardedAuth('user', 'update', () =>
     tx.transaction(async (inner) => {
-      const found = await lockUser(inner, userId);
+      // FOR UPDATE: this ends every session of the user (see `setPassword`).
+      const found = await lockUser(inner, userId, { strength: 'update' });
       if (found.status === 'disabled') return false;
       await inner
         .update(user)
