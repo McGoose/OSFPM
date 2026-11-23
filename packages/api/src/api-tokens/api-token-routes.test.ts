@@ -952,6 +952,21 @@ describe.each(testTargets)(
         }
       });
 
+      it('lists the members for an organisation id in upper case in the path, for a token as for a session', async () => {
+        await switchesNow(true, false);
+        const token = await made(owner);
+        const upper = org().toUpperCase();
+        const asSession = await send('GET', `/organisations/${upper}/members`, {
+          session: owner,
+        });
+        const asToken = await send('GET', `/organisations/${upper}/members`, {
+          bearer: token.token,
+        });
+        expect(asSession.statusCode).toBe(200);
+        expect(asToken.statusCode).toBe(200);
+        expect(asToken.json()).toEqual(asSession.json());
+      });
+
       it('is the same 401 for a token on another organisation’s members as for any token that does not work', async () => {
         await switchesNow(true, false);
         const token = await made(owner);

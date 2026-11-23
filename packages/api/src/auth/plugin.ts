@@ -216,6 +216,30 @@ const TOKEN_READ_METHODS: ReadonlySet<string> = new Set([
   'OPTIONS',
 ]);
 
+/** The path parameters that hold the id of an organisation or of a project. */
+const PATH_ID_PARAMS = ['organisationId', 'projectId'] as const;
+
+/**
+ * Puts the organisation and project ids in the path of `request` in lower case, which is
+ * how every id is stored and how a token's credential holds its own. A UUID is the same id
+ * in either case, to the database and to the validators, so a request that spells one in
+ * upper case is a good request; but the permission checks compare the ids of a credential
+ * with those of the route as text, and `…/organisations/0199A…/members` would be refused
+ * to a token of the organisation `0199a…` though the same request is fine with a session.
+ * The names are fixed ones, never a caller's, so reading the parameters by them is safe.
+ * It touches only a request that came in with a token and was accepted: a session has
+ * nothing to compare as text.
+ */
+function lowerCasePathIds(request: FastifyRequest): void {
+  const params: unknown = request.params;
+  if (typeof params !== 'object' || params === null) return;
+  const record = params as Record<string, unknown>;
+  for (const name of PATH_ID_PARAMS) {
+    const value = record[name];
+    if (typeof value === 'string') record[name] = value.toLowerCase();
+  }
+}
+
 /** The scheme of `Authorization: Bearer <token>`, matched without regard to case (RFC 7235). */
 const BEARER_SCHEME = 'Bearer';
 
@@ -380,8 +404,9 @@ const implementation: FastifyPluginAsync<AuthPluginOptions> = (
    *    address that is already over the limit it is a 429 instead, and is not written to
    *    the audit trail, so a flood of bad tokens writes no more rows than the limit allows
    *    (the 429s are in the request log).
-   * 5. A token that works is counted against its own limit, and a token that can only
-   *    read is refused on a route that says `write`.
+   * 5. A token that works has the organisation and project ids of the path put in
+   *    lower case (`lowerCasePathIds`), is counted against its own limit, and, if it can
+   *    only read, is refused on a route that says `write`.
    *
    * There is no `Origin` check: a token is not a cookie, so there is nothing a
    * cross-site page could borrow.
@@ -433,6 +458,8 @@ const implementation: FastifyPluginAsync<AuthPluginOptions> = (
       throw outcome.error;
     }
     const { credential, user } = outcome.found;
+    // The handler reads the ids as the credential spells them (see `lowerCasePathIds`).
+    lowerCasePathIds(request);
     request.tokenAuth = {
       user,
       credential,

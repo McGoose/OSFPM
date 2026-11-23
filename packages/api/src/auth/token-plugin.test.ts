@@ -71,6 +71,12 @@ const testRoutes: FastifyPluginAsync = (app) => {
     { config: { tokenAccess: 'write' } },
     (request) => describeCaller(request),
   );
+  // What the handler of a route with both ids in its path is handed.
+  app.get(
+    '/test/org/:organisationId/projects/:projectId/read',
+    { config: { tokenAccess: 'read' } },
+    (request) => ({ seen: request.params }),
+  );
   app.get(
     '/test/org/:organisationId/read',
     { config: { tokenAccess: 'read' } },
@@ -621,6 +627,31 @@ describe.each(testTargets)(
             event.targetId === made.apiToken.id,
         );
         expect(wrong).toHaveLength(3);
+      });
+
+      it('hands a handler the organisation and project ids of the path in lower case, as the credential holds them', async () => {
+        const made = await makeToken(scene.ownerId);
+        const path = (organisationId: string, projectId: string) =>
+          `/test/org/${organisationId}/projects/${projectId}/read`;
+        const expected = {
+          organisationId: scene.organisationId,
+          projectId: scene.projectId,
+        };
+        for (const [organisationId, projectId] of [
+          [scene.organisationId, scene.projectId],
+          // The same ids in upper case, which the database and the validators read as the
+          // same, and which a credential compared as text would not.
+          [scene.organisationId.toUpperCase(), scene.projectId.toUpperCase()],
+          [scene.organisationId.toUpperCase(), scene.projectId],
+        ] as const) {
+          const response = await call(
+            'GET',
+            path(organisationId, projectId),
+            bearer(made.token),
+          );
+          expect(response.statusCode, organisationId).toBe(200);
+          expect(response.json<{ seen: unknown }>().seen).toEqual(expected);
+        }
       });
 
       it('is audited with the reason, and the audit holds no part of the token', async () => {
