@@ -756,7 +756,7 @@ async function runUse(
 
   // The person's row, last. A person who was deleted since is not there to lock.
   try {
-    await lockUser(tx, found.userId, { strength: 'update' });
+    await lockUser(tx, found.userId);
   } catch (error) {
     if (error instanceof AuthStateError) {
       return refuse('target-not-active', known);
