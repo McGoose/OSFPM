@@ -503,6 +503,8 @@ describe('project resolution in the schema', () => {
  * a reviewer can check.
  */
 const NUMERIC_NOT_MONEY: Record<string, string> = {
+  'contract_terms.guaranteed_hours':
+    'A number of hours per basis period, at most 168; it is time, not an amount of money',
   'cost_line.fx_rate':
     'An exchange rate, a ratio between two currencies; it may appear in change events (the amounts it converts do not)',
   'location.latitude': 'A coordinate in degrees',
@@ -577,6 +579,7 @@ describe.each(testTargets)('database schema on $name', (target) => {
           'contract',
           'contract_link',
           'contract_party',
+          'contract_terms',
           'cost_line',
           'cost_line_scheme',
           'department',
@@ -957,6 +960,7 @@ describe.each(testTargets)('database schema on $name', (target) => {
         'setting_value',
         'contract',
         'contract_party',
+        'contract_terms',
         'contract_link',
         'account_chart',
         'account',
@@ -1033,6 +1037,7 @@ describe.each(testTargets)('database schema on $name', (target) => {
           'account_chart',
           'contract',
           'contract_party',
+          'contract_terms',
           'contract_link',
           'cost_line',
           'cost_line_scheme',
