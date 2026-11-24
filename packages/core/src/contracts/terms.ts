@@ -36,6 +36,15 @@ export const CONTRACT_TERMS_KINDS = [
 ] as const satisfies readonly ContractKind[];
 
 /**
+ * True when a contract of `kind` can have deal terms: a deal memo, a crew contract
+ * or a cast contract. The service asks it when terms are set, and when a contract
+ * that has terms is about to change its kind.
+ */
+export function contractKindHasTerms(kind: ContractKind): boolean {
+  return (CONTRACT_TERMS_KINDS as readonly string[]).includes(kind);
+}
+
+/**
  * The agreed amounts of a set of terms. They are sensitive (`markSensitive` on the
  * table) and reach only holders of `contracts:read-value` and the parties to the
  * contract. `currency` is not one of them.

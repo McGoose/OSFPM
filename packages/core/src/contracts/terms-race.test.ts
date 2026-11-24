@@ -206,6 +206,39 @@ describe.skipIf(postgres === undefined)(
         expect(reasonOf(outcomes[1])).toBeInstanceOf(ContractInputError);
         expect(await termsRows(contractId)).toEqual([]);
       });
+
+      it('refuses a change of the kind to one that has no terms when terms are being set at the same moment', async () => {
+        const { w, contractId, contractVersion } = await scene(warm);
+        // The change read no terms before the set landed. It waits for the set, and then
+        // finds the terms under its lock. Without a change counter row the counter locks
+        // nothing, so it is the lock on the contract row that makes it wait.
+        const outcomes = await interleave(
+          db(),
+          (tx) =>
+            setContractTerms(tx, at(w.manager), contractId, {
+              paymentTermsDays: 30,
+            }),
+          (tx) =>
+            updateContract(tx, at(w.manager), contractId, contractVersion, {
+              kind: 'location-agreement',
+            }),
+        );
+        expect(outcomes[0].status).toBe('fulfilled');
+        const refusal = reasonOf(outcomes[1]);
+        expect(refusal).toBeInstanceOf(ContractInputError);
+        expect((refusal as Error).message).toBe(
+          "Remove the terms before changing this contract's kind",
+        );
+        const [row] = await db()
+          .select({ kind: contract.kind, version: contract.version })
+          .from(contract)
+          .where(eq(contract.id, contractId));
+        expect(row).toEqual({
+          kind: 'crew-contract',
+          version: contractVersion,
+        });
+        expect(await termsRows(contractId)).toHaveLength(1);
+      });
     });
 
     // These write the terms first, so the project has its change counter by the time

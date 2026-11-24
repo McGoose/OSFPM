@@ -28,6 +28,7 @@ import {
   listOwnContracts,
   removeContractTerms,
   setContractTerms,
+  updateContract,
 } from './service.js';
 import {
   at,
@@ -886,6 +887,180 @@ describe.each(testTargets)('contract terms on $name', (target) => {
       });
       expect(restored.paymentTermsDays).toBe(7);
       expect((await termsRows(w.organisationId))[0]!.rate).toBeNull();
+    });
+  });
+
+  describe('updateContract and the kind of a contract with terms', () => {
+    const WITH_TERMS = ['deal-memo', 'crew-contract', 'cast-contract'] as const;
+    const WITHOUT_TERMS = CONTRACT_KINDS.filter(
+      (kind) => !(WITH_TERMS as readonly string[]).includes(kind),
+    );
+    const REFUSAL = "Remove the terms before changing this contract's kind";
+
+    const contractRow = async (id: string) => {
+      const [row] = await db()
+        .select({
+          kind: contract.kind,
+          title: contract.title,
+          version: contract.version,
+        })
+        .from(contract)
+        .where(eq(contract.id, id));
+      return row!;
+    };
+    const eventCount = async (organisationId: string) =>
+      (
+        await db()
+          .select({ id: changeEvent.id })
+          .from(changeEvent)
+          .where(eq(changeEvent.organisationId, organisationId))
+      ).length;
+
+    it.each(WITHOUT_TERMS)(
+      'refuses to change a contract with live terms to %s, and changes nothing',
+      async (kind) => {
+        const w = await world();
+        const made = await seedContract(database, w);
+        await setContractTerms(db(), at(w.manager), made.id, FULL_TERMS);
+        const events = await eventCount(w.organisationId);
+        const error = await errorOf(
+          updateContract(db(), at(w.manager), made.id, made.version, {
+            kind,
+            title: 'Renamed in the same call',
+          }),
+        );
+        expect(error).toBeInstanceOf(ContractInputError);
+        expect((error as Error).message).toBe(REFUSAL);
+        // The whole call is refused: the title that came with the kind did not change either.
+        expect(await contractRow(made.id)).toEqual({
+          kind: 'crew-contract',
+          title: made.title,
+          version: made.version,
+        });
+        expect(await eventCount(w.organisationId)).toBe(events);
+      },
+    );
+
+    it('allows a change among the kinds that have terms, and keeps the terms', async () => {
+      const w = await world();
+      const made = await seedContract(database, w);
+      await setContractTerms(db(), at(w.manager), made.id, FULL_TERMS);
+      let version = made.version;
+      for (const kind of [
+        'cast-contract',
+        'deal-memo',
+        'crew-contract',
+      ] as const) {
+        const updated = await updateContract(
+          db(),
+          at(w.manager),
+          made.id,
+          version,
+          {
+            kind,
+          },
+        );
+        expect(updated.kind).toBe(kind);
+        expect(updated.terms).toMatchObject(FULL_TERMS_WITHOUT_AMOUNTS);
+        version = updated.version;
+      }
+    });
+
+    it('allows the change when the contract has no terms', async () => {
+      const w = await world();
+      const made = await seedContract(database, w);
+      const updated = await updateContract(
+        db(),
+        at(w.manager),
+        made.id,
+        made.version,
+        {
+          kind: 'location-agreement',
+        },
+      );
+      expect(updated.kind).toBe('location-agreement');
+    });
+
+    it('does not count removed terms, and then refuses terms for the new kind', async () => {
+      const w = await world();
+      const made = await seedContract(database, w);
+      const set = await setContractTerms(
+        db(),
+        at(w.manager),
+        made.id,
+        FULL_TERMS,
+      );
+      await removeContractTerms(db(), at(w.manager), made.id, set.version);
+      const updated = await updateContract(
+        db(),
+        at(w.manager),
+        made.id,
+        made.version,
+        {
+          kind: 'release',
+        },
+      );
+      expect(updated.kind).toBe('release');
+      expect(updated.terms).toBeNull();
+      expect(
+        await errorOf(
+          setContractTerms(db(), at(w.manager), made.id, {
+            paymentTermsDays: 30,
+          }),
+        ),
+      ).toBeInstanceOf(ContractInputError);
+    });
+
+    it('leaves every other change alone while terms exist', async () => {
+      const w = await world();
+      const made = await seedContract(database, w);
+      await setContractTerms(db(), at(w.manager), made.id, FULL_TERMS);
+      const updated = await updateContract(
+        db(),
+        at(w.manager),
+        made.id,
+        made.version,
+        {
+          title: 'Camera operator agreement, revised',
+          status: 'signed',
+        },
+      );
+      expect(updated).toMatchObject({
+        title: 'Camera operator agreement, revised',
+        status: 'signed',
+        kind: 'crew-contract',
+      });
+    });
+
+    it('answers a caller who may not edit with the denial, never with the refusal about terms', async () => {
+      const w = await world();
+      const made = await seedContract(database, w);
+      await setContractTerms(db(), at(w.manager), made.id, FULL_TERMS);
+      for (const caller of [w.reader, w.valueReader, w.outsider]) {
+        expect(
+          await errorOf(
+            updateContract(db(), at(caller), made.id, made.version, {
+              kind: 'location-agreement',
+            }),
+          ),
+        ).toMatchObject({
+          name: 'AccessDeniedError',
+          permission: EDIT,
+          scope: undefined,
+        });
+      }
+    });
+
+    it('answers a stale version with the version conflict once the kind is allowed', async () => {
+      const w = await world();
+      const made = await seedContract(database, w);
+      expect(
+        await errorOf(
+          updateContract(db(), at(w.manager), made.id, made.version + 1, {
+            kind: 'location-agreement',
+          }),
+        ),
+      ).toBeInstanceOf(VersionConflictError);
     });
   });
 

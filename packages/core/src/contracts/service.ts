@@ -53,7 +53,7 @@ import {
   applyTerms,
   checkTermsInput,
   checkTermsState,
-  CONTRACT_TERMS_KINDS,
+  contractKindHasTerms,
   EMPTY_TERMS,
   normaliseTerms,
   stateOf,
@@ -107,7 +107,9 @@ import {
  * the rule of `total_value`: only `contracts:read-value` holders and the parties to
  * the contract see them, they are absent for everyone else, and setting or clearing
  * one needs `contracts:read-value` as well as `contracts:edit`. The other terms are
- * visible to anyone who can read the contract.
+ * visible to anyone who can read the contract. A contract with live terms cannot
+ * change to a kind that has none: `updateContract` refuses it until the terms are
+ * removed.
  */
 
 /** Who is acting, and on which server and clock. Always a user. */
@@ -584,8 +586,15 @@ export async function createContract(
  * `contracts:read-value`, whatever changed. Changes that alter no field write
  * nothing and return the current contract (see `updateRecord`).
  *
+ * A contract that has live deal terms cannot change to a kind that has none (only
+ * a deal memo, a crew contract and a cast contract have terms); remove the terms
+ * first. The check runs under the locks of `setContractTerms`, so it cannot be
+ * overtaken by a set of terms that is running at the same moment.
+ *
  * @throws AccessDeniedError, with no scope, for a contract that is unknown,
  * deleted or forbidden: all three look the same, so ids cannot be probed.
+ * @throws ContractInputError, "Remove the terms before changing this contract's
+ * kind", for a change to a kind that has no terms while live terms exist.
  * @throws VersionConflictError for a stale `version`.
  */
 export async function updateContract(
@@ -603,6 +612,9 @@ export async function updateContract(
     changes.totalValue !== undefined || changes.currency !== undefined;
   if (changesAmount) {
     await requireOnRecord(tx, ctx, scope, CONTRACTS_READ_VALUE_PERMISSION);
+  }
+  if (changes.kind !== undefined && !contractKindHasTerms(changes.kind)) {
+    await refuseKindChangeWithTerms(tx, scope, id);
   }
   const patch: UpdatePatch<typeof contract> = {
     kind: changes.kind,
@@ -802,9 +814,59 @@ async function findTermsRow(tx: Tx, contractId: string) {
 
 /** Terms apply to the person-facing deals only; a CHECK cannot see the contract's kind. */
 function checkTermsKind(kind: ContractKind): void {
-  if (!(CONTRACT_TERMS_KINDS as readonly string[]).includes(kind)) {
+  if (!contractKindHasTerms(kind)) {
     throw new ContractInputError(
       'Terms apply only to deal memos and crew or cast contracts',
+    );
+  }
+}
+
+/**
+ * Refuses a change of contract `contractId` to a kind that has no terms while the
+ * contract has live terms: the terms would be left on a contract that cannot have
+ * them. Removed terms do not count.
+ *
+ * It decides on rows another call may be writing at this moment, so it takes
+ * the locks in the order of `setContractTerms` (CLAUDE.md, Data rules: lock
+ * order): the change counter, then the contract row `FOR UPDATE`, then the
+ * live terms row `FOR SHARE`. `setContractTerms` holds the contract `FOR SHARE`
+ * from before it checks the kind until its transaction ends, so whichever comes
+ * second waits for the first and then sees its result: terms that were just added
+ * refuse this change, and a kind that was just changed refuses those terms. The
+ * contract lock matters most when the project has no change counter row yet, as
+ * the counter then locks nothing.
+ *
+ * @throws ContractInputError when the contract has live terms.
+ * @throws AccessDeniedError, with no scope, when the contract was deleted since
+ * the caller read it.
+ */
+async function refuseKindChangeWithTerms(
+  tx: Tx,
+  scope: PermissionScope,
+  contractId: string,
+): Promise<void> {
+  await lockChangesOf(tx, scope);
+  const [held] = await tx
+    .select({ id: contract.id })
+    .from(contract)
+    .where(and(eq(contract.id, contractId), isNull(contract.deletedAt)))
+    .limit(1)
+    .for('update');
+  if (!held) throw new AccessDeniedError(CONTRACTS_EDIT_PERMISSION);
+  const [terms] = await tx
+    .select({ id: contractTerms.id })
+    .from(contractTerms)
+    .where(
+      and(
+        eq(contractTerms.contractId, contractId),
+        isNull(contractTerms.deletedAt),
+      ),
+    )
+    .limit(1)
+    .for('share');
+  if (terms !== undefined) {
+    throw new ContractInputError(
+      "Remove the terms before changing this contract's kind",
     );
   }
 }
