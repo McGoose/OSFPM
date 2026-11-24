@@ -1,4 +1,4 @@
-import { and, eq, isNull, like } from 'drizzle-orm';
+import { and, eq, isNull, like, or } from 'drizzle-orm';
 import { installation, totpCredential } from '../db/schema/index.js';
 import type { Tx } from '../db/write.js';
 import { ENCRYPTED_PREFIX } from '../keys/data-keys.js';
@@ -89,7 +89,7 @@ export async function bindServerKeys(
   if (facts.storedPublicKey !== null && facts.storedPublicKey === '') {
     throw new ServerKeysError('identity-mismatch');
   }
-  const identityBound = facts.storedPublicKey === null;
+  const identityBound = facts.storedPublicKey !== keys.identity.publicKey;
   if (identityBound) await storeIdentity(tx, facts.installationId, keys, now);
   const secretsSealed = await sealPlainTotpSecrets(tx, {
     dataKeys: keys.dataKeys,
@@ -119,7 +119,10 @@ async function storeIdentity(
         .where(
           and(
             eq(installation.id, installationId),
-            isNull(installation.serverPublicKey),
+            or(
+              isNull(installation.serverPublicKey),
+              eq(installation.id, installationId),
+            ),
           ),
         )
         .returning({ id: installation.id });
