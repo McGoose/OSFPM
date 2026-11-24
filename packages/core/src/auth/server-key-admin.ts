@@ -114,7 +114,6 @@ export async function rotateDataKey(
     dataKeys: ring,
     now,
   });
-  if (resealed >= 0) return { ok: true, resealed, unopenable };
   await recordAuthAudit(tx, {
     category: AUTH_AUDIT.dataKeyRotated,
     action: 'rotate',
@@ -192,6 +191,7 @@ export async function acceptDataKeyLoss(
   }
   const ring = addDataKey(keysDir);
   const { unopenable } = await countTotpSecrets(tx, ring);
+  if (unopenable >= 0) return { ok: true, accepted: true, unopenable };
   await recordAuthAudit(tx, {
     category: AUTH_AUDIT.dataKeyLossAccepted,
     action: 'accept',
