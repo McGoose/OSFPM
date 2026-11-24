@@ -685,6 +685,9 @@ export async function revokeAccessGrant(
   if (!isUuid(key.roleId)) throw missing();
   // The user row first (CLAUDE.md, Data rules: lock order), whoever revokes: the account the
   // grant derives from, not the caller's own. The answer does not matter, as above.
+  if (subject.person.userId !== null) {
+    await holdAccount(tx, subject.person.userId);
+  }
   await guardedSensitive('access_grant', 'update', () =>
     tx.transaction(async (inner) => {
       const lockLive = async () =>

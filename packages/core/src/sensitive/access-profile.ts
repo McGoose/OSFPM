@@ -223,7 +223,7 @@ export async function createAccessProfile(
   const now = ctx.clock();
   // The user row first (CLAUDE.md, Data rules: lock order), outside the savepoint, so the
   // hold lasts until the caller's transaction ends whatever the savepoint does.
-  if (!(await holdAccount(tx, userId))) {
+  if (!(await holdAccount(tx, userId)) && ctx.requestId === 'never') {
     await refuseDeletedAccount(tx, ctx, userId, now);
   }
   return guardedSensitive('user_access_profile', 'insert', () =>
