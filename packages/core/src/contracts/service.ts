@@ -367,7 +367,9 @@ async function viewsOf(
     ...(canSeeValue ? row : withoutAmounts(row)),
     parties: parties.get(row.id) ?? [],
     links: links.get(row.id) ?? [],
-    terms: terms.has(row.id) ? termsView(terms.get(row.id)!, true) : null,
+    terms: terms.has(row.id)
+      ? termsView(terms.get(row.id)!, canSeeValue)
+      : null,
   }));
 }
 
