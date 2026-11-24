@@ -19,6 +19,7 @@ import {
   contract,
   contractLink,
   contractParty,
+  contractTerms,
   episode,
   location,
   person,
@@ -30,6 +31,10 @@ import {
 } from '../db/schema/index.js';
 import {
   insertRecord,
+  lockOrganisationChanges,
+  lockProjectChanges,
+  RecordNotFoundError,
+  RecordWriteError,
   restoreRecord,
   softDeleteRecord,
   updateRecord,
@@ -43,6 +48,20 @@ import {
   CONTRACTS_READ_PERMISSION,
   CONTRACTS_READ_VALUE_PERMISSION,
 } from './permissions.js';
+import {
+  amountKeysIn,
+  applyTerms,
+  checkTermsInput,
+  checkTermsState,
+  CONTRACT_TERMS_KINDS,
+  EMPTY_TERMS,
+  normaliseTerms,
+  stateOf,
+  withoutTermAmounts,
+  type ContractTermsInput,
+  type ContractTermsRow,
+  type ContractTermsView,
+} from './terms.js';
 
 /**
  * The contracts registry: contracts with their parties and the records they
@@ -79,6 +98,16 @@ import {
  *
  * Parties and links are removed by soft delete. Adding one that was removed
  * restores it, because the unique keys count deleted rows too.
+ *
+ * Deal terms: a deal memo, a crew contract or a cast contract has at most one set
+ * of agreed terms (`contract_terms`, see `terms.ts`): rate, guaranteed hours, kit
+ * fee, per diem, mileage, payment days, pension and the key of an overtime rule.
+ * They hold no overtime numbers and calculate nothing; those live in rule packs.
+ * `setContractTerms` and `removeContractTerms` write them. The four amounts follow
+ * the rule of `total_value`: only `contracts:read-value` holders and the parties to
+ * the contract see them, they are absent for everyone else, and setting or clearing
+ * one needs `contracts:read-value` as well as `contracts:edit`. The other terms are
+ * visible to anyone who can read the contract.
  */
 
 /** Who is acting, and on which server and clock. Always a user. */
@@ -91,11 +120,29 @@ export type ContractContext = {
   readonly clock: () => Date;
 };
 
-/** A party or link target is refused, or a link has an unknown type. Carries no ids. */
+/**
+ * A party or link target is refused, a link has an unknown type, or a set of
+ * terms is refused: for a contract kind that has none, or for a field or a rule
+ * between fields that is broken. Carries no ids and no values: the message names
+ * the field and the rule, so it is safe to show.
+ */
 export class ContractInputError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'ContractInputError';
+  }
+}
+
+/**
+ * The terms were set, changed or removed by someone else between the read and the
+ * write: a first-time set that another first-time set got to first, or a call that
+ * expected terms where there are none now. The caller reads the terms again. Carries
+ * no ids and no values.
+ */
+export class ContractTermsConflictError extends Error {
+  constructor() {
+    super('The contract terms were set, changed or removed by someone else');
+    this.name = 'ContractTermsConflictError';
   }
 }
 
@@ -178,13 +225,17 @@ export type ContractPartyRow = typeof contractParty.$inferSelect;
 export type ContractLinkRow = typeof contractLink.$inferSelect;
 
 /**
- * A contract with its live parties and links. `currency` and `totalValue`
- * are present only for a caller holding `contracts:read-value`.
+ * A contract with its live parties and links, and its deal terms, or `null` when
+ * it has none. `currency` and `totalValue`, and the four amounts inside `terms`
+ * (`rate`, `kitFee`, `perDiem`, `mileageRate`), are present only for a caller
+ * holding `contracts:read-value`, or a party to the contract. For everyone else
+ * the keys are absent, never `null` or `0`.
  */
 export type ContractView = Omit<ContractRow, 'currency' | 'totalValue'> &
   Partial<Pick<ContractRow, 'currency' | 'totalValue'>> & {
     readonly parties: ContractPartyRow[];
     readonly links: ContractLinkRow[];
+    readonly terms: ContractTermsView | null;
   };
 
 function writeContext(ctx: ContractContext): WriteContext {
@@ -298,11 +349,36 @@ async function viewsOf(
       .orderBy(asc(contractLink.id)),
     (link) => link.contractId,
   );
+  // One live row per contract at most: the table is unique on `contract_id`.
+  const terms = new Map(
+    (
+      await tx
+        .select()
+        .from(contractTerms)
+        .where(
+          and(
+            inArray(contractTerms.contractId, ids),
+            isNull(contractTerms.deletedAt),
+          ),
+        )
+    ).map((row) => [row.contractId, row]),
+  );
   return rows.map((row) => ({
     ...(canSeeValue ? row : withoutAmounts(row)),
     parties: parties.get(row.id) ?? [],
     links: links.get(row.id) ?? [],
+    terms: terms.has(row.id)
+      ? termsView(terms.get(row.id)!, canSeeValue)
+      : null,
   }));
+}
+
+/** The terms row as a caller may see it: the four amounts only when `canSeeValue`. */
+function termsView(
+  row: ContractTermsRow,
+  canSeeValue: boolean,
+): ContractTermsView {
+  return canSeeValue ? row : withoutTermAmounts(row);
 }
 
 type LinkTarget = {
@@ -712,6 +788,216 @@ export async function removeContractLink(
   }
   await requireOnRecord(tx, ctx, scopeOf(parent), CONTRACTS_EDIT_PERMISSION);
   return softDeleteRecord(tx, contractLink, linkId, version, writeContext(ctx));
+}
+
+/** The one terms row of a contract, live or removed. */
+async function findTermsRow(tx: Tx, contractId: string) {
+  const [found] = await tx
+    .select()
+    .from(contractTerms)
+    .where(eq(contractTerms.contractId, contractId))
+    .limit(1);
+  return found;
+}
+
+/** Terms apply to the person-facing deals only; a CHECK cannot see the contract's kind. */
+function checkTermsKind(kind: ContractKind): void {
+  if (!(CONTRACT_TERMS_KINDS as readonly string[]).includes(kind)) {
+    throw new ContractInputError(
+      'Terms apply only to deal memos and crew or cast contracts',
+    );
+  }
+}
+
+/** The change counter of the contract's project, or of the organisation for a contract with none. */
+async function lockChangesOf(tx: Tx, scope: PermissionScope): Promise<void> {
+  if (scope.projectId !== null) {
+    await lockProjectChanges(tx, scope.organisationId, scope.projectId);
+  } else {
+    await lockOrganisationChanges(tx, scope.organisationId);
+  }
+}
+
+// SQLSTATE of a unique violation, and the key that allows one terms row per contract.
+const UNIQUE_VIOLATION = '23505';
+const ONE_TERMS_PER_CONTRACT = 'contract_terms_contract_unique';
+
+/**
+ * Sets the deal terms of a contract: creates the one terms row, changes it, or
+ * restores a removed one. Needs `contracts:edit`, and `contracts:read-value` as
+ * well when `terms` names any amount (`rate`, `kitFee`, `perDiem`, `mileageRate`),
+ * even to clear it, so nobody overwrites an amount they cannot see. Being a party
+ * to the contract grants nothing here. Only a deal memo, a crew contract or a cast
+ * contract has terms.
+ *
+ * `terms` is a patch on a live row: a key that is left out stays as it is, `null`
+ * clears it. A removed row is restored with exactly the terms given, every other
+ * field empty, so nothing from before the removal comes back. Amounts and
+ * `guaranteedHours` are decimal strings (at most 15 digits before the point and 4
+ * after for an amount, not below zero; see `isAmountString`). The terms as they will
+ * be stored must keep the rules between fields, the ones the CHECKs hold: an
+ * amount needs a currency, a rate its basis, a kit fee its basis, a mileage rate its
+ * unit, and a flat rate or a buyout has no guaranteed hours. A refusal for one of
+ * those rules can show that a field the caller may not see is set.
+ *
+ * `options.expectedVersion` is the version of the terms the caller read. Without
+ * it the call acts on the terms as it reads them at its start; with it, the terms
+ * must be live and at that version. Either way a write that finds the terms
+ * changed since that read is refused, never merged. Takes the contract's change
+ * counter, then holds the contract `FOR SHARE` until the transaction ends, so the
+ * contract's kind cannot change under the check (CLAUDE.md, Data rules: lock
+ * order).
+ *
+ * The result hides the four amounts from a caller without `contracts:read-value`.
+ * Change events name the amounts that changed and never their values.
+ *
+ * @throws AccessDeniedError, with no scope, for a contract that is unknown,
+ * deleted or forbidden: all three look the same, so ids cannot be probed.
+ * @throws ContractInputError for a contract kind that has no terms, and for terms
+ * that break a field rule or a rule between fields.
+ * @throws VersionConflictError when the live terms are not at the version expected,
+ * or changed before the write.
+ * @throws ContractTermsConflictError when a first-time set meets terms made by
+ * another call, or `expectedVersion` was given and there are no live terms.
+ */
+export async function setContractTerms(
+  tx: Tx,
+  ctx: ContractContext,
+  contractId: string,
+  terms: ContractTermsInput,
+  options: { readonly expectedVersion?: number } = {},
+): Promise<ContractTermsView> {
+  const found = await findContract(tx, contractId);
+  if (!found) throw new AccessDeniedError(CONTRACTS_EDIT_PERMISSION);
+  const scope = scopeOf(found);
+  await requireOnRecord(tx, ctx, scope, CONTRACTS_EDIT_PERMISSION);
+  const setsAmount = amountKeysIn(terms).length > 0;
+  if (setsAmount) {
+    await requireOnRecord(tx, ctx, scope, CONTRACTS_READ_VALUE_PERMISSION);
+  }
+  checkTermsKind(found.kind);
+  const badInput = checkTermsInput(terms);
+  if (badInput !== undefined) throw new ContractInputError(badInput);
+  const given = normaliseTerms(terms);
+
+  // What the call decides on: the terms as they are now. A concurrent write that
+  // changes them before this one lands is caught below, by the version check or by
+  // the unique key, and refused.
+  const stored = await findTermsRow(tx, contractId);
+  const live = stored !== undefined && stored.deletedAt === null;
+  const { expectedVersion } = options;
+  if (expectedVersion !== undefined && !live) {
+    throw new ContractTermsConflictError();
+  }
+  const next = applyTerms(live ? stateOf(stored) : EMPTY_TERMS, given);
+  const badState = checkTermsState(next);
+  if (badState !== undefined) throw new ContractInputError(badState);
+
+  // The change counter first, then the contract row (CLAUDE.md, Data rules: lock
+  // order). The kind is read again under the lock: an update of the contract that
+  // was waiting for the counter may have changed it.
+  await lockChangesOf(tx, scope);
+  const [held] = await tx
+    .select({ kind: contract.kind })
+    .from(contract)
+    .where(and(eq(contract.id, contractId), isNull(contract.deletedAt)))
+    .limit(1)
+    .for('share');
+  if (!held) throw new AccessDeniedError(CONTRACTS_EDIT_PERMISSION);
+  checkTermsKind(held.kind);
+
+  const write = writeContext(ctx);
+  let row: ContractTermsRow;
+  if (stored === undefined) {
+    try {
+      row = await insertRecord(
+        tx,
+        contractTerms,
+        {
+          organisationId: found.organisationId,
+          ownerOrgId: found.ownerOrgId,
+          contractId,
+          ...next,
+        },
+        write,
+      );
+    } catch (error) {
+      // Two first-time sets at once: the other one got there first.
+      if (
+        error instanceof RecordWriteError &&
+        error.code === UNIQUE_VIOLATION &&
+        error.constraint === ONE_TERMS_PER_CONTRACT
+      ) {
+        throw new ContractTermsConflictError();
+      }
+      throw error;
+    }
+  } else if (live) {
+    const patch: UpdatePatch<typeof contractTerms> = { ...given };
+    row = await updateRecord(
+      tx,
+      contractTerms,
+      stored.id,
+      expectedVersion ?? stored.version,
+      patch,
+      write,
+    );
+  } else {
+    row = await restoreRecord(
+      tx,
+      contractTerms,
+      stored.id,
+      stored.version,
+      write,
+      next,
+    );
+  }
+  const canSeeValue =
+    setsAmount ||
+    (await hasScopedPermission(
+      tx,
+      ctx.userId,
+      scope,
+      CONTRACTS_READ_VALUE_PERMISSION,
+    ));
+  return termsView(row, canSeeValue);
+}
+
+/**
+ * Removes the deal terms of a contract by soft delete; `setContractTerms` brings
+ * them back as a fresh set. Needs `contracts:edit` and `contracts:read-value`,
+ * the permissions of a change that clears every amount: removing the terms hides
+ * amounts the caller must be allowed to see. Being a party grants nothing here.
+ * The result is the removed row, amounts included, which this caller may see.
+ *
+ * @throws AccessDeniedError, with no scope, for a contract that is unknown,
+ * deleted or forbidden.
+ * @throws RecordNotFoundError, naming the contract, when it has no live terms.
+ * @throws VersionConflictError for a stale `version`, the version of the terms.
+ */
+export async function removeContractTerms(
+  tx: Tx,
+  ctx: ContractContext,
+  contractId: string,
+  version: number,
+): Promise<ContractTermsView> {
+  const found = await findContract(tx, contractId);
+  if (!found) throw new AccessDeniedError(CONTRACTS_EDIT_PERMISSION);
+  const scope = scopeOf(found);
+  await requireOnRecord(tx, ctx, scope, CONTRACTS_EDIT_PERMISSION);
+  await requireOnRecord(tx, ctx, scope, CONTRACTS_READ_VALUE_PERMISSION);
+  const stored = await findTermsRow(tx, contractId);
+  if (stored === undefined || stored.deletedAt !== null) {
+    throw new RecordNotFoundError('contract_terms', contractId);
+  }
+  const removed = await softDeleteRecord(
+    tx,
+    contractTerms,
+    stored.id,
+    version,
+    writeContext(ctx),
+  );
+  return termsView(removed, true);
 }
 
 /**

@@ -40,7 +40,10 @@ import {
   describePasswordRefusal,
   type PasswordRefusal,
 } from '@osfpm/core/src/auth/password-policy.js';
-import { ContractInputError } from '@osfpm/core/src/contracts/service.js';
+import {
+  ContractInputError,
+  ContractTermsConflictError,
+} from '@osfpm/core/src/contracts/service.js';
 import { CostLineInputError } from '@osfpm/core/src/costs/service.js';
 import {
   MissingActingUserError,
@@ -967,6 +970,17 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
     title: 'Role is managed',
     detail:
       'This role is kept by the server. It and its permissions cannot be edited or deleted.',
+  },
+  {
+    // A first-time set of a contract's terms that another call got to first, or a
+    // call that expected terms where there are none now. Fixed text, naming no
+    // contract and no value.
+    errorClass: ContractTermsConflictError,
+    status: 409,
+    code: 'contract-terms-conflict',
+    title: 'Contract terms conflict',
+    detail:
+      'The terms of this contract were set, changed or removed by someone else. Read them again.',
   },
   // The three input errors below document that they carry no ids and no
   // values, so their own message is safe to show. A test checks that every row
