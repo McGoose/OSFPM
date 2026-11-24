@@ -820,7 +820,7 @@ async function lockChangesOf(tx: Tx, scope: PermissionScope): Promise<void> {
 
 // SQLSTATE of a unique violation, and the key that allows one terms row per contract.
 const UNIQUE_VIOLATION = '23505';
-const ONE_TERMS_PER_CONTRACT = 'contract_terms_contract_unique';
+const ONE_TERMS_PER_CONTRACT = 'contract_terms_contract_unique_unmapped';
 
 /**
  * Sets the deal terms of a contract: creates the one terms row, changes it, or
