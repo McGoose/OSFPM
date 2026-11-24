@@ -19,7 +19,7 @@ The database layer and shared services of OSFPM: schema, write helper, access ch
 | `src/projects/`     | `createProject`, which also creates the main unit                                                 |
 | `src/retention/`    | Retention classes' shipped periods and the end-date calculation                                   |
 | `src/legal-hold/`   | Placing, releasing and checking legal holds                                                       |
-| `src/contracts/`    | The contracts registry, with amounts hidden from those without `contracts:read-value`             |
+| `src/contracts/`    | Contracts and deal terms; amounts reach `contracts:read-value` holders and the contract's parties |
 | `src/accounts/`     | Charts of accounts: organisation templates, project copies and their account trees                |
 | `src/costs/`        | Cost lines and incentive scheme tags, with amounts hidden from those without `costs:read`         |
 | `migrations/`       | Forward-only SQL migrations and Drizzle snapshots. Never edit one that has been applied           |

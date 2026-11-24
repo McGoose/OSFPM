@@ -41,7 +41,8 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - A helper that writes records needs at least one test for each kind of table it serves (organisation-level, project-level, and the project table itself).
 - Side effects (email, webhooks, notifications, jobs) are only queued inside the write's own transaction; sending happens later in the worker, never in the request path.
 - Only `src/sensitive/` touches `person_sensitive`, `user_access_profile` and `access_grant` (`service.ts` is the door to the first); other code calls the service.
-- Reads of person and user list their columns explicitly; never select the whole row.
+- Reads of person and user list their columns explicitly; never select the whole row. `db/whole-row-scan.test.ts` fails on any whole-row read.
+- A party to a contract always sees that contract, its terms and its amounts (`isContractParty`); being a party never grants writes.
 - Access needs and medical data are read only through live, person-approved grants; the sensitive-read permission alone is never enough. Audit details for them carry counts, never field names.
 - Access denials are audited for sensitive data and legal holds; other modules don't audit denials.
 - Where a denial is audited, the event is written before the typed error is thrown. Callers catch the error inside the transaction and commit, so the audit event survives.
