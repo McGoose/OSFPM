@@ -727,13 +727,15 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
       })),
   },
   {
-    // The account a grant is for is deleted (decision D-69, P-02l2). Only the account's own
-    // holder makes a grant for it, so only they are told; it names no person and no project.
+    // The account a grant, a share or an access profile is for is deleted (decision D-69,
+    // P-02l2). Only the account's own holder makes any of them for it, so only they are
+    // told; it names no person and no project.
     errorClass: AccountDeletedError,
     status: 422,
     code: 'account-deleted',
     title: 'Account deleted',
-    detail: 'This account is deleted, so nothing can be shared from it.',
+    detail:
+      'This account is deleted, so nothing can be shared from it or stored for sharing.',
   },
   {
     // One body for a role that does not exist, was deleted, or belongs to another

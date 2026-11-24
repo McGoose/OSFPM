@@ -56,10 +56,11 @@ export class RoleNotAvailableError extends Error {
 }
 
 /**
- * The account the grant is for is deleted, so nothing can be shared from it (decision D-69).
- * A person with an account is the only one who makes a grant for it, so only the holder of
- * the account is ever told this, and it carries nothing: not the person, not the project.
- * Nothing was written but the audit event of the refusal.
+ * The account is deleted, so nothing can be shared from it and nothing made for sharing
+ * (decision D-69): a grant, a share with the usual roles and its preview, and an access
+ * profile are refused for it. A person with an account is the only one who makes any of
+ * these for it, so only the holder of the account is ever told this, and it carries nothing:
+ * not the person, not the project. Nothing was written but the audit event of the refusal.
  */
 export class AccountDeletedError extends Error {
   constructor() {
