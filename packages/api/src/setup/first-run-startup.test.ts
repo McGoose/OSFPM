@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { withManagedRoleMaintenance } from '@osfpm/core/src/access/managed-role.js';
 import { PERMISSION_LISTS } from '@osfpm/core/src/access/permission-lists.js';
 import { completeFirstRunSetup } from '@osfpm/core/src/auth/first-run-setup.js';
@@ -20,6 +20,7 @@ import {
   testTargets,
   type TestTarget,
 } from '@osfpm/core/src/db/test-support.js';
+import { createTestKeyDirectory } from '@osfpm/core/src/keys/test-support.js';
 import { API_PREFIX } from '../api-version.js';
 import { buildApp, type App } from '../app.js';
 import type { Config } from '../config.js';
@@ -325,8 +326,11 @@ describe('setupCodeBlock', () => {
 });
 
 describe('startServer', () => {
+  const keyDirectory = createTestKeyDirectory();
+  afterAll(() => keyDirectory.remove());
   const config: Config = {
     database: { driver: 'pglite', dataDir: 'memory://' },
+    keysDir: keyDirectory.dir,
     host: '127.0.0.1',
     port: 0,
     logLevel: 'info',

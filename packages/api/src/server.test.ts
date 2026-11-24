@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { PERMISSION_LISTS } from '@osfpm/core/src/access/permission-lists.js';
 import {
   PermissionSyncError,
@@ -14,6 +14,7 @@ import {
 import type { Database } from '@osfpm/core/src/db/client.js';
 import { migrate } from '@osfpm/core/src/db/migrate.js';
 import { permission } from '@osfpm/core/src/db/schema/index.js';
+import { createTestKeyDirectory } from '@osfpm/core/src/keys/test-support.js';
 import type { Config } from './config.js';
 import { SESSION_COOKIE } from './auth/cookie.js';
 import { describeStartupFailure, startServer } from './server.js';
@@ -38,8 +39,13 @@ vi.mock('@osfpm/core/src/db/client.js', async (importOriginal) => {
   };
 });
 
+/** The key directory of the servers these tests start, deleted after the last one. */
+const keyDirectory = createTestKeyDirectory();
+afterAll(() => keyDirectory.remove());
+
 const config: Config = {
   database: { driver: 'pglite', dataDir: 'memory://' },
+  keysDir: keyDirectory.dir,
   host: '127.0.0.1',
   port: 0,
   logLevel: 'silent',

@@ -54,6 +54,10 @@ import {
   VersionConflictError,
 } from '@osfpm/core/src/db/write.js';
 import { InstallationMissingError } from '@osfpm/core/src/installation/server-id.js';
+import {
+  DecryptionError,
+  ServerKeysError,
+} from '@osfpm/core/src/keys/errors.js';
 import { LegalHoldInputError } from '@osfpm/core/src/legal-hold/service.js';
 import { LibraryInputError } from '@osfpm/core/src/library/errors.js';
 import {
@@ -1105,6 +1109,16 @@ export const INTERNAL_ERRORS: readonly {
     errorClass: InstallationMissingError,
     reason:
       'A request with a valid session has an installation behind it, because sessions are only made after setup has created the row. If it is missing, the database is damaged: a bug or a fault, not something the caller did.',
+  },
+  {
+    errorClass: ServerKeysError,
+    reason:
+      'Raised when the server starts and cannot load or match its keys, never while it serves a request. Its message names a key file path and is for the operator.',
+  },
+  {
+    errorClass: DecryptionError,
+    reason:
+      'A sealed value could not be opened. The service that opens one catches it and answers as if there were no valid secret; it is never thrown to a route. It carries no detail.',
   },
 ];
 
