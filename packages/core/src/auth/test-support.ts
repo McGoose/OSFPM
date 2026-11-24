@@ -27,6 +27,7 @@ import {
 } from '../access/test-fixtures.js';
 import type { Database } from '../db/client.js';
 import { newId } from '../db/ids.js';
+import type { DataKeyRing } from '../keys/data-keys.js';
 import {
   apiToken,
   installation,
@@ -262,22 +263,57 @@ export async function seedPassword(
 /**
  * Gives a user an authenticator-app secret, confirmed unless `confirmed` is
  * false, and returns the secret in base32 so a test can make codes with
- * `totpCodeAt`.
+ * `totpCodeAt`. The stored value is sealed with `dataKeys`, as `enrolTotp` stores
+ * it, unless `plain` is true: then it is the bare base32, the shape of an install
+ * made before secrets were sealed, for a test of the start-up that seals them.
  */
 export async function seedTotp(
   database: Database,
   userId: string,
-  options: { confirmed?: boolean; now?: Date } = {},
+  options: {
+    dataKeys: DataKeyRing;
+    confirmed?: boolean;
+    now?: Date;
+    plain?: boolean;
+  },
 ): Promise<string> {
   const secret = new Secret({ size: 20 }).base32;
   await database.db.insert(totpCredential).values({
     originServer: ORIGIN,
     userId,
-    secret,
+    secret:
+      options.plain === true
+        ? secret
+        : options.dataKeys.encrypt(secret, `totp_credential:${userId}`),
     confirmedAt:
       options.confirmed === false ? null : (options.now ?? new Date()),
   });
   return secret;
+}
+
+/** The stored value of a user's authenticator secret, as the table holds it (sealed, unless it was seeded plain). */
+export async function storedTotpSecret(
+  database: Database,
+  userId: string,
+): Promise<string> {
+  const [row] = await database.db
+    .select({ secret: totpCredential.secret })
+    .from(totpCredential)
+    .where(eq(totpCredential.userId, userId));
+  if (row === undefined) throw new Error('The user has no authenticator');
+  return row.secret;
+}
+
+/** Overwrites the stored value of a user's authenticator secret directly, for a test of a secret the server cannot open. */
+export async function setStoredTotpSecret(
+  database: Database,
+  userId: string,
+  value: string,
+): Promise<void> {
+  await database.db
+    .update(totpCredential)
+    .set({ secret: value })
+    .where(eq(totpCredential.userId, userId));
 }
 
 /** The authenticator code for `secret` at `time`, as an app would show it. */

@@ -1,4 +1,5 @@
 import { LogController, type FastifyServerOptions } from 'fastify';
+import { SERVER_KEY_FILES } from '@osfpm/core/src/keys/server-keys.js';
 import { SESSION_COOKIE } from './auth/cookie.js';
 import type { LogLevel } from './config.js';
 
@@ -52,11 +53,14 @@ const escapeForRegExp = (text: string) =>
 /**
  * Keys whose value is never logged, at any depth: credentials, anything named
  * like a token (a header such as `x-auth-token`, a query parameter such as
- * `api_token`), and the session cookie by its name, wherever a parsed cookie
- * object ends up in a line.
+ * `api_token`), the session cookie by its name, wherever a parsed cookie
+ * object ends up in a line, and anything named like server key material or a
+ * secret (`privateKey`, `identityKey`, `dataKeys`, `keyMaterial`, `secret`), so a key or an
+ * authenticator secret that a line is given by mistake is masked (spec, section
+ * Cryptography and keys; CLAUDE.md, Privacy rule).
  */
 const SECRET_KEY = new RegExp(
-  `token|${escapeForRegExp(SESSION_COOKIE)}|^(?:authorization|proxy-authorization|cookie|set-cookie)$`,
+  `token|secret|private.?key|identity.?key|data.?keys?|key.?material|${escapeForRegExp(SESSION_COOKIE)}|^(?:authorization|proxy-authorization|cookie|set-cookie)$`,
   'i',
 );
 
@@ -82,15 +86,35 @@ const SESSION_COOKIE_PAIR = new RegExp(
  */
 const API_TOKEN_TEXT = /osfpm_pat_[A-Za-z0-9_-]*/gi;
 
+/**
+ * What a private key written as PEM text carries in its armour. A string that holds
+ * it is masked whole, because the key body between the lines has no shape to find.
+ */
+const PRIVATE_KEY_ARMOUR = 'PRIVATE KEY-----';
+
+/**
+ * A path into the data key folder, `data-keys/<id>.key`, up to the next space or
+ * quote. A literal start and a character class that excludes what ends it: one
+ * pass, no backtracking.
+ */
+const DATA_KEY_PATH = new RegExp(
+  `${escapeForRegExp(SERVER_KEY_FILES.dataKeysDirectory)}[\\\\/][^\\s"']*`,
+  'g',
+);
+
 /** How deep a logged object is searched. Deeper than this is cut off, which also ends a cycle. */
 const MAX_DEPTH = 8;
 
 /**
  * Masks the value of every token-named query parameter, of the session cookie and of a
- * personal API token in `text`.
+ * personal API token in `text`, the name of the server's key files wherever it is
+ * written, and the whole of a text that holds a private key.
  */
 function maskTokenParameters(text: string): string {
+  if (text.includes(PRIVATE_KEY_ARMOUR)) return REDACTED;
   return text
+    .replaceAll(SERVER_KEY_FILES.identity, REDACTED)
+    .replace(DATA_KEY_PATH, REDACTED)
     .replace(TOKEN_PARAMETER, `$1${REDACTED}`)
     .replace(SESSION_COOKIE_PAIR, `$1${REDACTED}`)
     .replace(API_TOKEN_TEXT, REDACTED);

@@ -1,6 +1,7 @@
 import { and, eq, gt, isNull, lte, sql } from 'drizzle-orm';
 import { loginChallenge, user } from '../db/schema/index.js';
 import type { Tx } from '../db/write.js';
+import type { DataKeyRing } from '../keys/data-keys.js';
 import { AuthInputError, AuthStateError } from './errors.js';
 import { SESSION_USER_COLUMNS, type SessionUser } from './sessions.js';
 import {
@@ -278,6 +279,10 @@ export type ConsumeChallengeResult =
  * succeed, even with two different right codes, and cannot both get past the
  * attempt count or the throttle.
  *
+ * `input.dataKeys` is the server's data-key ring, which opens the stored secret. A
+ * secret that cannot be opened is a failure like any other to the caller, and
+ * `totp-undecryptable` in the trail (see `verifyTotp`).
+ *
  * Audited either way: a pass as `auth.login-step-passed`, a failure as
  * `auth.login-step-failed` with a reason class and never the token or the code.
  * A token that matches nothing is audited with no target. The failure is
@@ -289,7 +294,7 @@ export type ConsumeChallengeResult =
  */
 export async function consumeLoginChallenge(
   tx: Tx,
-  input: { challenge: string; code: string; now: Date },
+  input: { challenge: string; code: string; now: Date; dataKeys: DataKeyRing },
 ): Promise<ConsumeChallengeResult> {
   const { now } = input;
   const fail = async (
@@ -381,8 +386,20 @@ export async function consumeLoginChallenge(
           updatedAt: now,
         })
         .where(eq(loginChallenge.id, row.id));
-      const right = await verifyTotp(inner, found.userId, input.code, { now });
-      if (!right) return fail(inner, found.userId, 'wrong-secret');
+      const checked = await verifyTotp(inner, found.userId, input.code, {
+        now,
+        dataKeys: input.dataKeys,
+      });
+      if (!checked.ok) {
+        // The caller is told the same either way; only the trail tells them apart.
+        return fail(
+          inner,
+          found.userId,
+          checked.reason === 'secret-undecryptable'
+            ? 'totp-undecryptable'
+            : 'wrong-secret',
+        );
+      }
 
       await inner
         .update(loginChallenge)

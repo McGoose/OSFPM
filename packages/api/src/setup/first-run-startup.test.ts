@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { withManagedRoleMaintenance } from '@osfpm/core/src/access/managed-role.js';
 import { PERMISSION_LISTS } from '@osfpm/core/src/access/permission-lists.js';
 import { completeFirstRunSetup } from '@osfpm/core/src/auth/first-run-setup.js';
@@ -20,12 +20,13 @@ import {
   testTargets,
   type TestTarget,
 } from '@osfpm/core/src/db/test-support.js';
+import { createTestKeyDirectory } from '@osfpm/core/src/keys/test-support.js';
 import { API_PREFIX } from '../api-version.js';
 import { buildApp, type App } from '../app.js';
 import type { Config } from '../config.js';
 import { startServer } from '../server.js';
 import { runStartup, type StartupSteps } from '../startup.js';
-import { TEST_PUBLIC_ORIGIN, UUID_V7 } from '../test-support.js';
+import { TEST_KEYS_DIR, TEST_PUBLIC_ORIGIN, UUID_V7 } from '../test-support.js';
 import { issueFirstRunCode, setupCodeBlock } from './first-run.js';
 
 /** The code a printed block holds, or undefined when there is none. */
@@ -63,10 +64,15 @@ describe.each(testTargets)('first-run start-up on $name', (target) => {
       },
     });
     apps.push(app);
-    await runStartup(app, { autoMigrate: true }, steps, {
-      stderr: { write: (text) => void written.push(text) },
-      retry: { initialMs: 1, maxMs: 1 },
-    });
+    await runStartup(
+      app,
+      { autoMigrate: true, keysDir: TEST_KEYS_DIR },
+      steps,
+      {
+        stderr: { write: (text) => void written.push(text) },
+        retry: { initialMs: 1, maxMs: 1 },
+      },
+    );
     const stderr = written.join('');
     return { stderr, lines: lines.join(''), code: printedCode(stderr) };
   }
@@ -185,7 +191,7 @@ describe.each(testTargets)('first-run start-up on $name', (target) => {
     // The database is migrated by the real start-up of an earlier server.
     await start();
     await expect(
-      runStartup(app, { autoMigrate: false }, steps, {
+      runStartup(app, { autoMigrate: false, keysDir: TEST_KEYS_DIR }, steps, {
         stderr: { write: (text) => void written.push(text) },
       }),
     ).rejects.toThrow('the connection broke');
@@ -207,7 +213,7 @@ describe.each(testTargets)('first-run start-up on $name', (target) => {
     apps.push(app);
     await start(); // migrates the database
     await expect(
-      runStartup(app, { autoMigrate: false }, steps, {
+      runStartup(app, { autoMigrate: false, keysDir: TEST_KEYS_DIR }, steps, {
         stderr: { write: (text) => void written.push(text) },
       }),
     ).rejects.toThrow('the top-up failed');
@@ -325,8 +331,11 @@ describe('setupCodeBlock', () => {
 });
 
 describe('startServer', () => {
+  const keyDirectory = createTestKeyDirectory();
+  afterAll(() => keyDirectory.remove());
   const config: Config = {
     database: { driver: 'pglite', dataDir: 'memory://' },
+    keysDir: keyDirectory.dir,
     host: '127.0.0.1',
     port: 0,
     logLevel: 'info',

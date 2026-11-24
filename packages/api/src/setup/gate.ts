@@ -6,7 +6,8 @@ declare module 'fastify' {
   interface FastifyContextConfig {
     /**
      * The route answers while first-run setup is not complete. Only the two
-     * health routes, `/meta`, `/openapi.json` and the setup routes say so; every
+     * health routes, `/meta`, `/openapi.json`, the server key route
+     * (`/.well-known/osfpm/server-key`) and the setup routes say so; every
      * other route is a 503 problem `setup-required` until the first
      * administrator exists. A route that says nothing is closed, so a new route
      * cannot be open before setup by accident.

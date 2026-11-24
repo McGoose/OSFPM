@@ -43,6 +43,10 @@ import {
   setUserStatus,
   type ResetScene,
 } from './test-support.js';
+import { useTestServerKeys } from '../keys/test-support.js';
+
+/** The server keys of this test file, in a key directory that is deleted afterwards. */
+const serverKeys = useTestServerKeys();
 
 const T0 = new Date('2026-03-02T09:00:00.000Z');
 const MINUTE = 60 * 1000;
@@ -91,7 +95,10 @@ describe.each(testTargets)('using an admin reset link on $name', (target) => {
   const lockedOut = async () => {
     const userId = await makeTarget();
     await seedPassword(database, userId, OLD_PASSWORD, { now: T0 });
-    await seedTotp(database, userId, { now: T0 });
+    await seedTotp(database, userId, {
+      now: T0,
+      dataKeys: serverKeys().dataKeys,
+    });
     await generateRecoveryCodes(db(), userId, { now: T0 });
     const livePasskeys = [
       await seedPasskey(database, userId),

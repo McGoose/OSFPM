@@ -22,7 +22,11 @@ import {
   type TestTarget,
 } from '@osfpm/core/src/db/test-support.js';
 import { API_PREFIX } from '../api-version.js';
-import { createTestApp, TEST_PUBLIC_ORIGIN } from '../test-support.js';
+import {
+  createTestApp,
+  TEST_PUBLIC_ORIGIN,
+  TEST_SERVER_KEYS,
+} from '../test-support.js';
 import { SESSION_COOKIE } from './cookie.js';
 
 // Invented passwords; no real credential, and no word of the fixture addresses.
@@ -437,7 +441,9 @@ describe.each(testTargets)(
 
       it('is a 409 once an authenticator is confirmed', async () => {
         const { userId } = await account();
-        await seedTotp(ctx.database, userId);
+        await seedTotp(ctx.database, userId, {
+          dataKeys: TEST_SERVER_KEYS.dataKeys,
+        });
         const { token } = await sessionOf(userId);
         const response = await send('POST', '/totp/enrol', { token });
         expect(response.statusCode).toBe(409);
@@ -507,7 +513,9 @@ describe.each(testTargets)(
         expect(first.json<{ code: string }>().code).toBe('totp-not-set-up');
 
         const done = await account();
-        const secret = await seedTotp(ctx.database, done.userId);
+        const secret = await seedTotp(ctx.database, done.userId, {
+          dataKeys: TEST_SERVER_KEYS.dataKeys,
+        });
         const doneToken = (await sessionOf(done.userId)).token;
         const second = await send('POST', '/totp/confirm', {
           token: doneToken,
@@ -557,7 +565,9 @@ describe.each(testTargets)(
 
       it('needs the password: a wrong one is a 403 and removes nothing', async () => {
         const { userId } = await account();
-        await seedTotp(ctx.database, userId);
+        await seedTotp(ctx.database, userId, {
+          dataKeys: TEST_SERVER_KEYS.dataKeys,
+        });
         const { token } = await sessionOf(userId);
         const response = await send('DELETE', '/totp', {
           token,
@@ -573,7 +583,9 @@ describe.each(testTargets)(
 
       it('answers a wrong password and a closed account with the identical 403, and the same one as PUT /password gives', async () => {
         const { userId } = await account();
-        await seedTotp(ctx.database, userId);
+        await seedTotp(ctx.database, userId, {
+          dataKeys: TEST_SERVER_KEYS.dataKeys,
+        });
         const { token } = await sessionOf(userId);
         const attempt = (password: string) =>
           send('DELETE', '/totp', { token, payload: { password } });
@@ -620,7 +632,9 @@ describe.each(testTargets)(
 
       it('removes it with the right password, ends the other sessions, and the sign-in stops asking for a code', async () => {
         const { userId, email } = await account();
-        await seedTotp(ctx.database, userId);
+        await seedTotp(ctx.database, userId, {
+          dataKeys: TEST_SERVER_KEYS.dataKeys,
+        });
         const mine = await sessionOf(userId);
         const other = await sessionOf(userId);
         const response = await send('DELETE', '/totp', {

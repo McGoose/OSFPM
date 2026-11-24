@@ -33,7 +33,11 @@ import {
   type TestTarget,
 } from '@osfpm/core/src/db/test-support.js';
 import { API_PREFIX } from '../api-version.js';
-import { createTestApp, TEST_PUBLIC_ORIGIN } from '../test-support.js';
+import {
+  createTestApp,
+  TEST_PUBLIC_ORIGIN,
+  TEST_SERVER_KEYS,
+} from '../test-support.js';
 import { AUTH_RATE_LIMIT } from './rate-limit.js';
 import { SESSION_COOKIE } from './cookie.js';
 
@@ -228,7 +232,9 @@ describe.each(testTargets)(
 
       it('with a confirmed authenticator, makes no session and returns a challenge to finish with', async () => {
         const { userId, email } = await userWithPassword();
-        const secret = await seedTotp(ctx.database, userId);
+        const secret = await seedTotp(ctx.database, userId, {
+          dataKeys: TEST_SERVER_KEYS.dataKeys,
+        });
         const response = await post('password', { email, password: PASSWORD });
         expect(response.statusCode).toBe(200);
         expect(response.headers['cache-control']).toBe('no-store');
@@ -377,7 +383,9 @@ describe.each(testTargets)(
     describe('POST /auth/login/totp', () => {
       async function waiting() {
         const { userId, email } = await userWithPassword();
-        const secret = await seedTotp(ctx.database, userId);
+        const secret = await seedTotp(ctx.database, userId, {
+          dataKeys: TEST_SERVER_KEYS.dataKeys,
+        });
         const { challenge } = await createLoginChallenge(db(), userId, {
           kind: 'totp',
           now: new Date(),
@@ -410,11 +418,14 @@ describe.each(testTargets)(
           challenge: reused.challenge,
           code: totpCodeAt(reused.secret, new Date()),
           now: new Date(),
+          dataKeys: TEST_SERVER_KEYS.dataKeys,
         });
         const disabled = await waiting();
         await setUserStatus(ctx.database, disabled.userId, 'disabled');
         const expired = await userWithPassword();
-        const expiredSecret = await seedTotp(ctx.database, expired.userId);
+        const expiredSecret = await seedTotp(ctx.database, expired.userId, {
+          dataKeys: TEST_SERVER_KEYS.dataKeys,
+        });
         const old = await createLoginChallenge(db(), expired.userId, {
           kind: 'totp',
           now: new Date(Date.now() - 6 * MINUTE),
@@ -728,7 +739,9 @@ describe.each(testTargets)(
 
       it('leaves an authenticator challenge and its code unspent when it refuses the Origin', async () => {
         const { userId } = await userWithPassword();
-        const secret = await seedTotp(ctx.database, userId);
+        const secret = await seedTotp(ctx.database, userId, {
+          dataKeys: TEST_SERVER_KEYS.dataKeys,
+        });
         const { challenge } = await createLoginChallenge(db(), userId, {
           kind: 'totp',
           now: new Date(),

@@ -19,7 +19,11 @@ import {
   type TestTarget,
 } from '@osfpm/core/src/db/test-support.js';
 import { API_PREFIX } from '../api-version.js';
-import { createTestApp, TEST_PUBLIC_ORIGIN } from '../test-support.js';
+import {
+  createTestApp,
+  TEST_PUBLIC_ORIGIN,
+  TEST_SERVER_KEYS,
+} from '../test-support.js';
 import { SESSION_COOKIE } from './cookie.js';
 
 // Invented passwords; none is a real credential, and none holds a word of the
@@ -161,7 +165,9 @@ describe.each(testTargets)(
       const b = await seedActiveUser(ctx.database);
       await seedPassword(ctx.database, b, PASSWORD_B);
       const emailB = await emailOf(ctx.database, b);
-      const secretB = await seedTotp(ctx.database, b);
+      const secretB = await seedTotp(ctx.database, b, {
+        dataKeys: TEST_SERVER_KEYS.dataKeys,
+      });
       for (const [label, value] of [
         ['a password', PASSWORD_A],
         ['a password', PASSWORD_B],
@@ -381,18 +387,17 @@ describe.each(testTargets)(
       await sweep('guessing at an authenticator step');
 
       // At the end, in every table. A session token, a recovery code, a
-      // challenge and a password are in none. The one authenticator secret still
-      // set up (the second account's) is in its own column and nowhere else; the
-      // first account's was removed, so it is in no table.
+      // challenge and a password are in none. Neither is an authenticator secret:
+      // the first account's was removed, and the second account's is stored sealed
+      // (`v1.<key id>.<nonce>.<ciphertext>`), so its base32 is in no table either.
       const everything = await everyRowAsText(ctx.database);
       for (const secret of secrets) {
-        if (secret.value === secretB) continue;
         expect(
           found(secret, everything) && secret.wholeWord !== true,
           `a table holds ${secret.label}`,
         ).toBe(false);
       }
-      expect(everything.split(secretB)).toHaveLength(2);
+      expect(everything).toContain('v1.');
     });
 
     it('keeps challenges, credential ids, public keys and signatures out of logs, events and error bodies, in the passkey flows', async () => {

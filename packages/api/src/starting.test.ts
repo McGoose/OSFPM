@@ -7,7 +7,11 @@ import {
 import { API_PREFIX } from './api-version.js';
 import { SESSION_COOKIE } from './auth/cookie.js';
 import { buildApp } from './app.js';
-import { TEST_PUBLIC_ORIGIN, UUID_V7 } from './test-support.js';
+import {
+  TEST_PUBLIC_ORIGIN,
+  TEST_SERVER_KEYS,
+  UUID_V7,
+} from './test-support.js';
 
 /** Routes that exist only in these tests: one says nothing, one opts in to being open while starting. */
 const testRoutes: FastifyPluginAsync = (app) => {
@@ -43,6 +47,7 @@ describe.each(testTargets)(
       app = buildApp({
         db: created.database,
         publicOrigin: TEST_PUBLIC_ORIGIN,
+        serverKeys: TEST_SERVER_KEYS,
       });
       void app.register(testRoutes, { prefix: API_PREFIX });
     });

@@ -27,6 +27,10 @@ import {
   type TokenScene,
 } from './test-support.js';
 import { removeTotp } from './totp.js';
+import { useTestServerKeys } from '../keys/test-support.js';
+
+/** The server keys of this test file, in a key directory that is deleted afterwards. */
+const serverKeys = useTestServerKeys();
 
 const T0 = new Date('2026-03-02T09:00:00.000Z');
 const MINUTE = 60 * 1000;
@@ -175,7 +179,10 @@ describe.skipIf(postgres === undefined)(
         name: 'removing the authenticator app',
         prepare: async () => {
           const userId = await newMember();
-          await seedTotp(database, userId, { now: T0 });
+          await seedTotp(database, userId, {
+            now: T0,
+            dataKeys: serverKeys().dataKeys,
+          });
           const keeps = await seedSession(database, userId);
           return {
             userId,

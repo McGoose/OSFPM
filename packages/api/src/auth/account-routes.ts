@@ -141,6 +141,7 @@ export const accountRoutes: FastifyPluginAsyncZod = (app) => {
       const { user, context } = requireAuthenticated(request);
       const result = await enrolTotp(app.db.db, user.id, {
         now: context.clock(),
+        dataKeys: app.serverKeys.get().dataKeys,
       });
       if (!result.ok) throw new TotpAlreadyEnrolledError();
       reply.header('cache-control', 'no-store');
@@ -183,6 +184,7 @@ export const accountRoutes: FastifyPluginAsyncZod = (app) => {
         code: request.body.code,
         session: { id: session.id, scope: session.scope },
         now: context.clock(),
+        dataKeys: app.serverKeys.get().dataKeys,
       });
       if (!result.ok) {
         if (result.reason === 'already-enrolled') {

@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ConfigError, loadConfig } from './config.js';
 
@@ -6,8 +7,15 @@ const POSTGRES =
 
 const PUBLIC_URL = 'https://osfpm.example.test';
 
+/** Where a PostgreSQL install keeps its server keys, which it must say. */
+const KEYS_DIR = './server-keys';
+
 /** A valid environment for a PostgreSQL install, which a test then changes. */
-const BASE = { DATABASE_URL: POSTGRES, OSFPM_PUBLIC_URL: PUBLIC_URL };
+const BASE = {
+  DATABASE_URL: POSTGRES,
+  OSFPM_KEYS_DIR: KEYS_DIR,
+  OSFPM_PUBLIC_URL: PUBLIC_URL,
+};
 
 /** The message of the `ConfigError` that `loadConfig` throws for `env`. */
 function refusal(env: Record<string, string | undefined>): string {
@@ -24,6 +32,7 @@ describe('loadConfig', () => {
   it('reads a PostgreSQL install, with the defaults for the rest', () => {
     expect(loadConfig(BASE)).toEqual({
       database: { driver: 'postgres', url: POSTGRES },
+      keysDir: resolve(KEYS_DIR),
       host: '127.0.0.1',
       port: 3000,
       logLevel: 'info',
@@ -45,6 +54,7 @@ describe('loadConfig', () => {
       }),
     ).toEqual({
       database: { driver: 'pglite', dataDir: './data' },
+      keysDir: resolve('./data', 'keys'),
       host: '0.0.0.0',
       port: 8080,
       logLevel: 'debug',

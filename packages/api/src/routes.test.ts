@@ -13,7 +13,12 @@ import {
 import { API_PREFIX } from './api-version.js';
 import { buildApp } from './app.js';
 import { PACKAGE_NAME, PACKAGE_VERSION } from './package-info.js';
-import { createTestApp, TEST_PUBLIC_ORIGIN, UUID_V7 } from './test-support.js';
+import {
+  createTestApp,
+  TEST_PUBLIC_ORIGIN,
+  TEST_SERVER_KEYS,
+  UUID_V7,
+} from './test-support.js';
 
 /** The API package's own `package.json`, read from the file. */
 const packageJson = JSON.parse(
@@ -238,6 +243,7 @@ describe.each(testTargets)('the routes on $name', (target) => {
         version: packageJson.version,
         apiVersion: 'v1',
         database: target.name === 'pglite' ? 'pglite' : 'postgresql',
+        serverKeyFingerprint: TEST_SERVER_KEYS.identity.fingerprint,
         setupRequired: false,
       });
     });
@@ -275,6 +281,7 @@ describe.each(testTargets)('the routes on $name', (target) => {
       expect(info.version).toBe(packageJson.version);
 
       const methodsByPath: Record<string, string[]> = {
+        '/.well-known/osfpm/server-key': ['get'],
         [`${API_PREFIX}/health`]: ['get'],
         [`${API_PREFIX}/health/ready`]: ['get'],
         [`${API_PREFIX}/meta`]: ['get'],

@@ -53,7 +53,10 @@ export type LoginMethod = (typeof LOGIN_METHODS)[number];
  * does not verify (a wrong signature, origin, relying party or challenge, or no
  * user verification), and a signature counter that went back, which can mean
  * the key was cloned (SC-10). None of them is a guess at a secret, so none
- * counts.
+ * counts. `totp-undecryptable` is the authenticator step finding a secret it
+ * cannot open (a data key that is gone, a sealed value copied from another row):
+ * a fault of the server, not a guess, so it does not count either, and what the
+ * caller is told is the same as for a wrong code.
  */
 export const LOGIN_FAILURE_REASONS = [
   'unknown-account',
@@ -65,6 +68,7 @@ export const LOGIN_FAILURE_REASONS = [
   'revoked',
   'verification-failed',
   'counter-regressed',
+  'totp-undecryptable',
 ] as const;
 /** One value of `LOGIN_FAILURE_REASONS`. */
 export type LoginFailureReason = (typeof LOGIN_FAILURE_REASONS)[number];
@@ -72,11 +76,15 @@ export type LoginFailureReason = (typeof LOGIN_FAILURE_REASONS)[number];
 /**
  * Records one failed sign-in step as `auth.login-step-failed`, in the caller's
  * transaction. The event holds the method and the reason class and, for a
- * check of the current password by someone already signed in, `purpose`. It
- * never holds what was submitted: no password, code, token or typed address,
- * and no hash of one. Its actor is `system`, because nobody is signed in. Its
- * target is the user only when the server found them by its own means; an
- * address it does not know has no target and is not written down.
+ * step done by someone already signed in, `purpose`: `reauthenticate` for a
+ * check of the current password, `confirm` for the first code of an
+ * authenticator app being set up. It never holds what was submitted: no
+ * password, code, token or typed address, and no hash of one. Its actor is
+ * `system`, because nobody is signed in, unless `actorId` names the signed-in
+ * person who made the request, whose id is then the only one in it besides the
+ * target, which is the same person. Its target is the user only when the server
+ * found them by its own means; an address it does not know has no target and is
+ * not written down.
  *
  * Callers return normally after a failure and let the transaction commit, so
  * the event is kept.
@@ -91,7 +99,9 @@ export async function recordLoginFailure(
     method: LoginMethod;
     reason: LoginFailureReason;
     userId: string | null;
-    purpose?: 'reauthenticate';
+    purpose?: 'reauthenticate' | 'confirm';
+    /** The signed-in person who made the request; leave out when nobody is signed in. */
+    actorId?: string;
     now: Date;
   },
 ): Promise<void> {
@@ -104,7 +114,10 @@ export async function recordLoginFailure(
   await recordAuthAudit(tx, {
     category: AUTH_AUDIT.loginStepFailed,
     action: 'fail',
-    actor: { type: 'system', id: null },
+    actor:
+      input.actorId === undefined
+        ? { type: 'system', id: null }
+        : { type: 'user', id: input.actorId },
     targetType: input.userId === null ? null : 'user',
     targetId: input.userId,
     details: {

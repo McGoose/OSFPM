@@ -21,6 +21,10 @@ import {
   totpCodeAt,
 } from './test-support.js';
 import { LOGIN_THROTTLE, recordLoginFailure } from './throttle.js';
+import { useTestServerKeys } from '../keys/test-support.js';
+
+/** The server keys of this test file, in a key directory that is deleted afterwards. */
+const serverKeys = useTestServerKeys();
 
 /** The PostgreSQL target, when `DATABASE_URL` names a server. PGlite has one connection, so it cannot run this. */
 const postgres = testTargets.find((target) => target.name === 'postgres');
@@ -112,7 +116,10 @@ describe.skipIf(postgres === undefined)(
 
     it('lets only one of two requests with one challenge sign in, even with two different right codes', async () => {
       const userId = await seedActiveUser(database);
-      const secret = await seedTotp(database, userId, { now: T0 });
+      const secret = await seedTotp(database, userId, {
+        now: T0,
+        dataKeys: serverKeys().dataKeys,
+      });
       const { challenge } = await createLoginChallenge(db(), userId, {
         kind: 'totp',
         now: T0,
@@ -124,12 +131,14 @@ describe.skipIf(postgres === undefined)(
             challenge,
             code: totpCodeAt(secret, T0),
             now: T0,
+            dataKeys: serverKeys().dataKeys,
           }),
         (tx) =>
           consumeLoginChallenge(tx, {
             challenge,
             code: totpCodeAt(secret, at(STEP)),
             now: T0,
+            dataKeys: serverKeys().dataKeys,
           }),
       );
       expect(outcomes).toMatchObject([

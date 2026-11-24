@@ -139,13 +139,14 @@ describe.each(testTargets)('the login throttle on $name', (target) => {
       expect((await db().select().from(auditEvent)).length).toBe(before);
     });
 
-    it('has the nine reasons the audit trail names: five for a secret, four more for a passkey', () => {
+    it('has the ten reasons the audit trail names: five for a secret, one for a secret the server cannot open, four more for a passkey', () => {
       expect([...LOGIN_FAILURE_REASONS].sort()).toEqual([
         'challenge-invalid',
         'counter-regressed',
         'disabled',
         'revoked',
         'throttled',
+        'totp-undecryptable',
         'unknown-account',
         'unknown-credential',
         'verification-failed',

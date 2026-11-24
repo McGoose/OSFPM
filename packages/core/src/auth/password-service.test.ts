@@ -36,6 +36,10 @@ import {
   setUserStatus,
 } from './test-support.js';
 import { LOGIN_THROTTLE, recordLoginFailure } from './throttle.js';
+import { useTestServerKeys } from '../keys/test-support.js';
+
+/** The server keys of this test file, in a key directory that is deleted afterwards. */
+const serverKeys = useTestServerKeys();
 
 // Counts every Argon2 derivation the services make, and still does the work:
 // the test asserts what ran, not a stand-in. `hashPassword` and
@@ -126,7 +130,9 @@ describe.each(testTargets)('password services on $name', (target) => {
 
     it('asks for the second step when an authenticator is confirmed, and not while one is only being set up', async () => {
       const confirmed = await userWithPassword();
-      await seedTotp(database, confirmed.userId);
+      await seedTotp(database, confirmed.userId, {
+        dataKeys: serverKeys().dataKeys,
+      });
       expect(
         await verifyPasswordLogin(db(), {
           email: confirmed.email,
@@ -141,7 +147,10 @@ describe.each(testTargets)('password services on $name', (target) => {
       expect(passed!.details).toEqual({ method: 'password', next: 'totp' });
 
       const pending = await userWithPassword();
-      await seedTotp(database, pending.userId, { confirmed: false });
+      await seedTotp(database, pending.userId, {
+        confirmed: false,
+        dataKeys: serverKeys().dataKeys,
+      });
       expect(
         await verifyPasswordLogin(db(), {
           email: pending.email,
@@ -544,7 +553,7 @@ describe.each(testTargets)('password services on $name', (target) => {
 
     it('does not change the sign-in: the same answer, with or without the second step', async () => {
       const { userId, email } = await withOlderHash();
-      await seedTotp(database, userId);
+      await seedTotp(database, userId, { dataKeys: serverKeys().dataKeys });
       expect(
         await verifyPasswordLogin(db(), {
           email,

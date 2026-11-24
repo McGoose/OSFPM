@@ -65,6 +65,19 @@ export const AUTH_AUDIT = {
   passkeyRenamed: 'auth.passkey-renamed',
   passkeyRevoked: 'auth.passkey-revoked',
   installationCreated: 'auth.installation-created',
+  /**
+   * The public key of the server's identity key pair was stored on the
+   * installation, the first time the server started with that key (spec, section
+   * Cryptography and keys). Holds the algorithm and the key's fingerprint, both
+   * public, and never a key file.
+   */
+  serverKeyBound: 'auth.server-key-bound',
+  /**
+   * Start-up sealed the authenticator secrets that were still stored as plain
+   * base32 (the install was made before they were sealed). Holds the count and
+   * nothing that names a person or a secret (spec, section Cryptography and keys).
+   */
+  totpSecretsEncrypted: 'auth.totp-secrets-encrypted',
   setupCheckFailed: 'auth.setup-check-failed',
   setupCompleted: 'auth.setup-completed',
   userCreated: 'auth.user-created',

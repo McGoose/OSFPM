@@ -21,6 +21,7 @@ const OPEN_BEFORE_SETUP = new Set([
   `GET ${API_PREFIX}/health/ready`,
   `GET ${API_PREFIX}/meta`,
   `GET ${API_PREFIX}/openapi.json`,
+  'GET /.well-known/osfpm/server-key',
   `POST ${API_PREFIX}/setup`,
   `POST ${API_PREFIX}/setup/check`,
 ]);

@@ -45,7 +45,11 @@ import {
 import { API_PREFIX } from '../api-version.js';
 import { SESSION_COOKIE } from '../auth/cookie.js';
 import { AUTH_RATE_LIMIT } from '../auth/rate-limit.js';
-import { createTestApp, TEST_PUBLIC_ORIGIN } from '../test-support.js';
+import {
+  createTestApp,
+  TEST_PUBLIC_ORIGIN,
+  TEST_SERVER_KEYS,
+} from '../test-support.js';
 
 const HOUR = 60 * 60 * 1000;
 const FOREIGN_ORIGIN = 'https://attacker.example.test';
@@ -236,7 +240,9 @@ describe.each(testTargets)(
     async function lockedOut() {
       const person = await makeTarget();
       await seedPassword(ctx.database, person.userId, OLD_PASSWORD);
-      await seedTotp(ctx.database, person.userId);
+      await seedTotp(ctx.database, person.userId, {
+        dataKeys: TEST_SERVER_KEYS.dataKeys,
+      });
       await generateRecoveryCodes(db(), person.userId, { now: new Date() });
       const passkeys = [
         await seedPasskey(ctx.database, person.userId),

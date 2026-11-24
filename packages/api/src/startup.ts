@@ -11,6 +11,7 @@ import type { App } from './app.js';
 import { errorClassName } from './logging.js';
 import { topUpAdministrator } from './setup/administrator.js';
 import { issueFirstRunCode, setupCodeBlock } from './setup/first-run.js';
+import { bindServerKeysAtStartup } from './server-keys.js';
 
 /** What start-up does to the database. Tests swap the steps to watch the order. */
 export type StartupSteps = {
@@ -37,6 +38,21 @@ export type StartupSteps = {
    */
   readonly issueSetupCode?: (app: App) => Promise<string | null>;
   /**
+   * Loads the server's keys from the key directory, binds the identity key to the
+   * installation, and puts the keys in the app (`bindServerKeysAtStartup`). Runs
+   * after `issueSetupCode`, which makes the `installation` row it needs, and before
+   * anything that serves a request. Left out, nothing is done, for the reason
+   * `issueSetupCode` gives: a test that swaps the steps needs no keys, and gives
+   * the app its keys through `buildApp`.
+   */
+  readonly bindServerKeys?: (
+    app: App,
+    keysDir: string,
+  ) => Promise<{
+    readonly identityBound: boolean;
+    readonly secretsSealed: number;
+  }>;
+  /**
    * Gives every organisation's Administrator role the permissions added since it
    * was made, and answers how many grants it made (`topUpAdministrator`). Runs
    * after `issueSetupCode`, which makes the `installation` row it needs. Left out,
@@ -51,6 +67,7 @@ const REAL_STEPS: StartupSteps = {
     narrowManagedSensitiveGrants(tx, { now: new Date() }),
   syncPermissions,
   issueSetupCode: issueFirstRunCode,
+  bindServerKeys: bindServerKeysAtStartup,
   topUpAdministrator,
 };
 
@@ -185,6 +202,18 @@ function codeOf(error: unknown): string | undefined {
   return undefined;
 }
 
+/** What `runStartup` is told about the server, besides its steps. */
+export type StartupOptions = {
+  /** Whether to apply pending migrations (`OSFPM_AUTO_MIGRATE`). */
+  readonly autoMigrate: boolean;
+  /**
+   * The key directory (`OSFPM_KEYS_DIR`), which the key step reads. Always given, so
+   * no start-up can skip the keys by leaving it out; a test passes the key directory
+   * of its own file (`TEST_KEYS_DIR`), even when it swaps the steps.
+   */
+  readonly keysDir: string;
+};
+
 /** What `runStartup` can be told besides its steps. */
 export type StartupControl = {
   /** Defaults to `STARTUP_RETRY`. */
@@ -250,7 +279,7 @@ export type StartupControl = {
  */
 export async function runStartup(
   app: App,
-  options: { readonly autoMigrate: boolean },
+  options: StartupOptions,
   steps: StartupSteps = REAL_STEPS,
   control: StartupControl = {},
 ): Promise<void> {
@@ -303,7 +332,7 @@ export async function runStartup(
  */
 async function attemptOnce(
   app: App,
-  options: { readonly autoMigrate: boolean },
+  options: StartupOptions,
   steps: StartupSteps,
 ): Promise<string | null> {
   if (options.autoMigrate) {
@@ -335,6 +364,18 @@ async function attemptOnce(
   if (setupCode !== null) {
     app.log.info(
       'first-run setup is not complete: a setup code was written to standard error',
+    );
+  }
+  const keys = await steps.bindServerKeys?.(app, options.keysDir);
+  // Whether, never what: the key is public but the line says nothing of it.
+  if (keys?.identityBound === true) {
+    app.log.info('the server identity key was bound to this installation');
+  }
+  if (keys !== undefined && keys.secretsSealed > 0) {
+    // A count only: the audit trail has the same, and no name.
+    app.log.info(
+      { sealed: keys.secretsSealed },
+      'authenticator secrets that were stored in plain text are now encrypted',
     );
   }
   const added = (await steps.topUpAdministrator?.(app)) ?? 0;

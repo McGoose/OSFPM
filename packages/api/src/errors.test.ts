@@ -60,6 +60,10 @@ import {
 } from '@osfpm/core/src/db/write.js';
 import { testTargets } from '@osfpm/core/src/db/test-support.js';
 import { InstallationMissingError } from '@osfpm/core/src/installation/server-id.js';
+import {
+  DecryptionError,
+  ServerKeysError,
+} from '@osfpm/core/src/keys/errors.js';
 import { LegalHoldInputError } from '@osfpm/core/src/legal-hold/service.js';
 import { LibraryInputError } from '@osfpm/core/src/library/errors.js';
 import {
@@ -279,6 +283,8 @@ const internalFixtures = new Map<
   [SecurityTableWriteError, () => new SecurityTableWriteError('invite')],
   [PermissionSyncError, () => new PermissionSyncError([])],
   [InstallationMissingError, () => new InstallationMissingError()],
+  [ServerKeysError, () => new ServerKeysError('identity-mismatch')],
+  [DecryptionError, () => new DecryptionError()],
 ]);
 
 /** Everything a test route can throw, by name: the fixtures, the subclasses, and a few odd ones. */
