@@ -72,6 +72,12 @@ export const AUTH_AUDIT = {
    * public, and never a key file.
    */
   serverKeyBound: 'auth.server-key-bound',
+  /**
+   * Start-up sealed the authenticator secrets that were still stored as plain
+   * base32 (the install was made before they were sealed). Holds the count and
+   * nothing that names a person or a secret (spec, section Cryptography and keys).
+   */
+  totpSecretsEncrypted: 'auth.totp-secrets-encrypted',
   setupCheckFailed: 'auth.setup-check-failed',
   setupCompleted: 'auth.setup-completed',
   userCreated: 'auth.user-created',

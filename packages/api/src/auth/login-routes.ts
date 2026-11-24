@@ -272,6 +272,7 @@ export const loginRoutes: FastifyPluginAsyncZod<LoginRoutesOptions> = (
           challenge: request.body.challenge,
           code: request.body.code,
           now,
+          dataKeys: app.serverKeys.get().dataKeys,
         });
         if (!checked.ok) return null;
         const created = await startSession(

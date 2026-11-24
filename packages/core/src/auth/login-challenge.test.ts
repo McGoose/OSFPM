@@ -22,6 +22,10 @@ import {
 import { generateToken, hashToken } from './tokens.js';
 import { LOGIN_THROTTLE } from './throttle.js';
 import { newId } from '../db/ids.js';
+import { useTestServerKeys } from '../keys/test-support.js';
+
+/** The server keys of this test file, in a key directory that is deleted afterwards. */
+const serverKeys = useTestServerKeys();
 
 const T0 = new Date('2026-03-02T09:00:15.000Z');
 const SECOND = 1000;
@@ -53,7 +57,10 @@ describe.each(testTargets)('login challenges on $name', (target) => {
   /** A user with a confirmed authenticator and a fresh challenge made at T0. */
   async function waiting() {
     const userId = await seedActiveUser(database);
-    const secret = await seedTotp(database, userId, { now: T0 });
+    const secret = await seedTotp(database, userId, {
+      now: T0,
+      dataKeys: serverKeys().dataKeys,
+    });
     const { challenge } = await createLoginChallenge(db(), userId, {
       kind: 'totp',
       now: T0,
@@ -155,7 +162,10 @@ describe.each(testTargets)('login challenges on $name', (target) => {
 
     it('makes a new challenge delete the user’s expired ones, used or not, and keep the live ones and other users’', async () => {
       const userId = await seedActiveUser(database);
-      const secret = await seedTotp(database, userId, { now: T0 });
+      const secret = await seedTotp(database, userId, {
+        now: T0,
+        dataKeys: serverKeys().dataKeys,
+      });
       const other = await seedActiveUser(database);
       const unused = await createLoginChallenge(db(), userId, {
         kind: 'totp',
@@ -169,6 +179,7 @@ describe.each(testTargets)('login challenges on $name', (target) => {
         challenge: used.challenge,
         code: totpCodeAt(secret, T0),
         now: T0,
+        dataKeys: serverKeys().dataKeys,
       });
       const live = await createLoginChallenge(db(), userId, {
         kind: 'totp',
@@ -247,6 +258,7 @@ describe.each(testTargets)('login challenges on $name', (target) => {
         challenge,
         code: totpCodeAt(secret, at(SECOND)),
         now: at(SECOND),
+        dataKeys: serverKeys().dataKeys,
       });
       expect(result).toMatchObject({ ok: true, user: { id: userId } });
       expect(await rowOf(challenge)).toMatchObject({
@@ -271,6 +283,7 @@ describe.each(testTargets)('login challenges on $name', (target) => {
           challenge,
           code: totpCodeAt(secret, T0),
           now: T0,
+          dataKeys: serverKeys().dataKeys,
         }),
       ).toMatchObject({ ok: true });
       expect(
@@ -278,6 +291,7 @@ describe.each(testTargets)('login challenges on $name', (target) => {
           challenge,
           code: totpCodeAt(secret, at(STEP)),
           now: at(STEP),
+          dataKeys: serverKeys().dataKeys,
         }),
       ).toEqual({ ok: false });
       expect((await lastFailure()).details).toEqual({
@@ -291,7 +305,10 @@ describe.each(testTargets)('login challenges on $name', (target) => {
       // already signed in. It must not do for the second step of a password
       // sign-in, which would skip the password.
       const userId = await seedActiveUser(database);
-      const secret = await seedTotp(database, userId, { now: T0 });
+      const secret = await seedTotp(database, userId, {
+        now: T0,
+        dataKeys: serverKeys().dataKeys,
+      });
       const token = generateToken();
       await db()
         .insert(loginChallenge)
@@ -307,6 +324,7 @@ describe.each(testTargets)('login challenges on $name', (target) => {
           challenge: token,
           code: totpCodeAt(secret, T0),
           now: T0,
+          dataKeys: serverKeys().dataKeys,
         }),
       ).toEqual({ ok: false });
       expect(await rowOf(token)).toMatchObject({ attempts: 0, usedAt: null });
@@ -323,11 +341,13 @@ describe.each(testTargets)('login challenges on $name', (target) => {
           challenge,
           code: totpCodeAt(secret, T0),
           now: T0,
+          dataKeys: serverKeys().dataKeys,
         }),
         consumeLoginChallenge(db(), {
           challenge,
           code: totpCodeAt(secret, at(STEP)),
           now: T0,
+          dataKeys: serverKeys().dataKeys,
         }),
       ]);
       expect(results.filter((result) => result.ok)).toHaveLength(1);
@@ -338,7 +358,12 @@ describe.each(testTargets)('login challenges on $name', (target) => {
       const right = totpCodeAt(secret, T0);
       const wrong = right === '000000' ? '000001' : '000000';
       expect(
-        await consumeLoginChallenge(db(), { challenge, code: wrong, now: T0 }),
+        await consumeLoginChallenge(db(), {
+          challenge,
+          code: wrong,
+          now: T0,
+          dataKeys: serverKeys().dataKeys,
+        }),
       ).toEqual({ ok: false });
       expect((await rowOf(challenge))!.attempts).toBe(1);
       expect((await rowOf(challenge))!.usedAt).toBeNull();
@@ -352,6 +377,7 @@ describe.each(testTargets)('login challenges on $name', (target) => {
           challenge,
           code: right,
           now: at(SECOND),
+          dataKeys: serverKeys().dataKeys,
         }),
       ).toMatchObject({ ok: true });
     });
@@ -365,6 +391,7 @@ describe.each(testTargets)('login challenges on $name', (target) => {
           challenge,
           code: wrong,
           now: at(i * SECOND),
+          dataKeys: serverKeys().dataKeys,
         });
       }
       expect((await rowOf(challenge))!.attempts).toBe(5);
@@ -373,6 +400,7 @@ describe.each(testTargets)('login challenges on $name', (target) => {
           challenge,
           code: right,
           now: at(10 * SECOND),
+          dataKeys: serverKeys().dataKeys,
         }),
       ).toEqual({ ok: false });
       // The challenge ran out; it was not the throttle that refused.
@@ -388,10 +416,20 @@ describe.each(testTargets)('login challenges on $name', (target) => {
       const right = totpCodeAt(secret, T0);
       const wrong = right === '000000' ? '000001' : '000000';
       for (let i = 0; i < LOGIN_CHALLENGE.maxAttempts - 1; i += 1) {
-        await consumeLoginChallenge(db(), { challenge, code: wrong, now: T0 });
+        await consumeLoginChallenge(db(), {
+          challenge,
+          code: wrong,
+          now: T0,
+          dataKeys: serverKeys().dataKeys,
+        });
       }
       expect(
-        await consumeLoginChallenge(db(), { challenge, code: right, now: T0 }),
+        await consumeLoginChallenge(db(), {
+          challenge,
+          code: right,
+          now: T0,
+          dataKeys: serverKeys().dataKeys,
+        }),
       ).toMatchObject({ ok: true });
     });
 
@@ -403,6 +441,7 @@ describe.each(testTargets)('login challenges on $name', (target) => {
           challenge,
           code: totpCodeAt(secret, late),
           now: late,
+          dataKeys: serverKeys().dataKeys,
         }),
       ).toEqual({ ok: false });
       expect((await lastFailure()).details).toEqual({
@@ -416,6 +455,7 @@ describe.each(testTargets)('login challenges on $name', (target) => {
           challenge: other.challenge,
           code: totpCodeAt(other.secret, justInTime),
           now: justInTime,
+          dataKeys: serverKeys().dataKeys,
         }),
       ).toMatchObject({ ok: true });
     });
@@ -434,6 +474,7 @@ describe.each(testTargets)('login challenges on $name', (target) => {
             challenge,
             code: '123456',
             now: T0,
+            dataKeys: serverKeys().dataKeys,
           }),
         ).toEqual({ ok: false });
       }
@@ -458,6 +499,7 @@ describe.each(testTargets)('login challenges on $name', (target) => {
           challenge: first.challenge,
           code: totpCodeAt(second.secret, T0),
           now: T0,
+          dataKeys: serverKeys().dataKeys,
         }),
       ).toEqual({ ok: false });
     });
@@ -470,6 +512,7 @@ describe.each(testTargets)('login challenges on $name', (target) => {
           challenge,
           code: totpCodeAt(secret, T0),
           now: T0,
+          dataKeys: serverKeys().dataKeys,
         }),
       ).toEqual({ ok: false });
       expect(await lastFailure()).toMatchObject({
@@ -493,6 +536,7 @@ describe.each(testTargets)('login challenges on $name', (target) => {
           challenge: fresh,
           code: wrong,
           now: at(i * SECOND),
+          dataKeys: serverKeys().dataKeys,
         });
       }
       expect(
@@ -500,6 +544,7 @@ describe.each(testTargets)('login challenges on $name', (target) => {
           challenge,
           code: right,
           now: at(10 * SECOND),
+          dataKeys: serverKeys().dataKeys,
         }),
       ).toEqual({ ok: false });
       expect((await lastFailure()).details).toEqual({
@@ -518,6 +563,7 @@ describe.each(testTargets)('login challenges on $name', (target) => {
           challenge: again,
           code: totpCodeAt(secret, later),
           now: later,
+          dataKeys: serverKeys().dataKeys,
         }),
       ).toMatchObject({ ok: true });
     });
@@ -525,8 +571,18 @@ describe.each(testTargets)('login challenges on $name', (target) => {
     it('keeps the challenge and the code out of every event and table', async () => {
       const { secret, challenge } = await waiting();
       const code = totpCodeAt(secret, T0);
-      await consumeLoginChallenge(db(), { challenge, code, now: T0 });
-      await consumeLoginChallenge(db(), { challenge, code: '000000', now: T0 });
+      await consumeLoginChallenge(db(), {
+        challenge,
+        code,
+        now: T0,
+        dataKeys: serverKeys().dataKeys,
+      });
+      await consumeLoginChallenge(db(), {
+        challenge,
+        code: '000000',
+        now: T0,
+        dataKeys: serverKeys().dataKeys,
+      });
       expect(
         JSON.stringify(await db().select().from(auditEvent)),
       ).not.toContain(challenge);
@@ -556,7 +612,10 @@ describe.each(testTargets)(
     it('deletes every expired challenge of every user, used or not, keeps the live ones, and says how many it deleted', async () => {
       const first = await seedActiveUser(database);
       const second = await seedActiveUser(database);
-      const secret = await seedTotp(database, first, { now: T0 });
+      const secret = await seedTotp(database, first, {
+        now: T0,
+        dataKeys: serverKeys().dataKeys,
+      });
       const make = (userId: string, now: Date) =>
         createLoginChallenge(db(), userId, { kind: 'totp', now });
       // Expired, for two users, one of them used; and two that are still live,
@@ -568,6 +627,7 @@ describe.each(testTargets)(
         challenge: usedExpired.challenge,
         code: totpCodeAt(secret, T0),
         now: T0,
+        dataKeys: serverKeys().dataKeys,
       });
       const live = await make(second, at(4 * MINUTE));
       const usedLive = await make(first, at(4 * MINUTE));
@@ -575,6 +635,7 @@ describe.each(testTargets)(
         challenge: usedLive.challenge,
         code: totpCodeAt(secret, at(4 * MINUTE)),
         now: at(4 * MINUTE),
+        dataKeys: serverKeys().dataKeys,
       });
       // Making a challenge for a user cleans that user's own, so the cleanup
       // starts from what is left.

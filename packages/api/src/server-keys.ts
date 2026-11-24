@@ -52,7 +52,8 @@ export function createServerKeyStore(initial?: ServerKeys): ServerKeyStore {
  *
  * Only server start-up calls this, before any request is served, so it checks no
  * permission. It answers whether this start stored the identity key for the first
- * time, for one log line; nothing about a key leaves it.
+ * time and how many authenticator secrets it sealed, for log lines; nothing about
+ * a key or a secret leaves it.
  *
  * @throws Error when start-up was not given a key directory.
  * @throws ServerKeysError when the key directory is not this database's or a key
@@ -63,7 +64,10 @@ export function createServerKeyStore(initial?: ServerKeys): ServerKeyStore {
 export async function bindServerKeysAtStartup(
   app: App,
   keysDir: string | undefined,
-): Promise<{ readonly identityBound: boolean }> {
+): Promise<{
+  readonly identityBound: boolean;
+  readonly secretsSealed: number;
+}> {
   if (keysDir === undefined) {
     throw new Error('Start-up was not given a key directory');
   }
@@ -71,5 +75,8 @@ export async function bindServerKeysAtStartup(
     bindServerKeys(tx, { keysDir, now: new Date() }),
   );
   app.serverKeys.set(bound.keys);
-  return { identityBound: bound.identityBound };
+  return {
+    identityBound: bound.identityBound,
+    secretsSealed: bound.secretsSealed,
+  };
 }

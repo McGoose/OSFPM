@@ -53,7 +53,10 @@ export type LoginMethod = (typeof LOGIN_METHODS)[number];
  * does not verify (a wrong signature, origin, relying party or challenge, or no
  * user verification), and a signature counter that went back, which can mean
  * the key was cloned (SC-10). None of them is a guess at a secret, so none
- * counts.
+ * counts. `totp-undecryptable` is the authenticator step finding a secret it
+ * cannot open (a data key that is gone, a sealed value copied from another row):
+ * a fault of the server, not a guess, so it does not count either, and what the
+ * caller is told is the same as for a wrong code.
  */
 export const LOGIN_FAILURE_REASONS = [
   'unknown-account',
@@ -65,6 +68,7 @@ export const LOGIN_FAILURE_REASONS = [
   'revoked',
   'verification-failed',
   'counter-regressed',
+  'totp-undecryptable',
 ] as const;
 /** One value of `LOGIN_FAILURE_REASONS`. */
 export type LoginFailureReason = (typeof LOGIN_FAILURE_REASONS)[number];

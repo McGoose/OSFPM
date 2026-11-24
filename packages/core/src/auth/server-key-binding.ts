@@ -6,6 +6,7 @@ import { ServerKeysError } from '../keys/errors.js';
 import { loadServerKeys, type ServerKeys } from '../keys/server-keys.js';
 import { AuthStateError } from './errors.js';
 import { AUTH_AUDIT, guardedAuth, recordAuthAudit } from './shared.js';
+import { sealPlainTotpSecrets } from './totp.js';
 
 /** What `bindServerKeys` did. */
 export type ServerKeyBinding = {
@@ -13,6 +14,8 @@ export type ServerKeyBinding = {
   readonly keys: ServerKeys;
   /** True when this call stored the identity public key for the first time. */
   readonly identityBound: boolean;
+  /** How many authenticator secrets this call sealed (see `sealPlainTotpSecrets`). */
+  readonly secretsSealed: number;
 };
 
 /**
@@ -35,6 +38,9 @@ export type ServerKeyBinding = {
  *   identity.
  * - A sealed authenticator secret exists: the data keys must exist. Their folder
  *   missing is a refusal. With no sealed secret, missing data keys are made.
+ * - Authenticator secrets still stored as plain base32 (an install made before
+ *   they were sealed) are sealed in place with the current data key, and one
+ *   `auth.totp-secrets-encrypted` event carries the count (`sealPlainTotpSecrets`).
  *
  * Only server start-up calls this, before any request is served, so it checks no
  * permission. The audit event holds the algorithm and the public key's
@@ -86,9 +92,28 @@ export async function bindServerKeys(
   ) {
     throw new ServerKeysError('identity-mismatch');
   }
-  if (facts.storedPublicKey !== null) return { keys, identityBound: false };
+  const identityBound = facts.storedPublicKey === null;
+  if (identityBound) await storeIdentity(tx, facts.installationId, keys, now);
+  const secretsSealed = await sealPlainTotpSecrets(tx, {
+    dataKeys: keys.dataKeys,
+    now,
+  });
+  return { keys, identityBound, secretsSealed };
+}
 
-  await guardedAuth('installation', 'update', () =>
+/**
+ * Stores the public key of `keys` on the installation row, which the caller holds,
+ * and writes the audit event. Only while the column is empty.
+ *
+ * @throws ServerKeysError `identity-mismatch` when a key is stored already.
+ */
+async function storeIdentity(
+  tx: Tx,
+  installationId: string,
+  keys: ServerKeys,
+  now: Date,
+): Promise<void> {
+  const stored = await guardedAuth('installation', 'update', () =>
     // A savepoint: a failure leaves neither the key nor the event.
     tx.transaction(async (inner) => {
       const [bound] = await inner
@@ -96,27 +121,29 @@ export async function bindServerKeys(
         .set({ serverPublicKey: keys.identity.publicKey })
         .where(
           and(
-            eq(installation.id, facts.installationId),
+            eq(installation.id, installationId),
             isNull(installation.serverPublicKey),
           ),
         )
         .returning({ id: installation.id });
       // The row is held, so this cannot happen; if it does, another key was
       // stored first and ours must not replace it.
-      if (bound === undefined) throw new ServerKeysError('identity-mismatch');
+      if (bound === undefined) return false;
       await recordAuthAudit(inner, {
         category: AUTH_AUDIT.serverKeyBound,
         action: 'bind',
         actor: { type: 'system', id: null },
         targetType: 'installation',
-        targetId: facts.installationId,
+        targetId: installationId,
         details: {
           algorithm: 'Ed25519',
           fingerprint: keys.identity.fingerprint,
         },
         occurredAt: now,
       });
+      return true;
     }),
   );
-  return { keys, identityBound: true };
+  // Outside `guardedAuth`, which would turn this error into a database error.
+  if (!stored) throw new ServerKeysError('identity-mismatch');
 }

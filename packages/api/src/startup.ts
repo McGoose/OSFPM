@@ -48,7 +48,10 @@ export type StartupSteps = {
   readonly bindServerKeys?: (
     app: App,
     keysDir: string | undefined,
-  ) => Promise<{ readonly identityBound: boolean }>;
+  ) => Promise<{
+    readonly identityBound: boolean;
+    readonly secretsSealed: number;
+  }>;
   /**
    * Gives every organisation's Administrator role the permissions added since it
    * was made, and answers how many grants it made (`topUpAdministrator`). Runs
@@ -366,6 +369,13 @@ async function attemptOnce(
   // Whether, never what: the key is public but the line says nothing of it.
   if (keys?.identityBound === true) {
     app.log.info('the server identity key was bound to this installation');
+  }
+  if (keys !== undefined && keys.secretsSealed > 0) {
+    // A count only: the audit trail has the same, and no name.
+    app.log.info(
+      { sealed: keys.secretsSealed },
+      'authenticator secrets that were stored in plain text are now encrypted',
+    );
   }
   const added = (await steps.topUpAdministrator?.(app)) ?? 0;
   // A count only, as the audit event has: each grant itself is in the change log.

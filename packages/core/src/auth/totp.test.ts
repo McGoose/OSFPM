@@ -25,6 +25,10 @@ import {
   TOTP_SETTINGS,
   verifyTotp,
 } from './totp.js';
+import { useTestServerKeys } from '../keys/test-support.js';
+
+/** The server keys of this test file, in a key directory that is deleted afterwards. */
+const serverKeys = useTestServerKeys();
 
 // An invented password, free of any word of the fixture addresses.
 const PASSWORD = 'harbour-warehouse-night-shoot';
@@ -76,7 +80,10 @@ describe.each(testTargets)('TOTP on $name', (target) => {
   /** A user with a confirmed authenticator; returns the secret. */
   async function enrolled() {
     const userId = await seedActiveUser(database);
-    const secret = await seedTotp(database, userId, { now: T0 });
+    const secret = await seedTotp(database, userId, {
+      now: T0,
+      dataKeys: serverKeys().dataKeys,
+    });
     return { userId, secret };
   }
 
@@ -84,7 +91,12 @@ describe.each(testTargets)('TOTP on $name', (target) => {
     it('accepts the code of the current step, and records the step', async () => {
       const { userId, secret } = await enrolled();
       expect(
-        await verifyTotp(db(), userId, totpCodeAt(secret, T0), { now: T0 }),
+        (
+          await verifyTotp(db(), userId, totpCodeAt(secret, T0), {
+            now: T0,
+            dataKeys: serverKeys().dataKeys,
+          })
+        ).ok,
       ).toBe(true);
       const row = await credentialOf(userId);
       expect(row!.lastUsedStep).toBe(Math.floor(T0.getTime() / STEP));
@@ -100,9 +112,12 @@ describe.each(testTargets)('TOTP on $name', (target) => {
       ] as const) {
         const { userId, secret } = await enrolled();
         expect(
-          await verifyTotp(db(), userId, totpCodeAt(secret, at(offset)), {
-            now: T0,
-          }),
+          (
+            await verifyTotp(db(), userId, totpCodeAt(secret, at(offset)), {
+              now: T0,
+              dataKeys: serverKeys().dataKeys,
+            })
+          ).ok,
           `offset ${offset / STEP} steps`,
         ).toBe(accepted);
       }
@@ -111,36 +126,69 @@ describe.each(testTargets)('TOTP on $name', (target) => {
     it('never accepts the same step twice', async () => {
       const { userId, secret } = await enrolled();
       const code = totpCodeAt(secret, T0);
-      expect(await verifyTotp(db(), userId, code, { now: T0 })).toBe(true);
-      expect(await verifyTotp(db(), userId, code, { now: T0 })).toBe(false);
+      expect(
+        (
+          await verifyTotp(db(), userId, code, {
+            now: T0,
+            dataKeys: serverKeys().dataKeys,
+          })
+        ).ok,
+      ).toBe(true);
+      expect(
+        (
+          await verifyTotp(db(), userId, code, {
+            now: T0,
+            dataKeys: serverKeys().dataKeys,
+          })
+        ).ok,
+      ).toBe(false);
       // Nor a moment later, while the code is still in its window.
-      expect(await verifyTotp(db(), userId, code, { now: at(STEP) })).toBe(
-        false,
-      );
+      expect(
+        (
+          await verifyTotp(db(), userId, code, {
+            now: at(STEP),
+            dataKeys: serverKeys().dataKeys,
+          })
+        ).ok,
+      ).toBe(false);
     });
 
     it('never accepts an older step once a newer one was used', async () => {
       const { userId, secret } = await enrolled();
       // A phone whose clock runs ahead: the code of the next step is accepted.
       expect(
-        await verifyTotp(db(), userId, totpCodeAt(secret, at(STEP)), {
-          now: T0,
-        }),
+        (
+          await verifyTotp(db(), userId, totpCodeAt(secret, at(STEP)), {
+            now: T0,
+            dataKeys: serverKeys().dataKeys,
+          })
+        ).ok,
       ).toBe(true);
       // The code of the current step, and the one before it, are now older.
       expect(
-        await verifyTotp(db(), userId, totpCodeAt(secret, T0), { now: T0 }),
+        (
+          await verifyTotp(db(), userId, totpCodeAt(secret, T0), {
+            now: T0,
+            dataKeys: serverKeys().dataKeys,
+          })
+        ).ok,
       ).toBe(false);
       expect(
-        await verifyTotp(db(), userId, totpCodeAt(secret, at(-STEP)), {
-          now: T0,
-        }),
+        (
+          await verifyTotp(db(), userId, totpCodeAt(secret, at(-STEP)), {
+            now: T0,
+            dataKeys: serverKeys().dataKeys,
+          })
+        ).ok,
       ).toBe(false);
       // The step after the one used is fine.
       expect(
-        await verifyTotp(db(), userId, totpCodeAt(secret, at(2 * STEP)), {
-          now: at(STEP),
-        }),
+        (
+          await verifyTotp(db(), userId, totpCodeAt(secret, at(2 * STEP)), {
+            now: at(STEP),
+            dataKeys: serverKeys().dataKeys,
+          })
+        ).ok,
       ).toBe(true);
     });
 
@@ -148,17 +196,30 @@ describe.each(testTargets)('TOTP on $name', (target) => {
       const { userId, secret } = await enrolled();
       const code = totpCodeAt(secret, T0);
       const results = await Promise.all([
-        verifyTotp(db(), userId, code, { now: T0 }),
-        verifyTotp(db(), userId, code, { now: T0 }),
+        verifyTotp(db(), userId, code, {
+          now: T0,
+          dataKeys: serverKeys().dataKeys,
+        }),
+        verifyTotp(db(), userId, code, {
+          now: T0,
+          dataKeys: serverKeys().dataKeys,
+        }),
       ]);
-      expect(results.filter(Boolean)).toHaveLength(1);
+      expect(results.filter((result) => result.ok)).toHaveLength(1);
     });
 
     it('accepts the code with a space in the middle, as an app shows it', async () => {
       const { userId, secret } = await enrolled();
       const code = totpCodeAt(secret, T0);
       const spaced = `${code.slice(0, 3)} ${code.slice(3)}`;
-      expect(await verifyTotp(db(), userId, spaced, { now: T0 })).toBe(true);
+      expect(
+        (
+          await verifyTotp(db(), userId, spaced, {
+            now: T0,
+            dataKeys: serverKeys().dataKeys,
+          })
+        ).ok,
+      ).toBe(true);
     });
 
     it('refuses anything that is not six digits, without looking anything up', async () => {
@@ -175,19 +236,39 @@ describe.each(testTargets)('TOTP on $name', (target) => {
         undefined as never,
         123456 as never,
       ]) {
-        expect(await verifyTotp(db(), userId, bad, { now: T0 })).toBe(false);
+        expect(
+          (
+            await verifyTotp(db(), userId, bad, {
+              now: T0,
+              dataKeys: serverKeys().dataKeys,
+            })
+          ).ok,
+        ).toBe(false);
       }
       expect((await credentialOf(userId))!.lastUsedStep).toBeNull();
     });
 
     it('refuses a secret that is still being set up, and a user with none', async () => {
       const userId = await seedActiveUser(database);
-      const secret = await seedTotp(database, userId, { confirmed: false });
+      const secret = await seedTotp(database, userId, {
+        confirmed: false,
+        dataKeys: serverKeys().dataKeys,
+      });
       expect(
-        await verifyTotp(db(), userId, totpCodeAt(secret, T0), { now: T0 }),
+        (
+          await verifyTotp(db(), userId, totpCodeAt(secret, T0), {
+            now: T0,
+            dataKeys: serverKeys().dataKeys,
+          })
+        ).ok,
       ).toBe(false);
       expect(
-        await verifyTotp(db(), newId(), totpCodeAt(secret, T0), { now: T0 }),
+        (
+          await verifyTotp(db(), newId(), totpCodeAt(secret, T0), {
+            now: T0,
+            dataKeys: serverKeys().dataKeys,
+          })
+        ).ok,
       ).toBe(false);
     });
 
@@ -195,9 +276,12 @@ describe.each(testTargets)('TOTP on $name', (target) => {
       const first = await enrolled();
       const second = await enrolled();
       expect(
-        await verifyTotp(db(), second.userId, totpCodeAt(first.secret, T0), {
-          now: T0,
-        }),
+        (
+          await verifyTotp(db(), second.userId, totpCodeAt(first.secret, T0), {
+            now: T0,
+            dataKeys: serverKeys().dataKeys,
+          })
+        ).ok,
       ).toBe(false);
     });
   });
@@ -205,7 +289,10 @@ describe.each(testTargets)('TOTP on $name', (target) => {
   describe('enrolTotp', () => {
     it('makes a new unconfirmed secret and returns it, with the address for an app, once', async () => {
       const userId = await seedActiveUser(database);
-      const result = await enrolTotp(db(), userId, { now: T0 });
+      const result = await enrolTotp(db(), userId, {
+        now: T0,
+        dataKeys: serverKeys().dataKeys,
+      });
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       // 20 random bytes in base32.
@@ -224,13 +311,19 @@ describe.each(testTargets)('TOTP on $name', (target) => {
         period: '30',
       });
       const row = await credentialOf(userId);
-      expect(row).toMatchObject({ secret: result.secret, confirmedAt: null });
+      // Stored sealed, never as the base32 the person is shown.
+      expect(row!.secret).toMatch(/^v1\./);
+      expect(row!.secret).not.toContain(result.secret);
+      expect(row!.confirmedAt).toBeNull();
       expect(row!.lastUsedStep).toBeNull();
     });
 
     it('audits it without the secret', async () => {
       const userId = await seedActiveUser(database);
-      const result = await enrolTotp(db(), userId, { now: T0 });
+      const result = await enrolTotp(db(), userId, {
+        now: T0,
+        dataKeys: serverKeys().dataKeys,
+      });
       const [event] = await eventsAbout(userId, AUTH_AUDIT.totpEnrolled);
       expect(event).toMatchObject({
         action: 'enrol',
@@ -246,8 +339,14 @@ describe.each(testTargets)('TOTP on $name', (target) => {
 
     it('replaces a secret that was never confirmed, so the old one stops working', async () => {
       const userId = await seedActiveUser(database);
-      const first = await enrolTotp(db(), userId, { now: T0 });
-      const second = await enrolTotp(db(), userId, { now: at(MINUTE) });
+      const first = await enrolTotp(db(), userId, {
+        now: T0,
+        dataKeys: serverKeys().dataKeys,
+      });
+      const second = await enrolTotp(db(), userId, {
+        now: at(MINUTE),
+        dataKeys: serverKeys().dataKeys,
+      });
       if (!first.ok || !second.ok) throw new Error('not enrolled');
       expect(second.secret).not.toBe(first.secret);
       expect(
@@ -261,6 +360,7 @@ describe.each(testTargets)('TOTP on $name', (target) => {
           userId,
           code: totpCodeAt(first.secret, at(MINUTE)),
           now: at(MINUTE),
+          dataKeys: serverKeys().dataKeys,
         }),
       ).toEqual({ ok: false, reason: 'code-incorrect' });
       expect(
@@ -268,6 +368,7 @@ describe.each(testTargets)('TOTP on $name', (target) => {
           userId,
           code: totpCodeAt(second.secret, at(MINUTE)),
           now: at(MINUTE),
+          dataKeys: serverKeys().dataKeys,
         }),
       ).toEqual({ ok: true });
       const events = await eventsAbout(userId, AUTH_AUDIT.totpEnrolled);
@@ -282,30 +383,37 @@ describe.each(testTargets)('TOTP on $name', (target) => {
     });
 
     it('refuses to start again once an authenticator is confirmed, and leaves it as it is', async () => {
-      const { userId, secret } = await enrolled();
+      const { userId } = await enrolled();
+      const stored = (await credentialOf(userId))!.secret;
       const before = (await eventsAbout(userId, AUTH_AUDIT.totpEnrolled))
         .length;
-      expect(await enrolTotp(db(), userId, { now: T0 })).toEqual({
+      expect(
+        await enrolTotp(db(), userId, {
+          now: T0,
+          dataKeys: serverKeys().dataKeys,
+        }),
+      ).toEqual({
         ok: false,
         reason: 'already-enrolled',
       });
-      expect((await credentialOf(userId))!.secret).toBe(secret);
+      expect((await credentialOf(userId))!.secret).toBe(stored);
       expect((await eventsAbout(userId, AUTH_AUDIT.totpEnrolled)).length).toBe(
         before,
       );
     });
 
     it('refuses an unknown or a disabled user with a typed error', async () => {
-      await expect(enrolTotp(db(), newId(), { now: T0 })).rejects.toMatchObject(
-        {
-          reason: 'user-not-found',
-        },
-      );
+      await expect(
+        enrolTotp(db(), newId(), { now: T0, dataKeys: serverKeys().dataKeys }),
+      ).rejects.toMatchObject({
+        reason: 'user-not-found',
+      });
       const disabled = await seedActiveUser(database);
       await setUserStatus(database, disabled, 'disabled');
-      const error = await enrolTotp(db(), disabled, { now: T0 }).catch(
-        (caught: unknown) => caught,
-      );
+      const error = await enrolTotp(db(), disabled, {
+        now: T0,
+        dataKeys: serverKeys().dataKeys,
+      }).catch((caught: unknown) => caught);
       expect(error).toBeInstanceOf(AuthStateError);
       expect(await credentialOf(disabled)).toBeUndefined();
     });
@@ -314,7 +422,10 @@ describe.each(testTargets)('TOTP on $name', (target) => {
   describe('confirmTotp', () => {
     async function pending() {
       const userId = await seedActiveUser(database);
-      const result = await enrolTotp(db(), userId, { now: T0 });
+      const result = await enrolTotp(db(), userId, {
+        now: T0,
+        dataKeys: serverKeys().dataKeys,
+      });
       if (!result.ok) throw new Error('not enrolled');
       return { userId, secret: result.secret };
     }
@@ -323,13 +434,23 @@ describe.each(testTargets)('TOTP on $name', (target) => {
       const { userId, secret } = await pending();
       const code = totpCodeAt(secret, at(SECOND));
       expect(
-        await confirmTotp(db(), { userId, code, now: at(SECOND) }),
+        await confirmTotp(db(), {
+          userId,
+          code,
+          now: at(SECOND),
+          dataKeys: serverKeys().dataKeys,
+        }),
       ).toEqual({ ok: true });
       const row = await credentialOf(userId);
       expect(row!.confirmedAt).toEqual(at(SECOND));
       expect(row!.lastUsedStep).toBe(Math.floor(at(SECOND).getTime() / STEP));
       expect(
-        await verifyTotp(db(), userId, code, { now: at(2 * SECOND) }),
+        (
+          await verifyTotp(db(), userId, code, {
+            now: at(2 * SECOND),
+            dataKeys: serverKeys().dataKeys,
+          })
+        ).ok,
       ).toBe(false);
       const [event] = await eventsAbout(userId, AUTH_AUDIT.totpConfirmed);
       expect(event).toMatchObject({
@@ -346,6 +467,7 @@ describe.each(testTargets)('TOTP on $name', (target) => {
           userId,
           code: totpCodeAt(secret, at(STEP)),
           now: T0,
+          dataKeys: serverKeys().dataKeys,
         }),
       ).toEqual({ ok: true });
     });
@@ -354,14 +476,24 @@ describe.each(testTargets)('TOTP on $name', (target) => {
       const { userId, secret } = await pending();
       const right = totpCodeAt(secret, T0);
       const wrong = right === '000000' ? '000001' : '000000';
-      expect(await confirmTotp(db(), { userId, code: wrong, now: T0 })).toEqual(
-        {
-          ok: false,
-          reason: 'code-incorrect',
-        },
-      );
       expect(
-        await confirmTotp(db(), { userId, code: 'not a code', now: T0 }),
+        await confirmTotp(db(), {
+          userId,
+          code: wrong,
+          now: T0,
+          dataKeys: serverKeys().dataKeys,
+        }),
+      ).toEqual({
+        ok: false,
+        reason: 'code-incorrect',
+      });
+      expect(
+        await confirmTotp(db(), {
+          userId,
+          code: 'not a code',
+          now: T0,
+          dataKeys: serverKeys().dataKeys,
+        }),
       ).toEqual({ ok: false, reason: 'code-incorrect' });
       expect((await credentialOf(userId))!.confirmedAt).toBeNull();
       expect(await eventsAbout(userId, AUTH_AUDIT.totpConfirmed)).toEqual([]);
@@ -370,7 +502,12 @@ describe.each(testTargets)('TOTP on $name', (target) => {
     it('says when nothing is being set up, and when it is already confirmed', async () => {
       const none = await seedActiveUser(database);
       expect(
-        await confirmTotp(db(), { userId: none, code: '123456', now: T0 }),
+        await confirmTotp(db(), {
+          userId: none,
+          code: '123456',
+          now: T0,
+          dataKeys: serverKeys().dataKeys,
+        }),
       ).toEqual({ ok: false, reason: 'no-pending-enrolment' });
       const { userId, secret } = await enrolled();
       expect(
@@ -378,6 +515,7 @@ describe.each(testTargets)('TOTP on $name', (target) => {
           userId,
           code: totpCodeAt(secret, T0),
           now: T0,
+          dataKeys: serverKeys().dataKeys,
         }),
       ).toEqual({ ok: false, reason: 'already-enrolled' });
     });
@@ -394,7 +532,11 @@ describe.each(testTargets)('TOTP on $name', (target) => {
         session: { id: recovery.session.id, scope: 'recovery' as const },
         now: at(MINUTE),
       };
-      await confirmTotp(db(), { ...options, code: '000000' });
+      await confirmTotp(db(), {
+        ...options,
+        code: '000000',
+        dataKeys: serverKeys().dataKeys,
+      });
       expect(
         (await validateSession(db(), recovery.token, at(MINUTE)))!.session
           .scope,
@@ -403,6 +545,7 @@ describe.each(testTargets)('TOTP on $name', (target) => {
         await confirmTotp(db(), {
           ...options,
           code: totpCodeAt(secret, at(MINUTE)),
+          dataKeys: serverKeys().dataKeys,
         }),
       ).toEqual({ ok: true });
       expect(
@@ -477,7 +620,10 @@ describe.each(testTargets)('TOTP on $name', (target) => {
     it('removes a secret that was only being set up', async () => {
       const userId = await seedActiveUser(database);
       await seedPassword(database, userId, PASSWORD);
-      await enrolTotp(db(), userId, { now: T0 });
+      await enrolTotp(db(), userId, {
+        now: T0,
+        dataKeys: serverKeys().dataKeys,
+      });
       expect(
         await removeTotp(db(), { userId, password: PASSWORD, now: T0 }),
       ).toEqual({ ok: true });
@@ -530,20 +676,26 @@ describe.each(testTargets)('TOTP on $name', (target) => {
     });
   });
 
-  it('keeps the secret out of every table but its own column, and out of every event', async () => {
+  it('keeps the plain secret out of every table and every event', async () => {
     const userId = await seedActiveUser(database);
-    const result = await enrolTotp(db(), userId, { now: T0 });
+    const result = await enrolTotp(db(), userId, {
+      now: T0,
+      dataKeys: serverKeys().dataKeys,
+    });
     if (!result.ok) throw new Error('not enrolled');
     await confirmTotp(db(), {
       userId,
       code: totpCodeAt(result.secret, T0),
       now: T0,
+      dataKeys: serverKeys().dataKeys,
     });
     expect(JSON.stringify(await db().select().from(auditEvent))).not.toContain(
       result.secret,
     );
-    // The one place it is stored is `totp_credential.secret`, a sensitive column.
+    // It is stored sealed, in `totp_credential.secret`, a sensitive column: the
+    // plain base32 is in no table at all.
     const everything = await everyRowAsText(database);
-    expect(everything.split(result.secret)).toHaveLength(2);
+    expect(everything.split(result.secret)).toHaveLength(1);
+    expect(everything).toContain('v1.');
   });
 });

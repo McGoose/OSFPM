@@ -16,6 +16,7 @@ import {
 } from '../db/schema/index.js';
 import { getTableName } from 'drizzle-orm';
 import { createMigratedDatabase, testTargets } from '../db/test-support.js';
+import type { ServerKeys } from '../keys/server-keys.js';
 import {
   createTestKeyDirectory,
   type TestKeyDirectory,
@@ -93,6 +94,7 @@ import {
   seedActiveUser,
   seedPassword,
   seedSession,
+  seedTotp,
   softwareAuthenticator,
   totpCodeAt,
   type SoftwareAuthenticator,
@@ -132,6 +134,7 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
   let database: Database;
   let cleanup: () => Promise<void>;
   let keyDirectory: TestKeyDirectory;
+  let serverKeys: ServerKeys;
 
   beforeAll(async () => {
     ({ database, cleanup } = await createMigratedDatabase(target));
@@ -142,6 +145,17 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
     });
     // Likewise the server keys: the identity key is bound to the installation.
     keyDirectory = createTestKeyDirectory();
+    ({ keys: serverKeys } = await bindServerKeys(database.db, {
+      keysDir: keyDirectory.dir,
+      now: T0,
+    }));
+    // An install made before secrets were sealed has one in plain text, which the
+    // next start-up seals.
+    await seedTotp(database, await seedActiveUser(database), {
+      dataKeys: serverKeys.dataKeys,
+      now: T0,
+      plain: true,
+    });
     await bindServerKeys(database.db, { keysDir: keyDirectory.dir, now: T0 });
   });
   afterAll(async () => {
@@ -299,12 +313,14 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
     });
     const enrolled = await enrolTotp(db(), securityId, {
       now: at(23 * MINUTE),
+      dataKeys: serverKeys.dataKeys,
     });
     if (!enrolled.ok) throw new Error('the authenticator was not set up');
     await confirmTotp(db(), {
       userId: securityId,
       code: totpCodeAt(enrolled.secret, at(24 * MINUTE)),
       now: at(24 * MINUTE),
+      dataKeys: serverKeys.dataKeys,
     });
     const { challenge } = await createLoginChallenge(db(), securityId, {
       kind: 'totp',
@@ -314,6 +330,7 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
       challenge,
       code: totpCodeAt(enrolled.secret, at(25 * MINUTE)),
       now: at(25 * MINUTE),
+      dataKeys: serverKeys.dataKeys,
     });
     const recovery = await createSession(db(), {
       userId: securityId,

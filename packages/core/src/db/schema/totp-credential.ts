@@ -4,8 +4,13 @@ import { markSensitive } from '../sensitive.js';
 import { user } from './user.js';
 
 /**
- * A user's authenticator-app secret, one row per user. `secret` is marked
- * sensitive: no service returns it again after `enrolTotp` showed it once when
+ * A user's authenticator-app secret, one row per user. `secret` holds the secret
+ * sealed with the server's data key, as `v1.<key id>.<nonce>.<ciphertext>`,
+ * bound to this user's row by additional authenticated data
+ * (`totp_credential:<user id>`), so a database dump alone gives no codes; the
+ * keys are in `OSFPM_KEYS_DIR`, never in the database (spec, section
+ * Cryptography and keys). It is marked
+ * sensitive too: no service returns it again after `enrolTotp` showed it once when
  * it was made, and it never appears in logs, events or errors (CLAUDE.md,
  * Privacy rule). `last_used_step` is the last accepted
  * time step, so a code cannot be used twice. A row with `confirmed_at` NULL is

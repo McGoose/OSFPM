@@ -1,7 +1,19 @@
-import { and, eq, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  eq,
+  isNotNull,
+  isNull,
+  lt,
+  notLike,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { Secret, TOTP } from 'otpauth';
 import { totpCredential, user, type SessionScope } from '../db/schema/index.js';
 import type { Tx } from '../db/write.js';
+import { ENCRYPTED_PREFIX, type DataKeyRing } from '../keys/data-keys.js';
+import { DecryptionError } from '../keys/errors.js';
 import { AuthStateError } from './errors.js';
 import { checkCurrentPassword } from './password-service.js';
 import { promoteSession, revokeUserSessions } from './sessions.js';
@@ -23,6 +35,14 @@ import {
  * logged, audited or returned again (CLAUDE.md, Privacy rule). These functions
  * check no permission: the route that calls them has already decided who may.
  * Pass the transaction handle, and the time as `now`.
+ *
+ * The stored secret is sealed with the server's data key (AES-256-GCM, see
+ * `src/keys/`), as `v1.<key id>.<nonce>.<ciphertext>`, and bound to its row: the
+ * additional authenticated data is `totp_credential:<user id>`, so a value copied
+ * to another user's row does not open (spec, section Cryptography and keys). A
+ * database dump alone no longer gives anyone a user's codes. Every function that
+ * reads or writes the secret takes the ring as `dataKeys`; the server loads it
+ * once at start-up and passes it down.
  */
 
 /**
@@ -43,6 +63,30 @@ export const TOTP_SETTINGS = {
 } as const;
 
 const CODE_SHAPE = new RegExp(`^\\d{${TOTP_SETTINGS.digits}}$`);
+
+/** What is bound to a sealed secret besides its key: the row it belongs to. */
+function secretAad(userId: string): string {
+  return `totp_credential:${userId}`;
+}
+
+/**
+ * The base32 secret of a stored value, or `null` when it cannot be opened: a
+ * value that is still plain, one made with a key the ring does not hold, a changed
+ * one, or one copied from another user's row. The reason is never given, so the
+ * answer cannot tell a caller which it was.
+ */
+function openSecret(
+  dataKeys: DataKeyRing,
+  userId: string,
+  stored: string,
+): string | null {
+  try {
+    return dataKeys.decrypt(stored, secretAad(userId));
+  } catch (error) {
+    if (error instanceof DecryptionError) return null;
+    throw error;
+  }
+}
 
 /** A typed code without the spaces an app shows in the middle of it, or `null` if it cannot be one. */
 function codeShape(code: unknown): string | null {
@@ -78,18 +122,34 @@ function matchingStep(
   return TOTP.counter({ period, timestamp: now.getTime() }) + delta;
 }
 
+/** The answer of `verifyTotp`. A failure says why, for the audit trail alone. */
+export type VerifyTotpResult =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly reason:
+        /** The code is wrong or not six digits, there is no confirmed authenticator, or the step was used. */
+        | 'code-incorrect'
+        /** The stored secret cannot be opened with the ring: see `openSecret`. */
+        | 'secret-undecryptable';
+    };
+
 /**
  * Checks the authenticator code of a user at the second step of a sign-in.
- * True when `code` is the code of the current time step or of one step either
- * side, and of a later step than any used before. The step is written down
+ * `{ ok: true }` when `code` is the code of the current time step or of one step
+ * either side, and of a later step than any used before. The step is written down
  * with one conditional UPDATE, so two requests with the same code succeed once
- * and an older code is refused after a newer one. False for everything else:
- * a code that is wrong or not six digits (spaces in the middle are fine), a
- * secret still being set up, a user with none, with one answer for all.
+ * and an older code is refused after a newer one. `{ ok: false }` for everything
+ * else: a code that is wrong or not six digits (spaces in the middle are fine), a
+ * secret still being set up, a user with none, with one answer for all
+ * (`code-incorrect`), and a stored secret the server cannot open
+ * (`secret-undecryptable`: a data key that is gone, a sealed value copied from
+ * another row, a value that is still plain). The second reason is for the trail:
+ * the caller must give the same answer for both.
  *
  * It does not look at the user's status or the throttle: the caller, which
- * holds the user's row lock, has judged those. The secret is read and compared
- * here and goes nowhere else.
+ * holds the user's row lock, has judged those. The secret is read, opened with
+ * `dataKeys` and compared here and goes nowhere else.
  *
  * @throws RecordWriteError when the database fails; it carries the SQLSTATE
  * only, never the code or the secret.
@@ -98,11 +158,12 @@ export async function verifyTotp(
   tx: Tx,
   userId: string,
   code: string,
-  options: { now: Date },
-): Promise<boolean> {
+  options: { now: Date; dataKeys: DataKeyRing },
+): Promise<VerifyTotpResult> {
+  const wrong = { ok: false, reason: 'code-incorrect' } as const;
   const token = codeShape(code);
-  if (token === null) return false;
-  const { now } = options;
+  if (token === null) return wrong;
+  const { now, dataKeys } = options;
   return guardedAuth('totp_credential', 'update', async () => {
     const [row] = await tx
       .select({
@@ -117,9 +178,13 @@ export async function verifyTotp(
         ),
       )
       .limit(1);
-    if (row === undefined) return false;
-    const step = matchingStep(row.secret, token, now, row.lastUsedStep);
-    if (step === null) return false;
+    if (row === undefined) return wrong;
+    const secret = openSecret(dataKeys, userId, row.secret);
+    if (secret === null) {
+      return { ok: false, reason: 'secret-undecryptable' } as const;
+    }
+    const step = matchingStep(secret, token, now, row.lastUsedStep);
+    if (step === null) return wrong;
     const [used] = await tx
       .update(totpCredential)
       .set({ lastUsedStep: step, updatedAt: now })
@@ -136,7 +201,7 @@ export async function verifyTotp(
         ),
       )
       .returning({ id: totpCredential.id });
-    return used !== undefined;
+    return used !== undefined ? { ok: true } : wrong;
   });
 }
 
@@ -159,8 +224,9 @@ export type EnrolTotpResult =
  * The secret does not count at sign-in until `confirmTotp`. Refuses, writing
  * nothing, when an authenticator is already confirmed, because replacing it
  * would switch the second step off without a password; it has to be removed
- * first (`removeTotp`, which asks for one). Audited as `auth.totp-enrolled`,
- * never with the secret.
+ * first (`removeTotp`, which asks for one). The secret is stored sealed with
+ * the current key of `dataKeys` and bound to this user's row. Audited as
+ * `auth.totp-enrolled`, never with the secret.
  *
  * @throws AuthStateError `user-not-found` for an unknown or deleted user,
  * `user-disabled` for a disabled one, `installation-missing` before the
@@ -171,9 +237,9 @@ export type EnrolTotpResult =
 export function enrolTotp(
   tx: Tx,
   userId: string,
-  options: { now: Date },
+  options: { now: Date; dataKeys: DataKeyRing },
 ): Promise<EnrolTotpResult> {
-  const { now } = options;
+  const { now, dataKeys } = options;
   return guardedAuth('totp_credential', 'insert', () =>
     tx.transaction(async (inner): Promise<EnrolTotpResult> => {
       const locked = await lockUser(inner, userId);
@@ -192,11 +258,14 @@ export function enrolTotp(
         .where(eq(user.id, userId));
 
       const secret = new Secret({ size: TOTP_SETTINGS.secretBytes });
+      // Sealed before it is stored; the plain base32 is only ever in this scope,
+      // for the person to type into an app.
+      const sealed = dataKeys.encrypt(secret.base32, secretAad(userId));
       if (existing === undefined) {
         await inner.insert(totpCredential).values({
           originServer: await serverId(inner),
           userId,
-          secret: secret.base32,
+          secret: sealed,
           createdAt: now,
           updatedAt: now,
           createdBy: userId,
@@ -206,7 +275,7 @@ export function enrolTotp(
         await inner
           .update(totpCredential)
           .set({
-            secret: secret.base32,
+            secret: sealed,
             lastUsedStep: null,
             version: sql`${totpCredential.version} + 1`,
             updatedAt: now,
@@ -257,7 +326,9 @@ export type ConfirmTotpResult =
  * changes nothing and writes nothing. A `recovery` session in `session` becomes
  * `full` (SC-10): the user has set a new way to sign in. Audited as
  * `auth.totp-confirmed`. Other sessions stay: the user added a factor, they did
- * not weaken one.
+ * not weaken one. A pending secret that cannot be opened with `dataKeys` is
+ * answered as a wrong code, with nothing written: the person starts again with
+ * `enrolTotp`, which replaces it.
  *
  * @throws AuthStateError `user-not-found` for an unknown or deleted user,
  * `user-disabled` for a disabled one.
@@ -271,9 +342,10 @@ export function confirmTotp(
     code: string;
     session?: { id: string; scope: SessionScope };
     now: Date;
+    dataKeys: DataKeyRing;
   },
 ): Promise<ConfirmTotpResult> {
-  const { userId, now } = input;
+  const { userId, now, dataKeys } = input;
   return guardedAuth('totp_credential', 'update', () =>
     tx.transaction(async (inner): Promise<ConfirmTotpResult> => {
       const locked = await lockUser(inner, userId);
@@ -293,8 +365,11 @@ export function confirmTotp(
         return { ok: false, reason: 'already-enrolled' };
       }
       const token = codeShape(input.code);
+      const secret = openSecret(dataKeys, userId, row.secret);
       const step =
-        token === null ? null : matchingStep(row.secret, token, now, null);
+        token === null || secret === null
+          ? null
+          : matchingStep(secret, token, now, null);
       if (step === null) return { ok: false, reason: 'code-incorrect' };
 
       await inner
@@ -405,6 +480,78 @@ export function removeTotp(
         now,
       });
       return { ok: true };
+    }),
+  );
+}
+
+/**
+ * Seals every authenticator secret that is still stored as plain base32, with
+ * the current key of `dataKeys`, in place, and answers how many it sealed. A row
+ * is plain when its `secret` does not start with `v1.`, which a base32 secret
+ * never does. Each is bound to its own user's row, as `enrolTotp` does it.
+ *
+ * Start-up calls it (`bindServerKeys`), in the transaction that holds the
+ * `installation` row, because a migration may not change security state
+ * (CLAUDE.md, Data rules) and a secret written before the keys existed has to be
+ * sealed by the server that holds them. It rewrites only the `secret` column and
+ * `updated_at`, with a conditional UPDATE on the value it read, so a row that
+ * changed in between (an enrolment on a server that still ran the old code) is
+ * left for the next start. A call that seals nothing writes nothing. One
+ * `auth.totp-secrets-encrypted` event carries the count, never an id, a secret or
+ * a key.
+ *
+ * Only server start-up calls this, before any request is served, so it checks no
+ * permission.
+ *
+ * @throws RecordWriteError when the database refuses a write; it carries the
+ * SQLSTATE and constraint name only, never a secret.
+ */
+export function sealPlainTotpSecrets(
+  tx: Tx,
+  input: { dataKeys: DataKeyRing; now: Date },
+): Promise<number> {
+  const { dataKeys, now } = input;
+  return guardedAuth('totp_credential', 'update', () =>
+    // A savepoint: a failure leaves no half-sealed set and no event.
+    tx.transaction(async (inner) => {
+      const plain = await inner
+        .select({
+          id: totpCredential.id,
+          userId: totpCredential.userId,
+          secret: totpCredential.secret,
+        })
+        .from(totpCredential)
+        .where(notLike(totpCredential.secret, `${ENCRYPTED_PREFIX}%`))
+        .orderBy(asc(totpCredential.id));
+      let sealed = 0;
+      for (const row of plain) {
+        const [done] = await inner
+          .update(totpCredential)
+          .set({
+            secret: dataKeys.encrypt(row.secret, secretAad(row.userId)),
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(totpCredential.id, row.id),
+              eq(totpCredential.secret, row.secret),
+            ),
+          )
+          .returning({ id: totpCredential.id });
+        if (done !== undefined) sealed += 1;
+      }
+      if (sealed > 0) {
+        await recordAuthAudit(inner, {
+          category: AUTH_AUDIT.totpSecretsEncrypted,
+          action: 'encrypt',
+          actor: { type: 'system', id: null },
+          targetType: null,
+          targetId: null,
+          details: { count: sealed },
+          occurredAt: now,
+        });
+      }
+      return sealed;
     }),
   );
 }
