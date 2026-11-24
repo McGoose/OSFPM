@@ -339,7 +339,7 @@ async function readGoverned<C extends AccessGrantCategory>(
   category: C,
 ): Promise<SensitiveRecord<C> | null> {
   const [subject] = await tx
-    .select(PERSON_COLUMNS)
+    .select()
     .from(person)
     .where(and(eq(person.id, personId), isNull(person.deletedAt)))
     .limit(1);

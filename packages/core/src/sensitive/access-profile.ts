@@ -324,6 +324,7 @@ export async function updateAccessProfile(
   const now = ctx.clock();
   // The user row first (CLAUDE.md, Data rules: lock order). What it says about the account
   // does not matter here: there is only a profile to change if the deletion left one.
+  await holdAccount(tx, userId);
   return guardedSensitive('user_access_profile', 'update', () =>
     tx.transaction(async (inner) => {
       const existing = await lockProfileRow(inner, userId);
