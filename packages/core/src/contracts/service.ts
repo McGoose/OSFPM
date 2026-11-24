@@ -53,7 +53,6 @@ import {
   applyTerms,
   checkTermsInput,
   checkTermsState,
-  CONTRACT_TERMS_AMOUNT_KEYS,
   contractKindHasTerms,
   EMPTY_TERMS,
   normaliseTerms,
@@ -941,16 +940,7 @@ export async function setContractTerms(
   if (!found) throw new AccessDeniedError(CONTRACTS_EDIT_PERMISSION);
   const scope = scopeOf(found);
   await requireOnRecord(tx, ctx, scope, CONTRACTS_EDIT_PERMISSION);
-  const storedNow = await findTermsRow(tx, contractId);
-  const holdsAmount =
-    storedNow !== undefined &&
-    storedNow.deletedAt === null &&
-    CONTRACT_TERMS_AMOUNT_KEYS.some((key) => storedNow[key] !== null);
-  const namesAmount = CONTRACT_TERMS_AMOUNT_KEYS.some(
-    (key) => terms[key] !== undefined,
-  );
-  const setsValue =
-    readValueKeysIn(terms).length > 0 && (namesAmount || holdsAmount);
+  const setsValue = readValueKeysIn(terms).length > 0;
   if (setsValue) {
     await requireOnRecord(tx, ctx, scope, CONTRACTS_READ_VALUE_PERMISSION);
   }
