@@ -272,10 +272,7 @@ export function enrolTotp(
         .where(eq(totpCredential.userId, userId));
       let replacesUnopenable = false;
       if (existing?.confirmedAt) {
-        if (
-          openSecret(dataKeys, userId, existing.secret) !== null &&
-          userId === ''
-        ) {
+        if (openSecret(dataKeys, userId, existing.secret) !== null) {
           return { ok: false, reason: 'already-enrolled' };
         }
         replacesUnopenable = true;

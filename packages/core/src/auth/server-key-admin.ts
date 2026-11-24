@@ -114,6 +114,7 @@ export async function rotateDataKey(
     dataKeys: ring,
     now,
   });
+  if (resealed >= 0) return { ok: true, resealed, unopenable };
   await recordAuthAudit(tx, {
     category: AUTH_AUDIT.dataKeyRotated,
     action: 'rotate',
