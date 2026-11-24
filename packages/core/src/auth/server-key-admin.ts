@@ -304,10 +304,6 @@ export async function replaceServerIdentity(
   });
   // Outside `guardedAuth`, which would turn this typed error into a database error.
   if (!changed) throw new ServerKeysError('identity-mismatch');
-  if (oldFingerprint.length > 0) {
-    pending.write(keysDir);
-    return { ok: true, oldFingerprint, newFingerprint };
-  }
   await recordAuthAudit(tx, {
     category: AUTH_AUDIT.serverIdentityReplaced,
     action: 'replace',
