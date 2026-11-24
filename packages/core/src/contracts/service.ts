@@ -872,6 +872,9 @@ export async function setContractTerms(
   const scope = scopeOf(found);
   await requireOnRecord(tx, ctx, scope, CONTRACTS_EDIT_PERMISSION);
   const setsAmount = amountKeysIn(terms).length > 0;
+  if (setsAmount) {
+    await requireOnRecord(tx, ctx, scope, CONTRACTS_READ_VALUE_PERMISSION);
+  }
   checkTermsKind(found.kind);
   const badInput = checkTermsInput(terms);
   if (badInput !== undefined) throw new ContractInputError(badInput);
