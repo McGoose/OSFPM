@@ -58,6 +58,7 @@ import {
   SecurityTableWriteError,
   VersionConflictError,
 } from '@osfpm/core/src/db/write.js';
+import { DatabaseInUseError } from '@osfpm/core/src/db/in-use.js';
 import { testTargets } from '@osfpm/core/src/db/test-support.js';
 import { InstallationMissingError } from '@osfpm/core/src/installation/server-id.js';
 import {
@@ -285,6 +286,7 @@ const internalFixtures = new Map<
   [InstallationMissingError, () => new InstallationMissingError()],
   [ServerKeysError, () => new ServerKeysError('identity-mismatch')],
   [DecryptionError, () => new DecryptionError()],
+  [DatabaseInUseError, () => new DatabaseInUseError('postgres', 'server')],
 ]);
 
 /** Everything a test route can throw, by name: the fixtures, the subclasses, and a few odd ones. */

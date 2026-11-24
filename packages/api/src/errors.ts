@@ -45,6 +45,7 @@ import {
   ContractTermsConflictError,
 } from '@osfpm/core/src/contracts/service.js';
 import { CostLineInputError } from '@osfpm/core/src/costs/service.js';
+import { DatabaseInUseError } from '@osfpm/core/src/db/in-use.js';
 import {
   MissingActingUserError,
   RecordNotFoundError,
@@ -1119,6 +1120,11 @@ export const INTERNAL_ERRORS: readonly {
     errorClass: DecryptionError,
     reason:
       'A sealed value could not be opened. The service that opens one catches it and answers as if there were no valid secret; it is never thrown to a route. It carries no detail.',
+  },
+  {
+    errorClass: DatabaseInUseError,
+    reason:
+      'Raised when the server starts, or an admin command runs, and another process has the database or its data directory. Start-up waits on it or stops; it is never thrown while a request is served.',
   },
 ];
 

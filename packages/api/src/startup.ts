@@ -5,6 +5,10 @@ import {
   type PermissionDefinition,
 } from '@osfpm/core/src/access/permission-sync.js';
 import type { Database } from '@osfpm/core/src/db/client.js';
+import {
+  DatabaseInUseError,
+  type InUseMarker,
+} from '@osfpm/core/src/db/in-use.js';
 import { migrate } from '@osfpm/core/src/db/migrate.js';
 import type { Tx } from '@osfpm/core/src/db/write.js';
 import type { App } from './app.js';
@@ -212,6 +216,13 @@ export type StartupOptions = {
    * of its own file (`TEST_KEYS_DIR`), even when it swaps the steps.
    */
   readonly keysDir: string;
+  /**
+   * The server's in-use marker (`markDatabaseInUse`). Taken first in every attempt,
+   * before the migrations, so that a command which needs every server stopped never
+   * runs while this one migrates or serves. Left out, the server marks nothing: only
+   * a test that has no use for the guard does that, and `startServer` always passes it.
+   */
+  readonly inUse?: InUseMarker;
 };
 
 /** What `runStartup` can be told besides its steps. */
@@ -266,6 +277,15 @@ export type StartupControl = {
  * and sometimes the password). The app stays not ready meanwhile. Migrations are
  * safe to run again.
  *
+ * The first thing every attempt does is mark the database as in use
+ * (`options.inUse`, the core's `markDatabaseInUse`). On PostgreSQL that is a
+ * shared advisory lock, which an admin command that needs every server stopped
+ * holds exclusively while it runs. The attempt then throws `DatabaseInUseError`,
+ * which is not a failure: start-up waits as it does for an unreachable database,
+ * with one warning line per attempt that names no more than the attempt and the
+ * wait, and goes on when the command has finished. A stop signal ends that wait
+ * too.
+ *
  * Only the server entry calls this, once, after it listens.
  *
  * @throws PermissionSyncError when a permission is flagged sensitive while
@@ -298,21 +318,31 @@ export async function runStartup(
       // The shutdown closes the database under a step, which then fails: that
       // is the server stopping, not start-up failing.
       if (signal?.aborted) throw new StartupAbortedError();
-      if (!isDatabaseUnreachable(error)) throw error;
+      // An admin command has the database to itself: the server is early, not
+      // failing, and waits as it does for a database that is not there yet.
+      const busy = error instanceof DatabaseInUseError;
+      if (!busy && !isDatabaseUnreachable(error)) throw error;
       const retryInMs = Math.min(
         retry.initialMs * 2 ** (attempt - 1),
         retry.maxMs,
       );
-      const code = codeOf(error);
-      app.log.warn(
-        {
-          attempt,
-          retryInMs,
-          cause: errorClassName(error),
-          ...(code === undefined ? {} : { code }),
-        },
-        'the database is not reachable, retrying',
-      );
+      if (busy) {
+        app.log.warn(
+          { attempt, retryInMs },
+          'an admin command is using the database, waiting',
+        );
+      } else {
+        const code = codeOf(error);
+        app.log.warn(
+          {
+            attempt,
+            retryInMs,
+            cause: errorClassName(error),
+            ...(code === undefined ? {} : { code }),
+          },
+          'the database is not reachable, retrying',
+        );
+      }
       await sleep(retryInMs, signal);
     }
   }
@@ -335,6 +365,11 @@ async function attemptOnce(
   options: StartupOptions,
   steps: StartupSteps,
 ): Promise<string | null> {
+  // First, before any step touches the database: an admin command that needs
+  // every server stopped holds the lock exclusively while it runs, and this
+  // throws until it has finished (see `runStartup`). Nothing is taken twice when
+  // a later step fails and the attempt is repeated.
+  await options.inUse?.attach(app.db);
   if (options.autoMigrate) {
     await steps.migrate(app.db);
     app.log.info('migrations are up to date');
