@@ -366,6 +366,10 @@ export function markDatabaseInUse(
         await taken.release();
         return;
       }
+      if (role === 'server') {
+        await taken.release();
+        return;
+      }
       held = taken;
     },
     close: async (database) => {
