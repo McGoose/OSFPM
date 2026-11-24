@@ -9,6 +9,7 @@ import {
 } from './args.js';
 import { runDoctor } from './doctor.js';
 import { runInfo } from './info.js';
+import { runAcceptDataKeyLoss, runRotateDataKey } from './key-commands.js';
 import {
   describeFailure,
   openAdminSession,
@@ -68,6 +69,10 @@ async function runGuarded(
           session,
           context,
         );
+      case 'rotate-data-key':
+        return await runRotateDataKey(config, session, context);
+      case 'accept-data-key-loss':
+        return await runAcceptDataKeyLoss(config, session, context);
       default:
         // The parser only answers commands that have a case here.
         throw new Error('The command has no implementation');

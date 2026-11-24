@@ -336,6 +336,44 @@ export function readDataKeyRing(dir: string): DataKeyRing | null {
 }
 
 /**
+ * Adds a new data key to `dir` and makes it the current one, then answers the ring
+ * of every key that is there: the new one, which seals from now on, and every older
+ * one, which still opens what it sealed. The order is the safe one: the key file is
+ * written first (mode 0600, never over a file that is there), and only then is
+ * `current` replaced, in one step, so a crash between the two leaves a key that
+ * nothing uses and the old `current` in place. Old key files are never deleted: an
+ * older backup of the database still needs them. It does not look at `current`
+ * before it replaces it, so it also puts a usable `current` back where the old one
+ * is missing or names a file that is gone; a key file that is not a key stops it
+ * before anything is written.
+ *
+ * The admin command line's `rotate-data-key` and `accept-data-key-loss` call it,
+ * with every server stopped (the in-use marker, `db/in-use.ts`). The key is
+ * random, from the built-in `node:crypto`, and never leaves the ring.
+ *
+ * @throws ServerKeysError `permissions`, `unreadable` or `invalid` for a key file
+ * that is there and cannot be used, or a directory that cannot be written; the
+ * message names a path and nothing from a file.
+ */
+export function addDataKey(dir: string): DataKeyRing {
+  const folder = join(dir, SERVER_KEY_FILES.dataKeysDirectory);
+  // Every key that is there is read and checked first, so a bad file stops the
+  // command before it writes anything.
+  const keys = readDataKeyFiles(folder);
+  ensureDirectory(folder);
+  const keyId = newId();
+  const key = randomBytes(32);
+  const path = join(folder, `${keyId}.key`);
+  if (!createKeyFile(path, `${key.toString('base64')}\n`)) {
+    // A new id is never taken, so this is not a race: something is wrong.
+    throw new ServerKeysError('unreadable', path);
+  }
+  keys.set(keyId, key);
+  writeCurrent(folder, keyId);
+  return new DataKeyRing(keys, keyId);
+}
+
+/**
  * What `inspectKeyDirectory` found. Counts and facts only: no key id, no file name
  * of a data key (the name is the key's id), and nothing from inside a file.
  */

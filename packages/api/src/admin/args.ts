@@ -35,19 +35,35 @@ const COMMAND_OPTIONS = new Map<
 >([
   ['info', { command: 'info', options: ['json'] }],
   ['doctor', { command: 'doctor', options: ['json'] }],
+  ['rotate-data-key', { command: 'rotate-data-key', options: [] }],
+  ['accept-data-key-loss', { command: 'accept-data-key-loss', options: [] }],
 ]);
 
 /** The text `--help` prints, and standard error prints after a usage error. */
 export const USAGE = `Usage: pnpm --filter @osfpm/api admin <command> [options]
 
-Commands that only read (a server may be running):
+Commands that only read (with PostgreSQL a server may be running):
   info      Print what this installation holds: the version, the migrations,
             the setup state, the key files and the counts of secrets, organisations
             and users. No names and no addresses.
               --json   Print JSON instead of text.
-  doctor    Check the installation and print ok, warn or fail for each check.
-            Exits with 1 when a check fails.
+  doctor    Check the installation and print ok, warn, fail or skipped for each
+            check. Exits with 1 when a check fails.
               --json   Print JSON instead of text.
+
+Commands that change the server's keys. Every server must be stopped first: with
+PostgreSQL the command refuses at once while a server is running; with PGlite the
+data directory is never opened by two processes.
+  rotate-data-key
+            Add a new data key, make it the current one, and re-seal every
+            authenticator secret that an older key sealed. Old key files are kept:
+            an older backup of the database still needs them.
+  accept-data-key-loss
+            For an install whose data keys are gone (the server refuses to start
+            with "data keys are missing"): make a fresh data key and make it the
+            current one. No row changes. The authenticator secrets that cannot be
+            opened stay as they are, and their people set up again. Changes
+            nothing when a usable current key exists.
 
 Options for every command:
   -h, --help  Print this text.

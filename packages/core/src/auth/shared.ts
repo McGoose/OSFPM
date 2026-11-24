@@ -78,6 +78,19 @@ export const AUTH_AUDIT = {
    * nothing that names a person or a secret (spec, section Cryptography and keys).
    */
   totpSecretsEncrypted: 'auth.totp-secrets-encrypted',
+  /**
+   * The admin command `rotate-data-key` added a data key, made it current and
+   * re-sealed the authenticator secrets that an older key had sealed (P-09a1). Holds
+   * how many it re-sealed and how many it could not open, and no key, key id or
+   * person (spec, section Cryptography and keys).
+   */
+  dataKeyRotated: 'auth.data-key-rotated',
+  /**
+   * The admin command `accept-data-key-loss` made a fresh data key for an install whose
+   * data keys were gone (P-09a1). Holds how many authenticator secrets cannot be opened
+   * and so stay unusable until their people set up again, and no key, key id or person.
+   */
+  dataKeyLossAccepted: 'auth.data-key-loss-accepted',
   setupCheckFailed: 'auth.setup-check-failed',
   setupCompleted: 'auth.setup-completed',
   userCreated: 'auth.user-created',

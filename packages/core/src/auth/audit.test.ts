@@ -1,3 +1,5 @@
+import { rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { eq, like, or, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PERMISSION_LISTS } from '../access/permission-lists.js';
@@ -16,7 +18,7 @@ import {
 } from '../db/schema/index.js';
 import { getTableName } from 'drizzle-orm';
 import { createMigratedDatabase, testTargets } from '../db/test-support.js';
-import type { ServerKeys } from '../keys/server-keys.js';
+import { SERVER_KEY_FILES, type ServerKeys } from '../keys/server-keys.js';
 import {
   createTestKeyDirectory,
   type TestKeyDirectory,
@@ -86,6 +88,7 @@ import {
   recordAdminCommandRun,
 } from './admin-report.js';
 import { AUTH_AUDIT } from './shared.js';
+import { acceptDataKeyLoss, rotateDataKey } from './server-key-admin.js';
 import { bindServerKeys } from './server-key-binding.js';
 import {
   DEMO_ADMIN_EMAIL,
@@ -705,6 +708,21 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
       details: { sealed: 1, unopenable: 0 },
       now: at(30 * MINUTE),
     });
+
+    // The key commands, last: they change the key directory and re-seal the secrets,
+    // which no flow above reads again. A rotation, then the loss of every data key is
+    // accepted (the folder is gone, as it is when a volume is lost).
+    await rotateDataKey(db(), {
+      keysDir: keyDirectory.dir,
+      now: at(31 * MINUTE),
+    });
+    rmSync(join(keyDirectory.dir, SERVER_KEY_FILES.dataKeysDirectory), {
+      recursive: true,
+    });
+    await acceptDataKeyLoss(db(), {
+      keysDir: keyDirectory.dir,
+      now: at(32 * MINUTE),
+    });
   });
 
   it('records every kind of action the services take', async () => {
@@ -737,6 +755,40 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
       'sealed',
       'unopenable',
     ]);
+  });
+
+  it('records a data key rotated and the loss of the data keys accepted, from the system, about the installation, with counts and no key or id', async () => {
+    const facts = await readInstallationFacts(db());
+    const [rotated] = await byCategory(AUTH_AUDIT.dataKeyRotated);
+    const [accepted] = await byCategory(AUTH_AUDIT.dataKeyLossAccepted);
+
+    expect(await byCategory(AUTH_AUDIT.dataKeyRotated)).toHaveLength(1);
+    expect(await byCategory(AUTH_AUDIT.dataKeyLossAccepted)).toHaveLength(1);
+    expect(rotated).toMatchObject({
+      action: 'rotate',
+      actorType: 'system',
+      actorId: null,
+      targetType: 'installation',
+      targetId: facts.installationId,
+      occurredAt: at(31 * MINUTE),
+    });
+    expect(Object.keys(rotated!.details as object).sort()).toEqual([
+      'resealed',
+      'unopenable',
+    ]);
+    // The one sealed secret of this scene was re-sealed under the new key.
+    expect(rotated!.details).toMatchObject({ resealed: 1, unopenable: 0 });
+    expect(accepted).toMatchObject({
+      action: 'accept',
+      actorType: 'system',
+      actorId: null,
+      targetType: 'installation',
+      targetId: facts.installationId,
+      occurredAt: at(32 * MINUTE),
+    });
+    expect(Object.keys(accepted!.details as object)).toEqual(['unopenable']);
+    // The data keys were gone: every sealed secret is one that cannot be opened.
+    expect(accepted!.details).toMatchObject({ unopenable: 1 });
   });
 
   it('records a session as created, with its method, for its user', async () => {

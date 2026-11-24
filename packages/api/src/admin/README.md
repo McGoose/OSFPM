@@ -17,6 +17,7 @@ It reads the same environment as the server (`DATABASE_URL` or `OSFPM_DATA_DIR`,
 - `args.ts`: `parseAdminArguments` (`node:util`'s `parseArgs`, strict) and `USAGE`.
 - `session.ts`: `openAdminSession` (opens the database and takes the marker; never makes a PGlite database), `requireMigrated`, `AdminContext` (the process: environment, output, clock, and for tests a database that is open) and `describeFailure` (what a failure prints: fixed text, or the class name and short code of an error, never a driver's message).
 - `info.ts` and `doctor.ts`: the two commands that only read. `info` prints counts, ids and fingerprints; `doctor` prints `ok`, `warn`, `fail` or `skipped` for each check. Both take `--json`, and each writes one `admin.command-run` audit event.
+- `key-commands.ts`: `rotate-data-key` and `accept-data-key-loss`, the commands that change the data keys. They need every server stopped (the exclusive in-use marker is taken before they run), call `rotateDataKey` and `acceptDataKeyLoss` of the core in one transaction, which takes the `installation` row first and writes the audit event, and print counts and fixed words.
 - `key-state.ts`: what the key directory says, as states (`checkIdentityFile`, `readDataKeyState`).
 
 **Rules you must not break**
