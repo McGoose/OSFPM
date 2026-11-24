@@ -24,6 +24,7 @@ import {
   recordAuthAudit,
   serverId,
 } from './shared.js';
+import { recordLoginFailure } from './throttle.js';
 
 /**
  * Authenticator-app codes (TOTP, RFC 6238), optional on top of a password
@@ -327,8 +328,12 @@ export type ConfirmTotpResult =
  * `full` (SC-10): the user has set a new way to sign in. Audited as
  * `auth.totp-confirmed`. Other sessions stay: the user added a factor, they did
  * not weaken one. A pending secret that cannot be opened with `dataKeys` is
- * answered as a wrong code, with nothing written: the person starts again with
- * `enrolTotp`, which replaces it.
+ * answered as a wrong code, whatever the code is, and audited as
+ * `auth.login-step-failed` with the reason `totp-undecryptable` and the purpose
+ * `confirm`, as a sign-in audits it: the signed-in person is the actor and the
+ * target, and no value is in it. Nothing else is written: the person starts again
+ * with `enrolTotp`, which replaces it. A wrong code on a secret that opens is not
+ * audited, because no secret was guessed.
  *
  * @throws AuthStateError `user-not-found` for an unknown or deleted user,
  * `user-disabled` for a disabled one.
@@ -364,12 +369,23 @@ export function confirmTotp(
       if (row.confirmedAt !== null) {
         return { ok: false, reason: 'already-enrolled' };
       }
-      const token = codeShape(input.code);
       const secret = openSecret(dataKeys, userId, row.secret);
+      if (secret === null) {
+        // A fault of the server, not a guess: said in the trail, with the reason a
+        // sign-in gives, and answered like a wrong code. The caller commits.
+        await recordLoginFailure(inner, {
+          method: 'totp',
+          reason: 'totp-undecryptable',
+          userId,
+          actorId: userId,
+          purpose: 'confirm',
+          now,
+        });
+        return { ok: false, reason: 'code-incorrect' };
+      }
+      const token = codeShape(input.code);
       const step =
-        token === null || secret === null
-          ? null
-          : matchingStep(secret, token, now, null);
+        token === null ? null : matchingStep(secret, token, now, null);
       if (step === null) return { ok: false, reason: 'code-incorrect' };
 
       await inner

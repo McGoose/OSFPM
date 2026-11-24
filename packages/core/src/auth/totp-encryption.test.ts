@@ -261,7 +261,7 @@ describe.each(testTargets)('TOTP secrets at rest on $name', (target) => {
       ).toEqual({ ok: false, reason: 'secret-undecryptable' });
     });
 
-    it('refuses to confirm a pending secret it cannot open, as a wrong code', async () => {
+    it('refuses to confirm a pending secret it cannot open, as a wrong code, and audits it as totp-undecryptable', async () => {
       const userId = await seedActiveUser(database);
       const secret = await seedTotp(database, userId, {
         dataKeys,
@@ -279,6 +279,72 @@ describe.each(testTargets)('TOTP secrets at rest on $name', (target) => {
         }),
       ).toEqual({ ok: false, reason: 'code-incorrect' });
       expect((await credentialOf(userId)).confirmedAt).toBeNull();
+
+      // The trail says why, as it does for a sign-in: the actor is the person
+      // making the request, the only id there is, and nothing else is in it.
+      const events = await failedSteps(userId);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        category: AUTH_AUDIT.loginStepFailed,
+        action: 'fail',
+        actorType: 'user',
+        actorId: userId,
+        targetType: 'user',
+        targetId: userId,
+        occurredAt: T0,
+        details: {
+          method: 'totp',
+          reason: 'totp-undecryptable',
+          purpose: 'confirm',
+        },
+      });
+      const text = JSON.stringify(events[0]);
+      expect(text).not.toContain(secret);
+      expect(text).not.toContain(totpCodeAt(secret, T0));
+      expect(text).not.toContain('v1.broken');
+    });
+
+    it('writes no event for a wrong code on a pending secret it can open, and none for a code that is no code', async () => {
+      const userId = await seedActiveUser(database);
+      await seedTotp(database, userId, {
+        dataKeys,
+        now: T0,
+        confirmed: false,
+      });
+
+      for (const code of ['000000', 'not a code']) {
+        expect(
+          await confirmTotp(db(), { userId, code, now: T0, dataKeys }),
+        ).toEqual({ ok: false, reason: 'code-incorrect' });
+      }
+
+      expect(await failedSteps(userId)).toEqual([]);
+    });
+
+    it('audits an unopenable pending secret every time, whatever the code is, and never counts it as a wrong guess', async () => {
+      const userId = await seedActiveUser(database);
+      await seedTotp(database, userId, {
+        dataKeys,
+        now: T0,
+        confirmed: false,
+      });
+      await setSecret(userId, 'v1.broken.broken.broken');
+
+      for (const code of ['000000', 'not a code']) {
+        expect(
+          await confirmTotp(db(), { userId, code, now: T0, dataKeys }),
+        ).toEqual({ ok: false, reason: 'code-incorrect' });
+      }
+
+      const events = await failedSteps(userId);
+      expect(events).toHaveLength(2);
+      expect(
+        events.every(
+          (event) =>
+            (event.details as { reason: string }).reason ===
+            'totp-undecryptable',
+        ),
+      ).toBe(true);
     });
   });
 
