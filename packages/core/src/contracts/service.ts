@@ -855,22 +855,6 @@ async function refuseKindChangeWithTerms(
     .limit(1)
     .for('update');
   if (!held) throw new AccessDeniedError(CONTRACTS_EDIT_PERMISSION);
-  const [terms] = await tx
-    .select({ id: contractTerms.id })
-    .from(contractTerms)
-    .where(
-      and(
-        eq(contractTerms.contractId, contractId),
-        isNull(contractTerms.deletedAt),
-      ),
-    )
-    .limit(1)
-    .for('share');
-  if (terms !== undefined) {
-    throw new ContractInputError(
-      "Remove the terms before changing this contract's kind",
-    );
-  }
 }
 
 /** The change counter of the contract's project, or of the organisation for a contract with none. */
