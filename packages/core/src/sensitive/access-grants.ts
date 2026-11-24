@@ -921,7 +921,9 @@ export async function shareWithSuggestedRoles(
   // preview is refused and holds the same row, so a client is never shown a share that a
   // confirmed call would refuse; the hold is the weakest row lock, and only the deletion of
   // the account waits for it.
-  await requireLiveAccount(tx, ctx, subject, checkedCategory);
+  if (subject.person.userId !== null) {
+    await holdAccount(tx, subject.person.userId);
+  }
 
   // When the organisation suggests no role for the groups asked about, there is nobody to
   // share with: say so, as an empty preview, and neither read the person's data nor write
