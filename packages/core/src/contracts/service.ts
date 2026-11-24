@@ -985,7 +985,6 @@ export async function removeContractTerms(
   if (!found) throw new AccessDeniedError(CONTRACTS_EDIT_PERMISSION);
   const scope = scopeOf(found);
   await requireOnRecord(tx, ctx, scope, CONTRACTS_EDIT_PERMISSION);
-  await requireOnRecord(tx, ctx, scope, CONTRACTS_READ_VALUE_PERMISSION);
   const stored = await findTermsRow(tx, contractId);
   if (stored === undefined || stored.deletedAt !== null) {
     throw new RecordNotFoundError('contract_terms', contractId);
