@@ -4,7 +4,7 @@ import { PermissionSyncError } from '@osfpm/core/src/access/permission-sync.js';
 import { createDatabase, type Database } from '@osfpm/core/src/db/client.js';
 import { API_PREFIX } from './api-version.js';
 import { buildApp } from './app.js';
-import { TEST_PUBLIC_ORIGIN } from './test-support.js';
+import { TEST_KEYS_DIR, TEST_PUBLIC_ORIGIN } from './test-support.js';
 import {
   isDatabaseUnreachable,
   runStartup,
@@ -173,16 +173,21 @@ describe('start-up when the database cannot be reached', () => {
           failures-- > 0 ? Promise.reject(refused()) : Promise.resolve(),
         syncPermissions: nothing,
       };
-      await runStartup(ctx.app, { autoMigrate: true }, steps, {
-        retry: {
-          initialMs: 1_000,
-          maxMs: 4_000,
-          // Readiness is asked about while the server waits.
-          sleep: noteDelays(delays, async () => {
-            statuses.push((await ctx.ready()).statusCode);
-          }),
+      await runStartup(
+        ctx.app,
+        { autoMigrate: true, keysDir: TEST_KEYS_DIR },
+        steps,
+        {
+          retry: {
+            initialMs: 1_000,
+            maxMs: 4_000,
+            // Readiness is asked about while the server waits.
+            sleep: noteDelays(delays, async () => {
+              statuses.push((await ctx.ready()).statusCode);
+            }),
+          },
         },
-      });
+      );
 
       expect(delays).toEqual([1_000, 2_000, 4_000, 4_000, 4_000]);
       expect(statuses).toEqual([503, 503, 503, 503, 503]);
@@ -227,9 +232,14 @@ describe('start-up when the database cannot be reached', () => {
         },
       };
       const delays: number[] = [];
-      await runStartup(ctx.app, { autoMigrate: false }, steps, {
-        retry: { initialMs: 10, maxMs: 10, sleep: noteDelays(delays) },
-      });
+      await runStartup(
+        ctx.app,
+        { autoMigrate: false, keysDir: TEST_KEYS_DIR },
+        steps,
+        {
+          retry: { initialMs: 10, maxMs: 10, sleep: noteDelays(delays) },
+        },
+      );
       expect(delays).toEqual([10]);
       // The first sync failed on the first list; the second attempt did them all.
       expect(calls).toEqual(['sync', ...PERMISSION_LISTS.map(() => 'sync')]);
@@ -260,7 +270,7 @@ describe('start-up when the database cannot be reached', () => {
         await expect(
           runStartup(
             ctx.app,
-            { autoMigrate: true },
+            { autoMigrate: true, keysDir: TEST_KEYS_DIR },
             {
               migrate: () => Promise.reject(failure),
               syncPermissions: nothing,
@@ -284,7 +294,7 @@ describe('start-up when the database cannot be reached', () => {
       let failures = 40;
       await runStartup(
         ctx.app,
-        { autoMigrate: true },
+        { autoMigrate: true, keysDir: TEST_KEYS_DIR },
         {
           migrate: () =>
             failures-- > 0 ? Promise.reject(refused()) : Promise.resolve(),
@@ -312,7 +322,7 @@ describe('start-up when the database cannot be reached', () => {
       let attempts = 0;
       const running = runStartup(
         ctx.app,
-        { autoMigrate: true },
+        { autoMigrate: true, keysDir: TEST_KEYS_DIR },
         {
           migrate: () => {
             attempts += 1;
@@ -345,7 +355,7 @@ describe('start-up when the database cannot be reached', () => {
       await expect(
         runStartup(
           ctx.app,
-          { autoMigrate: true },
+          { autoMigrate: true, keysDir: TEST_KEYS_DIR },
           {
             migrate: () => {
               attempts += 1;
@@ -369,7 +379,7 @@ describe('start-up when the database cannot be reached', () => {
       await expect(
         runStartup(
           ctx.app,
-          { autoMigrate: true },
+          { autoMigrate: true, keysDir: TEST_KEYS_DIR },
           {
             // The database is closed under the step by the shutdown.
             migrate: () => {
@@ -398,19 +408,24 @@ describe('start-up when the database cannot be reached', () => {
       const abort = new AbortController();
       const delays: number[] = [];
       await expect(
-        runStartup(ctx.app, { autoMigrate: true }, undefined, {
-          signal: abort.signal,
-          retry: {
-            initialMs: STARTUP_RETRY.initialMs,
-            maxMs: STARTUP_RETRY.maxMs,
-            // One wait is proof that the error was taken for "unreachable".
-            sleep: (ms) => {
-              delays.push(ms);
-              abort.abort();
-              return Promise.resolve();
+        runStartup(
+          ctx.app,
+          { autoMigrate: true, keysDir: TEST_KEYS_DIR },
+          undefined,
+          {
+            signal: abort.signal,
+            retry: {
+              initialMs: STARTUP_RETRY.initialMs,
+              maxMs: STARTUP_RETRY.maxMs,
+              // One wait is proof that the error was taken for "unreachable".
+              sleep: (ms) => {
+                delays.push(ms);
+                abort.abort();
+                return Promise.resolve();
+              },
             },
           },
-        }),
+        ),
       ).rejects.toBeInstanceOf(StartupAbortedError);
       expect(delays).toEqual([STARTUP_RETRY.initialMs]);
       const [line] = ctx.retryLines();

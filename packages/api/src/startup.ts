@@ -47,7 +47,7 @@ export type StartupSteps = {
    */
   readonly bindServerKeys?: (
     app: App,
-    keysDir: string | undefined,
+    keysDir: string,
   ) => Promise<{
     readonly identityBound: boolean;
     readonly secretsSealed: number;
@@ -207,10 +207,11 @@ export type StartupOptions = {
   /** Whether to apply pending migrations (`OSFPM_AUTO_MIGRATE`). */
   readonly autoMigrate: boolean;
   /**
-   * The key directory (`OSFPM_KEYS_DIR`), which the key step reads. The real step
-   * refuses to run without it; only a test that swaps the steps leaves it out.
+   * The key directory (`OSFPM_KEYS_DIR`), which the key step reads. Always given, so
+   * no start-up can skip the keys by leaving it out; a test passes the key directory
+   * of its own file (`TEST_KEYS_DIR`), even when it swaps the steps.
    */
-  readonly keysDir?: string;
+  readonly keysDir: string;
 };
 
 /** What `runStartup` can be told besides its steps. */

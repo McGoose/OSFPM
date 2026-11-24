@@ -191,7 +191,7 @@ describe.each(testTargets)('first-run start-up on $name', (target) => {
     // The database is migrated by the real start-up of an earlier server.
     await start();
     await expect(
-      runStartup(app, { autoMigrate: false }, steps, {
+      runStartup(app, { autoMigrate: false, keysDir: TEST_KEYS_DIR }, steps, {
         stderr: { write: (text) => void written.push(text) },
       }),
     ).rejects.toThrow('the connection broke');
@@ -213,7 +213,7 @@ describe.each(testTargets)('first-run start-up on $name', (target) => {
     apps.push(app);
     await start(); // migrates the database
     await expect(
-      runStartup(app, { autoMigrate: false }, steps, {
+      runStartup(app, { autoMigrate: false, keysDir: TEST_KEYS_DIR }, steps, {
         stderr: { write: (text) => void written.push(text) },
       }),
     ).rejects.toThrow('the top-up failed');

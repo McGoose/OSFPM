@@ -87,7 +87,11 @@ describe.each(testTargets)('start-up on $name', (target: TestTarget) => {
 
   it('migrates, then syncs every permission list, then reports ready', async () => {
     const calls: string[] = [];
-    await runStartup(app, { autoMigrate: true }, recordingSteps(calls));
+    await runStartup(
+      app,
+      { autoMigrate: true, keysDir: TEST_KEYS_DIR },
+      recordingSteps(calls),
+    );
 
     expect(calls).toEqual(['migrate', ...PERMISSION_LISTS.map(() => 'sync')]);
     expect(await storedKeys()).toEqual(declaredKeys().sort());
@@ -105,7 +109,7 @@ describe.each(testTargets)('start-up on $name', (target: TestTarget) => {
         return Promise.resolve(0);
       },
     };
-    await runStartup(app, { autoMigrate: true }, steps);
+    await runStartup(app, { autoMigrate: true, keysDir: TEST_KEYS_DIR }, steps);
 
     // The sync refuses to flag a permission while a managed role holds it
     // everywhere, so the narrowing cannot come after it.
@@ -129,7 +133,7 @@ describe.each(testTargets)('start-up on $name', (target: TestTarget) => {
         return Promise.resolve(0);
       },
     };
-    await runStartup(app, { autoMigrate: true }, steps);
+    await runStartup(app, { autoMigrate: true, keysDir: TEST_KEYS_DIR }, steps);
 
     // The top-up locks the installation row and grants what the sync made rows
     // for, so it can neither come before the installation nor before the sync.
@@ -157,7 +161,11 @@ describe.each(testTargets)('start-up on $name', (target: TestTarget) => {
         await syncPermissions(tx, list);
       },
     };
-    const running = runStartup(app, { autoMigrate: true }, steps);
+    const running = runStartup(
+      app,
+      { autoMigrate: true, keysDir: TEST_KEYS_DIR },
+      steps,
+    );
 
     // Nothing has run: the database is not even migrated.
     expect((await ready()).statusCode).toBe(503);
@@ -183,7 +191,7 @@ describe.each(testTargets)('start-up on $name', (target: TestTarget) => {
     await expect(
       runStartup(
         app,
-        { autoMigrate: true },
+        { autoMigrate: true, keysDir: TEST_KEYS_DIR },
         { migrate: () => Promise.reject(failure), syncPermissions: sync },
       ),
     ).rejects.toBe(failure);
@@ -194,7 +202,11 @@ describe.each(testTargets)('start-up on $name', (target: TestTarget) => {
   it('runs no migration when OSFPM_AUTO_MIGRATE is false, and syncs a database that is already migrated', async () => {
     await migrate(database);
     const calls: string[] = [];
-    await runStartup(app, { autoMigrate: false }, recordingSteps(calls));
+    await runStartup(
+      app,
+      { autoMigrate: false, keysDir: TEST_KEYS_DIR },
+      recordingSteps(calls),
+    );
 
     expect(calls).not.toContain('migrate');
     expect(calls).toHaveLength(PERMISSION_LISTS.length);
@@ -204,7 +216,11 @@ describe.each(testTargets)('start-up on $name', (target: TestTarget) => {
 
   it('leaves an unmigrated database alone when OSFPM_AUTO_MIGRATE is false, and fails', async () => {
     await expect(
-      runStartup(app, { autoMigrate: false }, recordingSteps([])),
+      runStartup(
+        app,
+        { autoMigrate: false, keysDir: TEST_KEYS_DIR },
+        recordingSteps([]),
+      ),
     ).rejects.toThrow();
     // Both drivers answer `{ rows }`, but the shared base type leaves it unknown.
     const result = (await database.db.execute(
@@ -215,9 +231,17 @@ describe.each(testTargets)('start-up on $name', (target: TestTarget) => {
   });
 
   it('syncs the same lists again on the next start without changing anything', async () => {
-    await runStartup(app, { autoMigrate: true }, recordingSteps([]));
+    await runStartup(
+      app,
+      { autoMigrate: true, keysDir: TEST_KEYS_DIR },
+      recordingSteps([]),
+    );
     const first = await storedKeys();
-    await runStartup(app, { autoMigrate: true }, recordingSteps([]));
+    await runStartup(
+      app,
+      { autoMigrate: true, keysDir: TEST_KEYS_DIR },
+      recordingSteps([]),
+    );
     expect(await storedKeys()).toEqual(first);
   });
 
@@ -252,7 +276,7 @@ describe.each(testTargets)('start-up on $name', (target: TestTarget) => {
 
       const error = await runStartup(
         app,
-        { autoMigrate: false },
+        { autoMigrate: false, keysDir: TEST_KEYS_DIR },
         recordingSteps([]),
       ).then(
         () => undefined,
@@ -270,7 +294,11 @@ describe.each(testTargets)('start-up on $name', (target: TestTarget) => {
     it('writes none of the lists, not even the ones that came first', async () => {
       await wideGrantOfASensitiveKey('sensitive:read:medical');
       await expect(
-        runStartup(app, { autoMigrate: false }, recordingSteps([])),
+        runStartup(
+          app,
+          { autoMigrate: false, keysDir: TEST_KEYS_DIR },
+          recordingSteps([]),
+        ),
       ).rejects.toBeInstanceOf(PermissionSyncError);
       // Only the row the test inserted is there: the lists share one transaction.
       expect(await storedKeys()).toEqual(['sensitive:read:medical']);

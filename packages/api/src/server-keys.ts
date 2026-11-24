@@ -55,7 +55,6 @@ export function createServerKeyStore(initial?: ServerKeys): ServerKeyStore {
  * time and how many authenticator secrets it sealed, for log lines; nothing about
  * a key or a secret leaves it.
  *
- * @throws Error when start-up was not given a key directory.
  * @throws ServerKeysError when the key directory is not this database's or a key
  * file cannot be used; the message is for the operator and names a path at most.
  * @throws AuthStateError `installation-missing` before the installation row exists.
@@ -63,14 +62,11 @@ export function createServerKeyStore(initial?: ServerKeys): ServerKeyStore {
  */
 export async function bindServerKeysAtStartup(
   app: App,
-  keysDir: string | undefined,
+  keysDir: string,
 ): Promise<{
   readonly identityBound: boolean;
   readonly secretsSealed: number;
 }> {
-  if (keysDir === undefined) {
-    throw new Error('Start-up was not given a key directory');
-  }
   const bound = await app.db.db.transaction((tx) =>
     bindServerKeys(tx, { keysDir, now: new Date() }),
   );

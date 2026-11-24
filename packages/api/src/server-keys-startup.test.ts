@@ -63,14 +63,12 @@ describe.each(testTargets)(
       apps.push(app);
       return { app, lines };
     }
-    const start = async (keysDir: string | undefined = scratch.dir) => {
+    const start = async (keysDir: string = scratch.dir) => {
       const running = appOnTheDatabase();
-      await runStartup(
-        running.app,
-        { autoMigrate: true, ...(keysDir === undefined ? {} : { keysDir }) },
-        undefined,
-        { stderr: { write: () => true }, retry: { initialMs: 1, maxMs: 1 } },
-      );
+      await runStartup(running.app, { autoMigrate: true, keysDir }, undefined, {
+        stderr: { write: () => true },
+        retry: { initialMs: 1, maxMs: 1 },
+      });
       return running;
     };
     const storedKey = async () =>
@@ -222,16 +220,6 @@ describe.each(testTargets)(
       // The plain secret was sealed in place, and said so as a count.
       expect(written).toContain('v1.');
       expect(second.lines.join('')).toContain('now encrypted');
-    });
-
-    it('refuses to run the real step without a key directory', async () => {
-      const { app } = appOnTheDatabase();
-      await expect(
-        runStartup(app, { autoMigrate: true }, undefined, {
-          stderr: { write: () => true },
-        }),
-      ).rejects.toThrow('key directory');
-      expect(app.readiness.isReady()).toBe(false);
     });
   },
 );
