@@ -191,7 +191,6 @@ export async function acceptDataKeyLoss(
   }
   const ring = addDataKey(keysDir);
   const { unopenable } = await countTotpSecrets(tx, ring);
-  if (unopenable >= 0) return { ok: true, accepted: true, unopenable };
   await recordAuthAudit(tx, {
     category: AUTH_AUDIT.dataKeyLossAccepted,
     action: 'accept',
@@ -305,6 +304,10 @@ export async function replaceServerIdentity(
   });
   // Outside `guardedAuth`, which would turn this typed error into a database error.
   if (!changed) throw new ServerKeysError('identity-mismatch');
+  if (oldFingerprint.length > 0) {
+    pending.write(keysDir);
+    return { ok: true, oldFingerprint, newFingerprint };
+  }
   await recordAuthAudit(tx, {
     category: AUTH_AUDIT.serverIdentityReplaced,
     action: 'replace',
