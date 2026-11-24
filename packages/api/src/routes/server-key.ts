@@ -22,7 +22,7 @@ export const serverKeyRoutes: FastifyPluginAsyncZod = (app) => {
   app.get(
     '/.well-known/osfpm/server-key',
     {
-      config: { auth: 'none' },
+      config: { auth: 'none', availableBeforeSetup: true },
       schema: {
         summary: 'The public key of this server',
         description:

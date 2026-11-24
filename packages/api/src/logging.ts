@@ -60,7 +60,7 @@ const escapeForRegExp = (text: string) =>
  * Cryptography and keys; CLAUDE.md, Privacy rule).
  */
 const SECRET_KEY = new RegExp(
-  `token|secret|private.?key|identity.?key|data.?keys?|key.?material|${escapeForRegExp(SESSION_COOKIE)}|^(?:authorization|proxy-authorization|cookie|set-cookie)$`,
+  `token|secret|${escapeForRegExp(SESSION_COOKIE)}|^(?:authorization|proxy-authorization|cookie|set-cookie)$`,
   'i',
 );
 
