@@ -60,6 +60,7 @@ export function isPartyCondition(
         and ${personCompany.deletedAt} is null
         and ${personCompany.relation} in (${sqlList(COMPANY_PARTY_RELATIONS)})
         and (${personCompany.startDate} is null or ${personCompany.startDate} <= ${today}::date)
+        and (${personCompany.endDate} is null or ${personCompany.endDate} >= ${today}::date)
         and ${person.userId} = ${userId}
         and ${person.deletedAt} is null
     )
