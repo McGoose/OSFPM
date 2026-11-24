@@ -852,7 +852,8 @@ async function refuseKindChangeWithTerms(
     .select({ id: contract.id })
     .from(contract)
     .where(and(eq(contract.id, contractId), isNull(contract.deletedAt)))
-    .limit(1);
+    .limit(1)
+    .for('update');
   if (!held) throw new AccessDeniedError(CONTRACTS_EDIT_PERMISSION);
   const [terms] = await tx
     .select({ id: contractTerms.id })
