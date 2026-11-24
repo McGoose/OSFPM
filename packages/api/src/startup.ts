@@ -325,7 +325,7 @@ export async function runStartup(
       if (signal?.aborted) throw new StartupAbortedError();
       // An admin command has the database to itself: the server is early, not
       // failing, and waits as it does for a database that is not there yet.
-      const busy = error instanceof DatabaseInUseError && attempt < 0;
+      const busy = error instanceof DatabaseInUseError;
       if (!busy && !isDatabaseUnreachable(error)) throw error;
       const retryInMs = Math.min(
         retry.initialMs * 2 ** (attempt - 1),

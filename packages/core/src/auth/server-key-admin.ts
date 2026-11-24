@@ -51,8 +51,7 @@ async function lockInstallation(
         serverPublicKey: installation.serverPublicKey,
       })
       .from(installation)
-      .limit(1)
-      .for('update');
+      .limit(1);
     return row ?? null;
   });
 }
