@@ -33,7 +33,7 @@ import { isUuid } from './guard.js';
 export async function holdAccount(tx: Tx, userId: string): Promise<boolean> {
   if (!isUuid(userId)) return false;
   const [found] = await tx
-    .select({ deletedAt: user.deletedAt })
+    .select()
     .from(user)
     .where(eq(user.id, userId))
     .limit(1)
