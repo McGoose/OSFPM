@@ -904,7 +904,6 @@ export async function setContractTerms(
     .limit(1)
     .for('share');
   if (!held) throw new AccessDeniedError(CONTRACTS_EDIT_PERMISSION);
-  checkTermsKind(held.kind);
 
   const write = writeContext(ctx);
   let row: ContractTermsRow;
