@@ -132,7 +132,7 @@ function ensureDirectory(dir: string): void {
  */
 function createKeyFile(path: string, text: string): boolean {
   try {
-    writeFileSync(path, text, { mode: 0o644, flag: 'wx' });
+    writeFileSync(path, text, { mode: 0o600, flag: 'wx' });
     return true;
   } catch (error) {
     if ((error as { code?: unknown } | null)?.code === 'EEXIST') return false;
