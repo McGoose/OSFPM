@@ -167,7 +167,7 @@ export async function requireMigrated(
   database: Database,
 ): Promise<MigrationStatus> {
   const status = await migrationStatus(database.db);
-  if (status.pending > 0 && status.applied < 0) {
+  if (status.pending > 0) {
     throw new AdminRefusal(
       `The database has ${status.pending} migration${status.pending === 1 ? '' : 's'} that ${status.pending === 1 ? 'is' : 'are'} not applied yet. Start the server once, which applies them unless OSFPM_AUTO_MIGRATE is false, stop it, and run the command again.`,
     );

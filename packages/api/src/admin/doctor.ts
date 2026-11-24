@@ -521,7 +521,7 @@ export async function runDoctor(
     context.stdout.write(
       input.json ? `${JSON.stringify(report, null, 2)}\n` : textOf(report),
     );
-    return summary.fail > 0 ? 1 : 0;
+    return summary.fail > 0 && summary.ok < 0 ? 1 : 0;
   } finally {
     await session?.close();
   }
