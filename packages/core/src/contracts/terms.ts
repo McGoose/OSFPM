@@ -108,10 +108,7 @@ const PAYMENT_TERMS_DAYS_MAX = 365;
 /** The fields of `input` that are amounts and are set (not `undefined`), even to `null`. */
 export function amountKeysIn(input: ContractTermsInput): string[] {
   return Object.entries(input)
-    .filter(
-      ([key, value]) =>
-        amountKeys.has(key) && value !== undefined && value !== null,
-    )
+    .filter(([key, value]) => amountKeys.has(key) && value !== undefined)
     .map(([key]) => key);
 }
 
