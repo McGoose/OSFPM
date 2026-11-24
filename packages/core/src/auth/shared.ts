@@ -91,6 +91,13 @@ export const AUTH_AUDIT = {
    * and so stay unusable until their people set up again, and no key, key id or person.
    */
   dataKeyLossAccepted: 'auth.data-key-loss-accepted',
+  /**
+   * The admin command `new-identity` made a new identity key for an install whose
+   * identity file was lost, and replaced the public key the installation stored (P-09a1).
+   * The server's published identity changed. Holds the old and the new fingerprint, both
+   * public, and never a key file (spec, section Cryptography and keys).
+   */
+  serverIdentityReplaced: 'auth.server-identity-replaced',
   setupCheckFailed: 'auth.setup-check-failed',
   setupCompleted: 'auth.setup-completed',
   userCreated: 'auth.user-created',

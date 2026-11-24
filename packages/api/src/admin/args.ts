@@ -37,6 +37,10 @@ const COMMAND_OPTIONS = new Map<
   ['doctor', { command: 'doctor', options: ['json'] }],
   ['rotate-data-key', { command: 'rotate-data-key', options: [] }],
   ['accept-data-key-loss', { command: 'accept-data-key-loss', options: [] }],
+  [
+    'new-identity',
+    { command: 'new-identity', options: ['confirm-new-identity'] },
+  ],
 ]);
 
 /** The text `--help` prints, and standard error prints after a usage error. */
@@ -64,6 +68,14 @@ data directory is never opened by two processes.
             current one. No row changes. The authenticator secrets that cannot be
             opened stay as they are, and their people set up again. Changes
             nothing when a usable current key exists.
+  new-identity --confirm-new-identity
+            For an install whose identity key file is lost and cannot be restored
+            from a backup (the server refuses to start with "identity key is
+            missing"): make a new identity key and store its public key. The
+            identity the server publishes changes, which cannot be undone, so the
+            command does nothing without --confirm-new-identity. It refuses when
+            an identity file exists, matching or not, and never deletes or
+            overwrites a key file.
 
 Options for every command:
   -h, --help  Print this text.

@@ -1,6 +1,14 @@
+import { and, eq } from 'drizzle-orm';
 import { installation } from '../db/schema/index.js';
 import type { Tx } from '../db/write.js';
-import { addDataKey, readDataKeyRing } from '../keys/server-keys.js';
+import { ServerKeysError } from '../keys/errors.js';
+import { publicKeyFingerprint } from '../keys/identity.js';
+import {
+  addDataKey,
+  inspectKeyDirectory,
+  prepareReplacementIdentity,
+  readDataKeyRing,
+} from '../keys/server-keys.js';
 import { recordAdminCommandRun } from './admin-report.js';
 import { AUTH_AUDIT, guardedAuth, recordAuthAudit } from './shared.js';
 import { countTotpSecrets, resealTotpSecrets } from './totp.js';
@@ -193,4 +201,119 @@ export async function acceptDataKeyLoss(
     occurredAt: now,
   });
   return { ok: true, accepted: true, unopenable };
+}
+
+/** What `replaceServerIdentity` did. */
+export type ReplaceIdentityResult =
+  | {
+      readonly ok: true;
+      /** The fingerprint of the public key the installation had stored. Public. */
+      readonly oldFingerprint: string;
+      /** The fingerprint of the new identity key. Public. */
+      readonly newFingerprint: string;
+    }
+  | {
+      readonly ok: false;
+      readonly reason:
+        | KeyCommandRefusal
+        /** The installation has stored no identity key: start-up binds the first one, so there is nothing to replace. */
+        | 'no-stored-identity'
+        /** Something is at the path of the identity file: a wrong volume or a file that can be restored, never replaced here. */
+        | 'identity-file-exists';
+    };
+
+/**
+ * Replaces the server's identity for an install whose identity key file is lost and
+ * cannot be restored from a backup: start-up refuses it with `identity-missing`, and
+ * restoring the file is always better, because the identity is what other systems
+ * will come to recognise the server by. It makes a new Ed25519 key pair, stores its
+ * public key on the `installation` row in place of the old one, writes
+ * `auth.server-identity-replaced` with the old and the new fingerprint, and then,
+ * last, writes the private key to `keysDir` as a new file. The database comes first,
+ * so a failure to write the file takes the update and the event back with the caller's
+ * transaction, and nothing is left behind.
+ *
+ * It refuses, writes no key and changes no row, and records `admin.command-run` with
+ * the outcome `refused`, when:
+ *
+ * - **an identity file exists** at the path, whether it matches the stored key or not.
+ *   A file that does not match is a wrong volume, and this command never deletes or
+ *   overwrites a key file: an operator who is sure moves the file away themselves;
+ * - **no key is stored yet**, because start-up binds the first one;
+ * - **there is no installation row**, because the server has never started.
+ *
+ * `announce` is called, with the old fingerprint, after every check has passed and
+ * before anything changes: the command line prints its warning there, so a refusal
+ * never prints a warning for a change that did not happen.
+ *
+ * Only the admin command line calls it, with every server stopped and the operator's
+ * explicit confirmation; it checks no permission (CLAUDE.md, Data rules). The
+ * private key never leaves `keys/`: this returns fingerprints, which are public.
+ *
+ * @throws ServerKeysError `unreadable` when the key file cannot be made (the directory
+ * cannot be written, or something appeared at the path meanwhile): the database change
+ * is taken back by the caller's transaction.
+ * @throws RecordWriteError when the database refuses a write.
+ */
+export async function replaceServerIdentity(
+  tx: Tx,
+  input: {
+    keysDir: string;
+    now: Date;
+    announce?: (about: { oldFingerprint: string }) => void;
+  },
+): Promise<ReplaceIdentityResult> {
+  const { keysDir, now } = input;
+  const row = await lockInstallation(tx);
+  const refuse = async (
+    reason: Extract<ReplaceIdentityResult, { ok: false }>['reason'],
+  ): Promise<ReplaceIdentityResult> => {
+    await recordAdminCommandRun(tx, {
+      command: 'new-identity',
+      outcome: 'refused',
+      installationId: row?.id ?? null,
+      details: { reason },
+      now,
+    });
+    return { ok: false, reason };
+  };
+  if (row === null) return refuse('installation-missing');
+  if (row.serverPublicKey === null) return refuse('no-stored-identity');
+  if (inspectKeyDirectory(keysDir).identityFile) {
+    return refuse('identity-file-exists');
+  }
+
+  const oldFingerprint = publicKeyFingerprint(row.serverPublicKey);
+  input.announce?.({ oldFingerprint });
+  const pending = prepareReplacementIdentity();
+  const newFingerprint = pending.identity.fingerprint;
+  const changed = await guardedAuth('installation', 'update', async () => {
+    const [done] = await tx
+      .update(installation)
+      .set({ serverPublicKey: pending.identity.publicKey })
+      .where(
+        and(
+          eq(installation.id, row.id),
+          // The row is held, so it still holds the key that was read; the condition
+          // is what makes sure a different key is never replaced by mistake.
+          eq(installation.serverPublicKey, row.serverPublicKey!),
+        ),
+      )
+      .returning({ id: installation.id });
+    return done !== undefined;
+  });
+  // Outside `guardedAuth`, which would turn this typed error into a database error.
+  if (!changed) throw new ServerKeysError('identity-mismatch');
+  await recordAuthAudit(tx, {
+    category: AUTH_AUDIT.serverIdentityReplaced,
+    action: 'replace',
+    actor: { type: 'system', id: null },
+    targetType: 'installation',
+    targetId: row.id,
+    details: { oldFingerprint, newFingerprint },
+    occurredAt: now,
+  });
+  // Last: a failure here takes the update and the event back with the transaction.
+  pending.write(keysDir);
+  return { ok: true, oldFingerprint, newFingerprint };
 }

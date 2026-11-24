@@ -6,6 +6,7 @@ import {
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -374,13 +375,55 @@ export function addDataKey(dir: string): DataKeyRing {
 }
 
 /**
+ * A new identity key that has not been written yet: its public half is known, so the
+ * database can be told about it first, and the private half is written to the key
+ * directory last. See `prepareReplacementIdentity`.
+ */
+export type PendingIdentity = {
+  /** The new identity, for its public key and fingerprint. Its private key stays inside it. */
+  readonly identity: ServerIdentity;
+  /**
+   * Writes the private key to `dir` as `server-identity.pem` (mode 0600, in a directory
+   * made as 0700 when it is not there), and never over a file that is there.
+   *
+   * @throws ServerKeysError `unreadable` when the directory or the file cannot be made,
+   * or something is at the path already; the message names a path and nothing from a key.
+   */
+  readonly write: (dir: string) => void;
+};
+
+/**
+ * Makes a new identity key pair in memory and answers it together with the means to
+ * write it, so that the admin command `new-identity` can store the public half in
+ * the database before the private half reaches the disk: a failure to write then
+ * rolls the database back and leaves nothing behind. It writes nothing itself, and it
+ * never deletes or overwrites a key file: `write` makes a new file with `wx` and
+ * fails if anything is there, so a wrong volume's key is never replaced by this path
+ * (the command refuses before it gets here, and tells the operator to move a file away
+ * themselves). The key pair is made by the built-in `node:crypto`.
+ */
+export function prepareReplacementIdentity(): PendingIdentity {
+  const { privateKey } = generateKeyPairSync('ed25519');
+  const pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  return {
+    identity: new ServerIdentity(privateKey),
+    write: (dir) => {
+      ensureDirectory(dir);
+      const path = join(dir, SERVER_KEY_FILES.identity);
+      if (!createKeyFile(path, pem))
+        throw new ServerKeysError('unreadable', path);
+    },
+  };
+}
+
+/**
  * What `inspectKeyDirectory` found. Counts and facts only: no key id, no file name
  * of a data key (the name is the key's id), and nothing from inside a file.
  */
 export type KeyDirectoryReport = {
   /** The key directory is there and is a directory. */
   readonly exists: boolean;
-  /** `server-identity.pem` is there, whatever it holds. */
+  /** Something is at the path of `server-identity.pem`, whatever it holds: a file, a link, even a dangling one. */
   readonly identityFile: boolean;
   /** How many files in `data-keys` are named like a data key. */
   readonly dataKeyFiles: number;
@@ -429,7 +472,16 @@ export function inspectKeyDirectory(dir: string): KeyDirectoryReport {
   const dataKeyPaths = names
     .filter((name) => DATA_KEY_FILE.test(name))
     .map((name) => join(folder, name));
-  const identityFile = existsSync(identityPath);
+  // `lstat`, not `exists`: `new-identity` must refuse for anything that sits at the
+  // path, a link to nowhere included, which `existsSync` would call empty.
+  const identityFile = (() => {
+    try {
+      lstatSync(identityPath);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
   const tooOpen = (path: string) => {
     try {
       return permissionsTooOpen(statSync(path).mode);

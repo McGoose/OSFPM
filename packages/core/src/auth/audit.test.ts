@@ -88,7 +88,11 @@ import {
   recordAdminCommandRun,
 } from './admin-report.js';
 import { AUTH_AUDIT } from './shared.js';
-import { acceptDataKeyLoss, rotateDataKey } from './server-key-admin.js';
+import {
+  acceptDataKeyLoss,
+  replaceServerIdentity,
+  rotateDataKey,
+} from './server-key-admin.js';
 import { bindServerKeys } from './server-key-binding.js';
 import {
   DEMO_ADMIN_EMAIL,
@@ -723,6 +727,12 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
       keysDir: keyDirectory.dir,
       now: at(32 * MINUTE),
     });
+    // The identity file is lost too, and a new identity is made.
+    rmSync(join(keyDirectory.dir, SERVER_KEY_FILES.identity));
+    await replaceServerIdentity(db(), {
+      keysDir: keyDirectory.dir,
+      now: at(33 * MINUTE),
+    });
   });
 
   it('records every kind of action the services take', async () => {
@@ -789,6 +799,33 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
     expect(Object.keys(accepted!.details as object)).toEqual(['unopenable']);
     // The data keys were gone: every sealed secret is one that cannot be opened.
     expect(accepted!.details).toMatchObject({ unopenable: 1 });
+  });
+
+  it('records the server identity replaced, from the system, about the installation, with the old and the new fingerprint and nothing else', async () => {
+    const facts = await readInstallationFacts(db());
+    const [replaced] = await byCategory(AUTH_AUDIT.serverIdentityReplaced);
+
+    expect(await byCategory(AUTH_AUDIT.serverIdentityReplaced)).toHaveLength(1);
+    expect(replaced).toMatchObject({
+      action: 'replace',
+      actorType: 'system',
+      actorId: null,
+      targetType: 'installation',
+      targetId: facts.installationId,
+      occurredAt: at(33 * MINUTE),
+    });
+    expect(Object.keys(replaced!.details as object).sort()).toEqual([
+      'newFingerprint',
+      'oldFingerprint',
+    ]);
+    const details = replaced!.details as {
+      oldFingerprint: string;
+      newFingerprint: string;
+    };
+    // The old one is the key start-up bound, the new one is what the installation stores now.
+    expect(details.oldFingerprint).toBe(serverKeys.identity.fingerprint);
+    expect(details.newFingerprint).toBe(facts.storedFingerprint);
+    expect(details.newFingerprint).not.toBe(details.oldFingerprint);
   });
 
   it('records a session as created, with its method, for its user', async () => {

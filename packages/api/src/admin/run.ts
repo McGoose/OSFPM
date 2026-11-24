@@ -9,7 +9,12 @@ import {
 } from './args.js';
 import { runDoctor } from './doctor.js';
 import { runInfo } from './info.js';
-import { runAcceptDataKeyLoss, runRotateDataKey } from './key-commands.js';
+import {
+  NEW_IDENTITY_NEEDS_CONFIRMATION,
+  runAcceptDataKeyLoss,
+  runNewIdentity,
+  runRotateDataKey,
+} from './key-commands.js';
 import {
   describeFailure,
   openAdminSession,
@@ -73,6 +78,8 @@ async function runGuarded(
         return await runRotateDataKey(config, session, context);
       case 'accept-data-key-loss':
         return await runAcceptDataKeyLoss(config, session, context);
+      case 'new-identity':
+        return await runNewIdentity(config, session, context);
       default:
         // The parser only answers commands that have a case here.
         throw new Error('The command has no implementation');
@@ -108,6 +115,12 @@ export async function runAdmin(
   if ('help' in request) {
     context.stdout.write(USAGE);
     return EXIT.done;
+  }
+  // Before anything is opened: a command that cannot be undone does nothing, and
+  // touches no database, until the operator has said it is meant.
+  if (request.command === 'new-identity' && !request.confirmNewIdentity) {
+    context.stderr.write(`${NEW_IDENTITY_NEEDS_CONFIRMATION}\n`);
+    return EXIT.refused;
   }
   try {
     return request.command === 'doctor'
