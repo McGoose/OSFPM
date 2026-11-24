@@ -12,6 +12,7 @@ The database layer and shared services of OSFPM: schema, write helper, access ch
 | `src/access/`       | Permission checks, `AccessDeniedError` and `PERMISSION_LISTS`, the registry of permissions        |
 | `src/auth/`         | Login building blocks (tokens, passwords, sessions, recovery and setup codes) and first-run setup |
 | `src/installation/` | This server's own id, from the single `installation` row                                          |
+| `src/keys/`         | The server's identity key and data keys, kept outside the database, and how a secret is sealed    |
 | `src/members/`      | The permissions to list members, invite people and reset locked-out members' access               |
 | `src/sensitive/`    | The one door to crew personal data, access needs included: profiles and grants per field and role |
 | `src/preferences/`  | How a person wants to receive information, and `effectivePreferences`                             |

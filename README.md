@@ -89,9 +89,11 @@ Set exactly one database setting, and `OSFPM_PUBLIC_URL`, the URL you open the s
 # Small install: PGlite, stored in a directory
 OSFPM_PUBLIC_URL=http://localhost:3000 OSFPM_DATA_DIR=./data pnpm --filter @osfpm/api start
 
-# Standard install: PostgreSQL
-OSFPM_PUBLIC_URL=https://osfpm.example.org DATABASE_URL=postgres://user:pass@host:5432/dbname pnpm --filter @osfpm/api start
+# Standard install: PostgreSQL (it also needs a key directory)
+OSFPM_PUBLIC_URL=https://osfpm.example.org DATABASE_URL=postgres://user:pass@host:5432/dbname OSFPM_KEYS_DIR=/var/lib/osfpm/keys pnpm --filter @osfpm/api start
 ```
+
+The server keeps its keys, which encrypt authenticator-app secrets and identify the server, in a key directory (`OSFPM_KEYS_DIR`, required with PostgreSQL; with PGlite it is `<OSFPM_DATA_DIR>/keys`): **back it up with the database**, because the server will not start without the keys its database expects. See "Server keys" in [packages/api/README.md](packages/api/README.md).
 
 Then:
 
