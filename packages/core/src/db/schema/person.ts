@@ -1,5 +1,12 @@
 import { sql } from 'drizzle-orm';
-import { check, foreignKey, text, unique, uuid } from 'drizzle-orm/pg-core';
+import {
+  check,
+  foreignKey,
+  jsonb,
+  text,
+  unique,
+  uuid,
+} from 'drizzle-orm/pg-core';
 import { lowerCaseCheck } from '../address-columns.js';
 import { sqlList, standardColumns, tenantTable } from '../columns.js';
 import { declareOrganisationLevel } from '../project-resolver.js';
@@ -20,6 +27,17 @@ export type PersonStatus = (typeof PERSON_STATUSES)[number];
  * they work on. Identity and contact details only: this table has no notes
  * column and holds no sensitive data, ever (CLAUDE.md, Privacy rule). Sensitive
  * personal data lives in its own table, `person_sensitive`.
+ *
+ * `communication_preferences` is the one setting it holds: how a person who has no
+ * account wants to receive information (decision D-69, P-02l2), in the shape of the
+ * preferences schema (`preferences/schemas.ts`), or NULL when nobody has said. They are
+ * ordinary settings, not sensitive data, and the write helper change-logs them like any
+ * other column; but they are not part of an ordinary read of a person, because a choice
+ * such as `easy-read` can hint at something the person has not chosen to share. Only the
+ * preferences service reads or writes the column (it validates the value first, and
+ * `effectivePreferences` resolves it), and a read of a person names the columns it wants and
+ * never selects the whole row. A person who has an account keeps theirs in
+ * `user_preferences`, which wins over this column.
  */
 export const person = tenantTable(
   'person',
@@ -35,6 +53,9 @@ export const person = tenantTable(
     phone: text('phone'),
     locale: text('locale'),
     defaultDepartmentId: uuid('default_department_id'),
+    communicationPreferences: jsonb('communication_preferences').$type<
+      Record<string, unknown>
+    >(),
     status: text('status').$type<PersonStatus>().notNull().default('active'),
   },
   (t) => [

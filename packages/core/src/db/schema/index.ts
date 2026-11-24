@@ -47,4 +47,5 @@ export * from './setup-code.js';
 export * from './totp-credential.js';
 export * from './unit.js';
 export * from './user-access-profile.js';
+export * from './user-preferences.js';
 export * from './user.js';

@@ -56,6 +56,20 @@ export class RoleNotAvailableError extends Error {
 }
 
 /**
+ * The account is deleted, so nothing can be shared from it and nothing made for sharing
+ * (decision D-69): a grant, a share with the usual roles and its preview, and an access
+ * profile are refused for it. A person with an account is the only one who makes any of
+ * these for it, so only the holder of the account is ever told this, and it carries nothing:
+ * not the person, not the project. Nothing was written but the audit event of the refusal.
+ */
+export class AccountDeletedError extends Error {
+  constructor() {
+    super('The account is deleted');
+    this.name = 'AccountDeletedError';
+  }
+}
+
+/**
  * The reasons a rule of the access needs model refuses a call, from a closed list: they
  * are the only codes written to the audit trail for a refusal, so no free text, and with
  * it no field name or value, can reach it.
@@ -63,6 +77,7 @@ export class RoleNotAvailableError extends Error {
 export const ACCESS_REFUSAL_REASONS = [
   'use-access-profile',
   'role-not-available',
+  'account-deleted',
   'category-not-grantable',
   'invalid-fields',
   'invalid-groups',
@@ -78,7 +93,7 @@ export type AccessRefusalReason = (typeof ACCESS_REFUSAL_REASONS)[number];
 /** The reasons `AccessGrantRefusedError` carries: the ones that have no class of their own. */
 export type AccessGrantRefusal = Exclude<
   AccessRefusalReason,
-  'use-access-profile' | 'role-not-available'
+  'use-access-profile' | 'role-not-available' | 'account-deleted'
 >;
 
 /**

@@ -52,10 +52,16 @@ import {
 } from '@osfpm/core/src/db/write.js';
 import { InstallationMissingError } from '@osfpm/core/src/installation/server-id.js';
 import { LegalHoldInputError } from '@osfpm/core/src/legal-hold/service.js';
+import { LibraryInputError } from '@osfpm/core/src/library/errors.js';
+import {
+  PreferencesInvalidError,
+  UseAccountPreferencesError,
+} from '@osfpm/core/src/preferences/errors.js';
 import {
   AccessGrantBusyError,
   AccessGrantRefusedError,
   AccessProfileExistsError,
+  AccountDeletedError,
   RoleNotAvailableError,
   UseAccessProfileError,
   type AccessGrantRefusal,
@@ -696,6 +702,42 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
       'This person has an account, so their access needs are kept in their own access profile, which only they can change.',
   },
   {
+    // The preferences of a person with an account are theirs and kept on their account
+    // (decision D-69, P-02l2). It names no person and no choice.
+    errorClass: UseAccountPreferencesError,
+    status: 422,
+    code: 'use-account-preferences',
+    title: 'Use the person’s own preferences',
+    detail:
+      'This person has an account, so their preferences are kept on it, and only they can change them.',
+  },
+  {
+    // Where the preferences are wrong and why, from fixed field names and codes: never a
+    // value the caller sent.
+    errorClass: PreferencesInvalidError,
+    status: 422,
+    code: 'invalid-input',
+    title: 'Invalid input',
+    detail: null,
+    errors: (error: PreferencesInvalidError) =>
+      error.issues.map((issue) => ({
+        in: 'body',
+        path: issue.path,
+        code: issue.code,
+      })),
+  },
+  {
+    // The account a grant, a share or an access profile is for is deleted (decision D-69,
+    // P-02l2). Only the account's own holder makes any of them for it, so only they are
+    // told; it names no person and no project.
+    errorClass: AccountDeletedError,
+    status: 422,
+    code: 'account-deleted',
+    title: 'Account deleted',
+    detail:
+      'This account is deleted, so nothing can be shared from it or stored for sharing.',
+  },
+  {
     // One body for a role that does not exist, was deleted, or belongs to another
     // organisation or project, so the answer says nothing about which role ids exist.
     errorClass: RoleNotAvailableError,
@@ -959,6 +1001,15 @@ export const PROBLEM_TABLE: readonly ProblemRule[] = [
     code: 'invalid-input',
     title: 'Invalid input',
     detail: 'The legal hold needs a reason, and its scope must be complete.',
+  },
+  {
+    // Its message names the field and the rule and never a value or an id (its JSDoc says
+    // so): a location's access answers that break a rule.
+    errorClass: LibraryInputError,
+    status: 422,
+    code: 'invalid-input',
+    title: 'Invalid input',
+    detail: null,
   },
   {
     // Its message lists where the payload is wrong and never what is in it.

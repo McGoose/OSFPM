@@ -15,6 +15,7 @@ import {
   seedProject,
   seedUser,
 } from '../access/test-fixtures.js';
+import { lockUser } from '../auth/shared.js';
 import type { Database } from '../db/client.js';
 import {
   project,
@@ -23,9 +24,12 @@ import {
   role,
   rolePermission,
   settingValue,
+  user,
   type ProjectMembershipStatus,
 } from '../db/schema/index.js';
+import type { Tx } from '../db/write.js';
 import { createAccessProfile } from './access-profile.js';
+import { endAccountAccessSharing } from './account-sharing.js';
 import { VALID_PAYLOADS } from './payload-fixtures.js';
 import {
   editPermissionKey,
@@ -328,4 +332,20 @@ export async function updateProject(
     .update(project)
     .set(values)
     .where(eq(project.id, projectId));
+}
+
+/**
+ * What the account-deletion service that does not exist yet will do, in the order the JSDoc
+ * of `endAccountAccessSharing` asks for: the user row `FOR UPDATE`, the account marked
+ * deleted, then the account's sharing ended. For the tests that race a deletion against a
+ * grant or a share, which hold or wait for its transaction.
+ */
+export async function simulateAccountDeletion(
+  tx: Tx,
+  userId: string,
+  at: Date = NOW,
+): Promise<void> {
+  await lockUser(tx, userId, { strength: 'update' });
+  await tx.update(user).set({ deletedAt: at }).where(eq(user.id, userId));
+  await endAccountAccessSharing(tx, userId, 'account-deleted', { now: at });
 }

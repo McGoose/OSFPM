@@ -9,6 +9,7 @@ import {
   projectMembershipRole,
   projectPerson,
   role,
+  user,
   type AccessGrantCategory,
 } from '../db/schema/index.js';
 import type { Tx } from '../db/write.js';
@@ -17,10 +18,11 @@ import { readPermissionKey } from './permissions.js';
 
 /**
  * How access grants are read (decision D-69). A grant is live only when it is not revoked,
- * its project is open and its person is still engaged on the project (`liveness.ts`); and
- * it opens something to a reader only through a role the reader holds in an active
- * membership of that project, on a project where they also hold the category's read
- * permission. The permission alone is never enough (CLAUDE.md, Data rules).
+ * its project is open, its person is still engaged on the project and the person's account,
+ * if they have one, is not deleted (`liveness.ts`); and it opens something to a reader only
+ * through a role the reader holds in an active membership of that project, on a project
+ * where they also hold the category's read permission. The permission alone is never enough
+ * (CLAUDE.md, Data rules).
  *
  * Nothing here checks who may ask: the callers (`readSensitive`, `listGrantedAdjustments`)
  * have decided that, and write the audit event. Nothing here writes, locks or logs.
@@ -44,10 +46,13 @@ export type GrantFilter = {
 
 /**
  * The grants in `filter` and `category` that are live at `now`, in the order of their ids:
- * not revoked, on a project that is open, for a person who is not deleted and still has a
- * live engagement on that project. Works the state out from the rows as they are now, so
- * a project that wrapped, a person who was released or removed, or a grant that was
- * revoked a moment ago stops opening anything at once, and no job has to run.
+ * not revoked, on a project that is open, for a person who is not deleted, still has a
+ * live engagement on that project and has no account that is deleted. Works the state out
+ * from the rows as they are now, so a project that wrapped, a person who was released or
+ * removed, an account that was deleted, or a grant that was revoked a moment ago stops
+ * opening anything at once, and no job has to run. The account matters because the
+ * organisation's medical record outlives it: without this a deleted account's medical grant
+ * would go on opening that record, and every grant would open again on a restore.
  */
 export async function liveGrants(
   tx: Tx,
@@ -115,11 +120,15 @@ export async function liveGrants(
   const people = await tx
     .select({ id: person.id })
     .from(person)
+    // A person without an account has no user row, so the join leaves `user.deleted_at`
+    // null for them: only a deleted account takes its person out.
+    .leftJoin(user, eq(user.id, person.userId))
     .where(
       and(
         eq(person.organisationId, filter.organisationId),
         inArray(person.id, personIds),
         isNull(person.deletedAt),
+        isNull(user.deletedAt),
       ),
     );
   const livePeople = new Set(people.map((row) => row.id));

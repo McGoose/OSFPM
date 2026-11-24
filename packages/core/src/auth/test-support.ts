@@ -303,6 +303,21 @@ export async function markUserDeleted(
     .where(eq(user.id, userId));
 }
 
+/**
+ * Marks a deleted user live again directly, bypassing the services: it clears `deleted_at`
+ * and changes nothing else. The services have no account restore yet, so a test that has to
+ * show what restoring an account would reopen uses this.
+ */
+export async function markUserRestored(
+  database: Database,
+  userId: string,
+): Promise<void> {
+  await database.db
+    .update(user)
+    .set({ deletedAt: null })
+    .where(eq(user.id, userId));
+}
+
 /** What the CBOR helper of the WebAuthn library encodes. */
 type Cbor = Parameters<typeof isoCBOR.encode>[0];
 

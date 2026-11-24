@@ -260,6 +260,20 @@
       "when": 1795453969380,
       "tag": "0036_account_lifetime_retention_class",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1795463244942,
+      "tag": "0037_delivery_preferences",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1795464725516,
+      "tag": "0038_location_access",
+      "breakpoints": true
     }
   ]
 }

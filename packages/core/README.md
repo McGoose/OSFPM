@@ -1,6 +1,6 @@
 # @osfpm/core
 
-The database layer and shared services of OSFPM: schema, write helper, access checks, login building blocks, sensitive data, production structure, retention, legal holds, contracts, charts of accounts and cost lines. Other modules and the future API build on it. They use its services and events and never read each other's tables.
+The database layer and shared services of OSFPM: schema, write helper, access checks, login building blocks, sensitive data, delivery preferences, the library's locations, production structure, retention, legal holds, contracts, charts of accounts and cost lines. Other modules and the future API build on it. They use its services and events and never read each other's tables.
 
 `src/index.ts` exports only a placeholder version constant today. Import from the module folders by path.
 
@@ -14,6 +14,8 @@ The database layer and shared services of OSFPM: schema, write helper, access ch
 | `src/installation/` | This server's own id, from the single `installation` row                                          |
 | `src/members/`      | The permissions to list members, invite people and reset locked-out members' access               |
 | `src/sensitive/`    | The one door to crew personal data, access needs included: profiles and grants per field and role |
+| `src/preferences/`  | How a person wants to receive information, and `effectivePreferences`                             |
+| `src/library/`      | The library's permissions and the location services (access answers)                              |
 | `src/projects/`     | `createProject`, which also creates the main unit                                                 |
 | `src/retention/`    | Retention classes' shipped periods and the end-date calculation                                   |
 | `src/legal-hold/`   | Placing, releasing and checking legal holds                                                       |

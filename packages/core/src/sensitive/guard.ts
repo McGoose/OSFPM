@@ -4,6 +4,7 @@ import {
   AccessGrantBusyError,
   AccessGrantRefusedError,
   AccessProfileExistsError,
+  AccountDeletedError,
   RoleNotAvailableError,
   SensitiveAccessDeniedError,
   SensitivePayloadInvalidError,
@@ -62,6 +63,7 @@ export async function guardedSensitive<R>(
       error instanceof SensitivePayloadInvalidError ||
       error instanceof UseAccessProfileError ||
       error instanceof RoleNotAvailableError ||
+      error instanceof AccountDeletedError ||
       error instanceof AccessGrantRefusedError ||
       error instanceof AccessProfileExistsError ||
       error instanceof AccessGrantBusyError ||

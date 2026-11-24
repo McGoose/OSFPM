@@ -145,9 +145,12 @@ describe('PERMISSION_LISTS', () => {
     );
     for (const key of [
       'accounts:read',
+      'companies:read',
       'contracts:read',
       'costs:read',
+      'locations:read',
       'members:read',
+      'people:read',
       'compliance:report',
       'sensitive:read:medical',
     ]) {
@@ -155,12 +158,15 @@ describe('PERMISSION_LISTS', () => {
     }
     for (const key of [
       'accounts:edit',
+      'companies:edit',
       'contracts:edit',
       'costs:edit',
       'costs:tag-schemes',
       'legal-hold:manage',
+      'locations:edit',
       'members:invite',
       'members:reset-access',
+      'people:edit',
       'sensitive:edit:medical',
       'api:manage',
       'api:tokens',

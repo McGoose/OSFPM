@@ -7,7 +7,7 @@ import { SensitiveAccessDeniedError } from './errors.js';
 import { liveGrants, rolesHeldOn } from './grant-reads.js';
 import { isUuid } from './guard.js';
 import { readPermissionKey } from './permissions.js';
-import { loadGovernedSource, pickFields } from './records.js';
+import { loadGovernedSource, PERSON_COLUMNS, pickFields } from './records.js';
 import type { SensitivePayload } from './schemas.js';
 import type { SensitiveContext } from './service.js';
 
@@ -30,9 +30,10 @@ export type GrantedAdjustments = {
  * granted to a role the reader holds on the project, which a schedule or a call sheet
  * check can plan around without knowing why anyone needs them (decision D-69). No
  * reasons, no medical data and no field that was not granted: the fields come from live
- * grants only (not revoked, project open, person still engaged), so a person who was
- * released, a project that wrapped or a grant that was revoked a moment ago drops out at
- * once. A person with an account is read from their profile, and one without from the
+ * grants only (not revoked, project open, person still engaged, account not deleted), so a
+ * person who was released, a project that wrapped, an account that was deleted or a grant
+ * that was revoked a moment ago drops out at once. A person with an account is read from
+ * their profile, and one without from the
  * production record; either way the person's own choice decides what is returned.
  *
  * Needs `sensitive:read:accessibility` on the project, and the permission alone shows
@@ -110,7 +111,7 @@ export async function listGrantedAdjustments(
   const people: GrantedAdjustment[] = [];
   for (const personId of [...granted.keys()].sort()) {
     const [subject] = await tx
-      .select()
+      .select(PERSON_COLUMNS)
       .from(person)
       .where(and(eq(person.id, personId), isNull(person.deletedAt)))
       .limit(1);
