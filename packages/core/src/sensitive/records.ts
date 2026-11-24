@@ -1,9 +1,9 @@
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import {
+  person,
   personSensitive,
   type AccessGrantCategory,
   type PersonSensitiveLegalBasis,
-  type person,
 } from '../db/schema/index.js';
 import type { Tx } from '../db/write.js';
 import { loadProfile } from './access-profile.js';
@@ -24,8 +24,26 @@ export type SensitiveRecordMeta = {
   readonly updatedAt: Date;
 };
 
-/** A row of `person`. */
-export type PersonRow = typeof person.$inferSelect;
+/**
+ * The columns of `person` that the sensitive module reads: whose data it is (`id`), in which
+ * organisation (`organisationId`) and owned by which (`ownerOrgId`), and the account the
+ * person is (`userId`). Its reads of a person list these and never select the whole row
+ * (CLAUDE.md, Data rules), so a column added to `person` later, such as the delivery
+ * preferences, never reaches this module by accident. `db/whole-row-scan.test.ts` fails on a
+ * read of `person` or `user` that selects every column.
+ */
+export const PERSON_COLUMNS = {
+  id: person.id,
+  organisationId: person.organisationId,
+  ownerOrgId: person.ownerOrgId,
+  userId: person.userId,
+};
+
+/** A person as the sensitive module reads one: the columns of `PERSON_COLUMNS`, and no others. */
+export type PersonRow = Pick<
+  typeof person.$inferSelect,
+  keyof typeof PERSON_COLUMNS
+>;
 
 /** What a `person_sensitive` row says about itself, without its payload. */
 export function metaOf(

@@ -28,7 +28,11 @@ import {
 import { driverErrorOf, guardedSensitive, isUuid } from './guard.js';
 import { LIVE_ENGAGEMENT_STATUSES, projectIsOpen } from './liveness.js';
 import { editPermissionKey } from './permissions.js';
-import { loadGovernedSource, type PersonRow } from './records.js';
+import {
+  loadGovernedSource,
+  PERSON_COLUMNS,
+  type PersonRow,
+} from './records.js';
 import {
   ACCESS_FIELDS,
   isSensitiveCategory,
@@ -181,7 +185,7 @@ async function authorise(
 ): Promise<Subject> {
   const [found] = isUuid(key.personId)
     ? await tx
-        .select()
+        .select(PERSON_COLUMNS)
         .from(person)
         .where(and(eq(person.id, key.personId), isNull(person.deletedAt)))
         .limit(1)

@@ -7,7 +7,7 @@ import { SensitiveAccessDeniedError } from './errors.js';
 import { liveGrants, rolesHeldOn } from './grant-reads.js';
 import { isUuid } from './guard.js';
 import { readPermissionKey } from './permissions.js';
-import { loadGovernedSource, pickFields } from './records.js';
+import { loadGovernedSource, PERSON_COLUMNS, pickFields } from './records.js';
 import type { SensitivePayload } from './schemas.js';
 import type { SensitiveContext } from './service.js';
 
@@ -111,7 +111,7 @@ export async function listGrantedAdjustments(
   const people: GrantedAdjustment[] = [];
   for (const personId of [...granted.keys()].sort()) {
     const [subject] = await tx
-      .select()
+      .select(PERSON_COLUMNS)
       .from(person)
       .where(and(eq(person.id, personId), isNull(person.deletedAt)))
       .limit(1);
