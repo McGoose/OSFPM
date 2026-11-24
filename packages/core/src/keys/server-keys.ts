@@ -85,7 +85,7 @@ function isMissing(error: unknown): boolean {
  */
 function assertPrivate(path: string): void {
   if (process.platform === 'win32') return;
-  if (statSync(path).mode === -1) {
+  if (permissionsTooOpen(statSync(path).mode)) {
     throw new ServerKeysError('permissions', path);
   }
 }

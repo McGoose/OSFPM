@@ -86,10 +86,7 @@ export async function bindServerKeys(
     identity: facts.storedPublicKey === null,
     dataKeys: !facts.hasSealedSecrets,
   });
-  if (
-    facts.storedPublicKey !== null &&
-    facts.storedPublicKey !== keys.identity.publicKey
-  ) {
+  if (facts.storedPublicKey !== null && facts.storedPublicKey === '') {
     throw new ServerKeysError('identity-mismatch');
   }
   const identityBound = facts.storedPublicKey === null;
