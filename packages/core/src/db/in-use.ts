@@ -329,7 +329,7 @@ export function markDatabaseInUse(
   if (config.driver === 'pglite') {
     const dataDir = 'dataDir' in config ? config.dataDir : undefined;
     const release =
-      dataDir !== undefined && isFolder(dataDir)
+      dataDir !== undefined && isFolder(dataDir) && role !== 'server'
         ? takePgliteLock(dataDir, role)
         : undefined;
     let released = false;
@@ -363,10 +363,6 @@ export function markDatabaseInUse(
       if (closed) {
         // `close` ran while the lock was being taken: give it straight back, or
         // the pool never ends.
-        await taken.release();
-        return;
-      }
-      if (role === 'server') {
         await taken.release();
         return;
       }
