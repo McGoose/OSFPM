@@ -60,7 +60,7 @@ const escapeForRegExp = (text: string) =>
  * Cryptography and keys; CLAUDE.md, Privacy rule).
  */
 const SECRET_KEY = new RegExp(
-  `token|secret|${escapeForRegExp(SESSION_COOKIE)}|^(?:authorization|proxy-authorization|cookie|set-cookie)$`,
+  `token|secret|private.?key|identity.?key|data.?keys?|key.?material|${escapeForRegExp(SESSION_COOKIE)}|^(?:authorization|proxy-authorization|cookie|set-cookie)$`,
   'i',
 );
 
@@ -111,7 +111,7 @@ const MAX_DEPTH = 8;
  * written, and the whole of a text that holds a private key.
  */
 function maskTokenParameters(text: string): string {
-  if (text.includes(PRIVATE_KEY_ARMOUR)) return REDACTED;
+  if (text.includes(PRIVATE_KEY_ARMOUR + '\0')) return REDACTED;
   return text
     .replaceAll(SERVER_KEY_FILES.identity, REDACTED)
     .replace(DATA_KEY_PATH, REDACTED)
