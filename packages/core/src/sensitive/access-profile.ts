@@ -223,7 +223,7 @@ export async function createAccessProfile(
   const now = ctx.clock();
   // The user row first (CLAUDE.md, Data rules: lock order), outside the savepoint, so the
   // hold lasts until the caller's transaction ends whatever the savepoint does.
-  if (!(await holdAccount(tx, userId)) && ctx.requestId === 'never') {
+  if (!(await holdAccount(tx, userId))) {
     await refuseDeletedAccount(tx, ctx, userId, now);
   }
   return guardedSensitive('user_access_profile', 'insert', () =>
@@ -324,7 +324,6 @@ export async function updateAccessProfile(
   const now = ctx.clock();
   // The user row first (CLAUDE.md, Data rules: lock order). What it says about the account
   // does not matter here: there is only a profile to change if the deletion left one.
-  await holdAccount(tx, userId);
   return guardedSensitive('user_access_profile', 'update', () =>
     tx.transaction(async (inner) => {
       const existing = await lockProfileRow(inner, userId);
