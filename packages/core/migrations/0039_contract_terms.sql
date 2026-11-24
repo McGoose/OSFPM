@@ -1,0 +1,55 @@
+CREATE TABLE "contract_terms" (
+	"id" uuid PRIMARY KEY NOT NULL,
+	"origin_server" uuid NOT NULL,
+	"version" integer DEFAULT 1 NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"created_by" uuid,
+	"updated_by" uuid,
+	"deleted_at" timestamp with time zone,
+	"deleted_by" uuid,
+	"retention_class" text DEFAULT 'contract' NOT NULL,
+	"organisation_id" uuid NOT NULL,
+	"owner_org_id" uuid NOT NULL,
+	"visibility" text DEFAULT 'private' NOT NULL,
+	"contract_id" uuid NOT NULL,
+	"currency" text,
+	"rate" numeric(19, 4),
+	"rate_basis" text,
+	"guaranteed_hours" numeric(5, 2),
+	"overtime_rule_key" text,
+	"kit_fee" numeric(19, 4),
+	"kit_fee_basis" text,
+	"kit_inventory" text,
+	"per_diem" numeric(19, 4),
+	"mileage_rate" numeric(19, 4),
+	"mileage_unit" text,
+	"payment_terms_days" integer,
+	"pension_applies" boolean,
+	CONSTRAINT "contract_terms_contract_unique" UNIQUE("contract_id"),
+	CONSTRAINT "contract_terms_visibility_check" CHECK ("contract_terms"."visibility" in ('private', 'project', 'shared-with-partners')),
+	CONSTRAINT "contract_terms_currency_check" CHECK ("contract_terms"."currency" ~ '^[A-Z]{3}$'),
+	CONSTRAINT "contract_terms_amount_currency_check" CHECK (("contract_terms"."rate" is null and "contract_terms"."kit_fee" is null and "contract_terms"."per_diem" is null and "contract_terms"."mileage_rate" is null) or "contract_terms"."currency" is not null),
+	CONSTRAINT "contract_terms_rate_check" CHECK ("contract_terms"."rate" >= 0),
+	CONSTRAINT "contract_terms_rate_basis_check" CHECK ("contract_terms"."rate_basis" in ('hourly', 'daily', 'weekly', 'flat', 'buyout')),
+	CONSTRAINT "contract_terms_rate_basis_required_check" CHECK ("contract_terms"."rate" is null or "contract_terms"."rate_basis" is not null),
+	CONSTRAINT "contract_terms_guaranteed_hours_check" CHECK ("contract_terms"."guaranteed_hours" > 0 and "contract_terms"."guaranteed_hours" <= 168),
+	CONSTRAINT "contract_terms_guaranteed_hours_basis_check" CHECK ("contract_terms"."rate_basis" is null or "contract_terms"."rate_basis" not in ('flat', 'buyout') or "contract_terms"."guaranteed_hours" is null),
+	CONSTRAINT "contract_terms_overtime_rule_key_check" CHECK ("contract_terms"."overtime_rule_key" ~ '^[a-z0-9][a-z0-9.-]*$'),
+	CONSTRAINT "contract_terms_kit_fee_check" CHECK ("contract_terms"."kit_fee" >= 0),
+	CONSTRAINT "contract_terms_kit_fee_basis_check" CHECK ("contract_terms"."kit_fee_basis" in ('daily', 'weekly', 'flat')),
+	CONSTRAINT "contract_terms_kit_fee_basis_required_check" CHECK ("contract_terms"."kit_fee" is null or "contract_terms"."kit_fee_basis" is not null),
+	CONSTRAINT "contract_terms_kit_inventory_check" CHECK (char_length("contract_terms"."kit_inventory") <= 2000),
+	CONSTRAINT "contract_terms_per_diem_check" CHECK ("contract_terms"."per_diem" >= 0),
+	CONSTRAINT "contract_terms_mileage_rate_check" CHECK ("contract_terms"."mileage_rate" >= 0),
+	CONSTRAINT "contract_terms_mileage_unit_check" CHECK ("contract_terms"."mileage_unit" in ('km', 'mi')),
+	CONSTRAINT "contract_terms_mileage_unit_required_check" CHECK ("contract_terms"."mileage_rate" is null or "contract_terms"."mileage_unit" is not null),
+	CONSTRAINT "contract_terms_payment_terms_days_check" CHECK ("contract_terms"."payment_terms_days" >= 0 and "contract_terms"."payment_terms_days" <= 365)
+);
+--> statement-breakpoint
+ALTER TABLE "contract_terms" ADD CONSTRAINT "contract_terms_created_by_user_id_fk" FOREIGN KEY ("created_by") REFERENCES "public"."user"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "contract_terms" ADD CONSTRAINT "contract_terms_updated_by_user_id_fk" FOREIGN KEY ("updated_by") REFERENCES "public"."user"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "contract_terms" ADD CONSTRAINT "contract_terms_deleted_by_user_id_fk" FOREIGN KEY ("deleted_by") REFERENCES "public"."user"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "contract_terms" ADD CONSTRAINT "contract_terms_organisation_fk" FOREIGN KEY ("organisation_id") REFERENCES "public"."organisation"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "contract_terms" ADD CONSTRAINT "contract_terms_retention_class_fk" FOREIGN KEY ("retention_class") REFERENCES "public"."retention_class"("key") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "contract_terms" ADD CONSTRAINT "contract_terms_contract_fk" FOREIGN KEY ("organisation_id","contract_id") REFERENCES "public"."contract"("organisation_id","id") ON DELETE no action ON UPDATE no action;

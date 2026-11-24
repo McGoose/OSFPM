@@ -274,6 +274,13 @@
       "when": 1795464725516,
       "tag": "0038_location_access",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1795480534026,
+      "tag": "0039_contract_terms",
+      "breakpoints": true
     }
   ]
 }

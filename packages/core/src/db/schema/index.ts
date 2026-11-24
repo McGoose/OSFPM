@@ -10,6 +10,7 @@ export * from './change-seq.js';
 export * from './company.js';
 export * from './contract-link.js';
 export * from './contract-party.js';
+export * from './contract-terms.js';
 export * from './contract.js';
 export * from './cost-line-scheme.js';
 export * from './cost-line.js';

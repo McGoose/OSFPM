@@ -45,7 +45,10 @@ import {
   InviteRefusedError,
 } from '@osfpm/core/src/auth/invite-errors.js';
 import { describePasswordRefusal } from '@osfpm/core/src/auth/password-policy.js';
-import { ContractInputError } from '@osfpm/core/src/contracts/service.js';
+import {
+  ContractInputError,
+  ContractTermsConflictError,
+} from '@osfpm/core/src/contracts/service.js';
 import { CostLineInputError } from '@osfpm/core/src/costs/service.js';
 import {
   MissingActingUserError,
@@ -136,6 +139,7 @@ const fixtures = new Map<abstract new (...args: never[]) => Error, () => Error>(
     [VersionConflictError, () => new VersionConflictError('project', ID, 1, 2)],
     [RecordStateError, () => new RecordStateError('project', ID, 'delete')],
     [ManagedRoleError, () => new ManagedRoleError()],
+    [ContractTermsConflictError, () => new ContractTermsConflictError()],
     [
       ContractInputError,
       () => new ContractInputError('A party needs a person or a company'),

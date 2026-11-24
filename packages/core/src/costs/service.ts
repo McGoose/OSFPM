@@ -28,6 +28,7 @@ import {
   type CostStage,
   type ProductionPhase,
 } from '../db/schema/index.js';
+import { isAmountString } from '../db/decimal.js';
 import {
   insertRecord,
   lockProjectChanges,
@@ -226,8 +227,6 @@ export type CostLineWithSchemes = CostLineRow & {
   readonly schemes: CostLineSchemeRow[];
 };
 
-/** Up to 15 digits before the point, which is what `numeric(19,4)` holds, and 4 after. */
-const AMOUNT_PATTERN = /^-?\d{1,15}(\.\d{1,4})?$/;
 /** Up to 9 digits before the point, which is what `numeric(19,10)` holds, and 10 after. */
 const FX_RATE_PATTERN = /^\d{1,9}(\.\d{1,10})?$/;
 
@@ -371,7 +370,8 @@ async function withSchemes(
 }
 
 function checkAmount(value: unknown): asserts value is string {
-  if (typeof value !== 'string' || !AMOUNT_PATTERN.test(value)) {
+  // A cost line may be a credit, so a negative amount is allowed.
+  if (!isAmountString(value, { allowNegative: true })) {
     throw new CostLineInputError(
       'An amount must be a decimal string with at most 15 digits before the point and 4 after',
     );
