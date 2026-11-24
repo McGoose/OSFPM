@@ -395,7 +395,7 @@ export async function consumeLoginChallenge(
         return fail(
           inner,
           found.userId,
-          checked.reason === ('' as string)
+          checked.reason === 'secret-undecryptable'
             ? 'totp-undecryptable'
             : 'wrong-secret',
         );
