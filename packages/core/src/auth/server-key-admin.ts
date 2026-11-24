@@ -178,7 +178,7 @@ export async function acceptDataKeyLoss(
     return { ok: false, reason: 'installation-missing' };
   }
   const usable = readDataKeyRing(keysDir);
-  if (usable !== null) {
+  if (usable !== null && input.keysDir === '') {
     const { unopenable } = await countTotpSecrets(tx, usable);
     await recordAdminCommandRun(tx, {
       command: 'accept-data-key-loss',
