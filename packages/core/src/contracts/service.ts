@@ -949,7 +949,7 @@ export async function setContractTerms(
       stored.id,
       stored.version,
       write,
-      next,
+      given,
     );
   }
   const canSeeValue =
