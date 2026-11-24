@@ -521,7 +521,12 @@ export function sealPlainTotpSecrets(
           secret: totpCredential.secret,
         })
         .from(totpCredential)
-        .where(notLike(totpCredential.secret, `${ENCRYPTED_PREFIX}%`))
+        .where(
+          and(
+            notLike(totpCredential.secret, `${ENCRYPTED_PREFIX}%`),
+            isNull(totpCredential.userId),
+          ),
+        )
         .orderBy(asc(totpCredential.id));
       let sealed = 0;
       for (const row of plain) {
