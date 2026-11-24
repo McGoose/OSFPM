@@ -30,7 +30,7 @@ import {
 } from '@osfpm/core/src/db/test-support.js';
 import { API_PREFIX } from './api-version.js';
 import { buildApp } from './app.js';
-import { TEST_PUBLIC_ORIGIN } from './test-support.js';
+import { TEST_KEYS_DIR, TEST_PUBLIC_ORIGIN } from './test-support.js';
 import { runStartup, type StartupSteps } from './startup.js';
 
 /** A promise that is settled from outside, to hold a step half way. */
@@ -327,7 +327,7 @@ describe.each(testTargets)('start-up on $name', (target: TestTarget) => {
         'all-projects',
       ]);
 
-      await runStartup(app, { autoMigrate: false });
+      await runStartup(app, { autoMigrate: false, keysDir: TEST_KEYS_DIR });
 
       expect((await grants()).map((grant) => grant.reach)).toEqual([
         'own-scope',
@@ -345,11 +345,11 @@ describe.each(testTargets)('start-up on $name', (target: TestTarget) => {
 
     it('does nothing at the next start: no further event, no further change', async () => {
       await installedBeforeTheFlag();
-      await runStartup(app, { autoMigrate: false });
+      await runStartup(app, { autoMigrate: false, keysDir: TEST_KEYS_DIR });
       const events = (await database.db.select().from(auditEvent)).length;
       const changes = (await database.db.select().from(changeEvent)).length;
 
-      await runStartup(app, { autoMigrate: false });
+      await runStartup(app, { autoMigrate: false, keysDir: TEST_KEYS_DIR });
 
       expect((await database.db.select().from(auditEvent)).length).toBe(events);
       expect((await database.db.select().from(changeEvent)).length).toBe(
@@ -371,7 +371,10 @@ describe.each(testTargets)('start-up on $name', (target: TestTarget) => {
         { reach: 'all-projects' },
       );
 
-      const error = await runStartup(app, { autoMigrate: false }).then(
+      const error = await runStartup(app, {
+        autoMigrate: false,
+        keysDir: TEST_KEYS_DIR,
+      }).then(
         () => undefined,
         (caught: unknown) => caught,
       );

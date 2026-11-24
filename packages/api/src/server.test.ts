@@ -18,6 +18,7 @@ import { createTestKeyDirectory } from '@osfpm/core/src/keys/test-support.js';
 import type { Config } from './config.js';
 import { SESSION_COOKIE } from './auth/cookie.js';
 import { describeStartupFailure, startServer } from './server.js';
+import { TEST_SERVER_KEYS } from './test-support.js';
 import { StartupAbortedError, type StartupSteps } from './startup.js';
 
 const opened = vi.hoisted(() => [] as Database[]);
@@ -264,6 +265,7 @@ describe('startServer', () => {
       const release = deferred();
       const server = await startServer(config, {
         signals: new EventEmitter(),
+        serverKeys: TEST_SERVER_KEYS,
         startupSteps: {
           migrate: async (database) => {
             await release.promise;
@@ -331,6 +333,7 @@ describe('startServer', () => {
         { ...config, logLevel: 'info' },
         {
           signals: new EventEmitter(),
+          serverKeys: TEST_SERVER_KEYS,
           logStream: { write: (line) => void lines.push(line) },
           // A millisecond or two between attempts: only the order matters here.
           startupRetry: { initialMs: 1, maxMs: 2 },

@@ -1,6 +1,8 @@
 import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { PermissionSyncError } from '@osfpm/core/src/access/permission-sync.js';
+import { ServerKeysError } from '@osfpm/core/src/keys/errors.js';
+import type { ServerKeys } from '@osfpm/core/src/keys/server-keys.js';
 import { createDatabase, type Database } from '@osfpm/core/src/db/client.js';
 import { buildApp, type App } from './app.js';
 import { ConfigError, loadConfig, type Config } from './config.js';
@@ -38,6 +40,11 @@ export type StartOptions = {
   readonly logStream?: LoggerSettings['stream'];
   /** Replaces the migration and the permission sync, to watch or fail them. */
   readonly startupSteps?: StartupSteps;
+  /**
+   * The server keys, for a test that swaps the start-up steps and so never runs the
+   * step that loads them. Only tests pass it; the server loads its keys at start-up.
+   */
+  readonly serverKeys?: ServerKeys;
   /** Replaces the waits between attempts while the database is unreachable. */
   readonly startupRetry?: StartupRetry;
   /**
@@ -123,6 +130,7 @@ export async function startServer(
     db: database,
     publicOrigin: config.publicOrigin,
     trustedProxies: config.trustedProxies,
+    ...(options.serverKeys ? { serverKeys: options.serverKeys } : {}),
     logger: {
       level: config.logLevel,
       ...(options.logStream ? { stream: options.logStream } : {}),
@@ -150,7 +158,7 @@ export async function startServer(
   const startup = new AbortController();
   const ready = runStartup(
     app,
-    { autoMigrate: config.autoMigrate },
+    { autoMigrate: config.autoMigrate, keysDir: config.keysDir },
     options.startupSteps,
     {
       signal: startup.signal,
@@ -214,12 +222,15 @@ export async function startServer(
  * What the command-line entry prints when start-up fails, in `startServer` or
  * in the `ready` it returns. A
  * `PermissionSyncError` prints its own message and no stack: it names the
- * permission and the roles to fix, and holds no values. Anything else prints
+ * permission and the roles to fix, and holds no values. A `ServerKeysError` does
+ * the same: its message is fixed text for the operator, and names the path of a
+ * key file at most, never a key or what is in a file. Anything else prints
  * the error's class name and system code only, because driver messages can
  * hold connection details and SQL.
  */
 export function describeStartupFailure(error: unknown): string {
   if (error instanceof PermissionSyncError) return error.message;
+  if (error instanceof ServerKeysError) return error.message;
   const code = (error as { code?: unknown } | null)?.code;
   return `The server could not start: ${errorClassName(error)}${typeof code === 'string' ? ` (${code})` : ''}`;
 }

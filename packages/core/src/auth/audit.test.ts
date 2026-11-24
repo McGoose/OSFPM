@@ -17,6 +17,10 @@ import {
 import { getTableName } from 'drizzle-orm';
 import { createMigratedDatabase, testTargets } from '../db/test-support.js';
 import {
+  createTestKeyDirectory,
+  type TestKeyDirectory,
+} from '../keys/test-support.js';
+import {
   narrowManagedSensitiveGrants,
   topUpAdministratorRoles,
 } from './administrator-role.js';
@@ -77,6 +81,7 @@ import {
   issueSetupCode,
 } from './setup-code.js';
 import { AUTH_AUDIT } from './shared.js';
+import { bindServerKeys } from './server-key-binding.js';
 import {
   DEMO_ADMIN_EMAIL,
   DEMO_ADMIN_PASSWORD,
@@ -126,6 +131,7 @@ const LATER_SENSITIVE_LISTS = [
 describe.each(testTargets)('auth audit events on $name', (target) => {
   let database: Database;
   let cleanup: () => Promise<void>;
+  let keyDirectory: TestKeyDirectory;
 
   beforeAll(async () => {
     ({ database, cleanup } = await createMigratedDatabase(target));
@@ -134,9 +140,13 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
       baseUrl: 'https://osfpm.example.test',
       now: T0,
     });
+    // Likewise the server keys: the identity key is bound to the installation.
+    keyDirectory = createTestKeyDirectory();
+    await bindServerKeys(database.db, { keysDir: keyDirectory.dir, now: T0 });
   });
   afterAll(async () => {
     await cleanup();
+    keyDirectory.remove();
   });
 
   const db = () => database.db;

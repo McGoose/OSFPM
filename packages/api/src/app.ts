@@ -11,6 +11,7 @@ import type { Database } from '@osfpm/core/src/db/client.js';
 import { newId } from '@osfpm/core/src/db/ids.js';
 import { API_PREFIX } from './api-version.js';
 import { relyingPartyFor } from '@osfpm/core/src/auth/passkeys.js';
+import type { ServerKeys } from '@osfpm/core/src/keys/server-keys.js';
 import { memberResetRoutes } from './access-reset/member-routes.js';
 import { publicAccessResetRoutes } from './access-reset/public-routes.js';
 import { apiTokenRoutes } from './api-tokens/routes.js';
@@ -32,6 +33,7 @@ import {
 import { organisationInviteRoutes } from './invites/organisation-routes.js';
 import { publicInviteRoutes } from './invites/public-routes.js';
 import { PACKAGE_VERSION } from './package-info.js';
+import { createServerKeyStore, type ServerKeyStore } from './server-keys.js';
 import { preferencesRoutes } from './preferences/routes.js';
 import { registerSetupGate } from './setup/gate.js';
 import { setupRoutes } from './setup/routes.js';
@@ -40,6 +42,7 @@ import { authRoutes } from './routes/auth.js';
 import { healthRoutes } from './routes/health.js';
 import { metaRoutes } from './routes/meta.js';
 import { openapiRoutes } from './routes/openapi.js';
+import { serverKeyRoutes } from './routes/server-key.js';
 
 /**
  * Whether start-up has finished. A new app is not ready; `runStartup` marks it
@@ -71,6 +74,11 @@ declare module 'fastify' {
     publicOrigin: string;
     /** Whether start-up has finished (see `Readiness`). */
     readiness: Readiness;
+    /**
+     * The server's keys, set by start-up once it has loaded them (see
+     * `ServerKeyStore`). Routes pass the part a service needs to it.
+     */
+    serverKeys: ServerKeyStore;
   }
 }
 
@@ -105,6 +113,11 @@ export type BuildAppOptions = {
   };
   /** Leave out for no logging. See `loggerOptions` for what a line holds. */
   readonly logger?: LoggerSettings;
+  /**
+   * The server's keys, for an app that does not run `runStartup`. Only tests pass
+   * it: the server loads its keys at start-up, which sets them on the app.
+   */
+  readonly serverKeys?: ServerKeys;
 };
 
 /**
@@ -149,6 +162,7 @@ export function buildApp(options: BuildAppOptions) {
   app.setSerializerCompiler(serializerCompiler);
   app.decorate('db', options.db);
   app.decorate('publicOrigin', options.publicOrigin);
+  app.decorate('serverKeys', createServerKeyStore(options.serverKeys));
   // Not ready until `runStartup` says so. A caller that forgets gets 503s from
   // `/health/ready`, which is the safe way to be wrong.
   let ready = false;
@@ -232,6 +246,8 @@ export function buildApp(options: BuildAppOptions) {
   void app.register(healthRoutes, { prefix: API_PREFIX });
   void app.register(metaRoutes, { prefix: API_PREFIX });
   void app.register(openapiRoutes, { prefix: API_PREFIX });
+  // Outside the API prefix: a well-known address is fixed by convention.
+  void app.register(serverKeyRoutes);
   void app.register(setupRoutes, { prefix: API_PREFIX });
   void app.register(authRoutes, { prefix: `${API_PREFIX}/auth` });
   void app.register(loginRoutes, {

@@ -1,4 +1,7 @@
+import { afterAll } from 'vitest';
 import type { TestTarget } from '@osfpm/core/src/db/test-support.js';
+import { loadServerKeys } from '@osfpm/core/src/keys/server-keys.js';
+import { createTestKeyDirectory } from '@osfpm/core/src/keys/test-support.js';
 import { buildApp } from './app.js';
 import type { LogLevel } from './config.js';
 
@@ -13,11 +16,26 @@ export const UUID_V7 =
 export const TEST_PUBLIC_ORIGIN = 'https://osfpm.example.test';
 
 /**
+ * The key directory of this test file, made when it imports this file and deleted
+ * after its last test (vitest gives every test file its own copy of this module).
+ * The keys in it are the ones every test app holds, so a test that seeds a sealed
+ * secret uses `TEST_SERVER_KEYS.dataKeys`.
+ */
+const keyDirectory = createTestKeyDirectory();
+afterAll(() => keyDirectory.remove());
+
+/** The directory `TEST_SERVER_KEYS` was made in. */
+export const TEST_KEYS_DIR = keyDirectory.dir;
+
+/** The server keys of every test app, loaded from `TEST_KEYS_DIR`. */
+export const TEST_SERVER_KEYS = loadServerKeys(keyDirectory.dir);
+
+/**
  * An app over a throwaway, empty database on `target`, with the log lines it
  * writes collected in `lines`. The database is not migrated, and no start-up
  * runs, so the app is marked ready by hand where `runStartup` would do it, and
- * told setup is complete unless `setupComplete` says otherwise.
- * Only tests import this file.
+ * told setup is complete unless `setupComplete` says otherwise. It holds the test
+ * server keys, which start-up would have loaded. Only tests import this file.
  */
 export async function createTestApp(
   target: TestTarget,
@@ -49,6 +67,7 @@ export async function createTestApp(
   const app = buildApp({
     db: database,
     publicOrigin: TEST_PUBLIC_ORIGIN,
+    serverKeys: TEST_SERVER_KEYS,
     addressRateLimit: options.addressRateLimit ?? {
       max: 1_000_000,
       timeWindowMs: 60_000,

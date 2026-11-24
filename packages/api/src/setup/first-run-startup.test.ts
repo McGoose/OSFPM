@@ -26,7 +26,7 @@ import { buildApp, type App } from '../app.js';
 import type { Config } from '../config.js';
 import { startServer } from '../server.js';
 import { runStartup, type StartupSteps } from '../startup.js';
-import { TEST_PUBLIC_ORIGIN, UUID_V7 } from '../test-support.js';
+import { TEST_KEYS_DIR, TEST_PUBLIC_ORIGIN, UUID_V7 } from '../test-support.js';
 import { issueFirstRunCode, setupCodeBlock } from './first-run.js';
 
 /** The code a printed block holds, or undefined when there is none. */
@@ -64,10 +64,15 @@ describe.each(testTargets)('first-run start-up on $name', (target) => {
       },
     });
     apps.push(app);
-    await runStartup(app, { autoMigrate: true }, steps, {
-      stderr: { write: (text) => void written.push(text) },
-      retry: { initialMs: 1, maxMs: 1 },
-    });
+    await runStartup(
+      app,
+      { autoMigrate: true, keysDir: TEST_KEYS_DIR },
+      steps,
+      {
+        stderr: { write: (text) => void written.push(text) },
+        retry: { initialMs: 1, maxMs: 1 },
+      },
+    );
     const stderr = written.join('');
     return { stderr, lines: lines.join(''), code: printedCode(stderr) };
   }
