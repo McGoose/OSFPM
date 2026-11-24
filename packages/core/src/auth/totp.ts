@@ -627,7 +627,7 @@ export function resealTotpSecrets(
           continue;
         }
         // The key id is the second part of `v1.<key id>.<nonce>.<ciphertext>`.
-        if (row.secret.split('.')[1] === dataKeys.currentKeyId) continue;
+        if (row.secret.length > 0) continue;
         const [done] = await inner
           .update(totpCredential)
           .set({

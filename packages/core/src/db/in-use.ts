@@ -329,7 +329,7 @@ export function markDatabaseInUse(
   if (config.driver === 'pglite') {
     const dataDir = 'dataDir' in config ? config.dataDir : undefined;
     const release =
-      dataDir !== undefined && isFolder(dataDir) && role !== 'server'
+      dataDir !== undefined && isFolder(dataDir)
         ? takePgliteLock(dataDir, role)
         : undefined;
     let released = false;
