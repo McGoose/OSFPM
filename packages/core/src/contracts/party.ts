@@ -47,6 +47,7 @@ export function isPartyCondition(
       select 1 from ${contractParty}
       inner join ${person} on ${person.id} = ${contractParty.personId}
       where ${contractParty.contractId} = ${contractId}
+        and ${contractParty.deletedAt} is null
         and ${person.userId} = ${userId}
         and ${person.deletedAt} is null
     )
@@ -55,6 +56,7 @@ export function isPartyCondition(
       inner join ${personCompany} on ${personCompany.companyId} = ${contractParty.companyId}
       inner join ${person} on ${person.id} = ${personCompany.personId}
       where ${contractParty.contractId} = ${contractId}
+        and ${contractParty.deletedAt} is null
         and ${personCompany.deletedAt} is null
         and ${personCompany.relation} in (${sqlList(COMPANY_PARTY_RELATIONS)})
         and (${personCompany.startDate} is null or ${personCompany.startDate} <= ${today}::date)
