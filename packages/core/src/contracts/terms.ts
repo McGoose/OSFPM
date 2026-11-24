@@ -73,6 +73,7 @@ export const CONTRACT_TERMS_READ_VALUE_KEYS = [
   'currency',
   'rateBasis',
   'kitFeeBasis',
+  'mileageUnit',
 ] as const;
 
 /** Every field of the terms a caller can set. */
