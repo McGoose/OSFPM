@@ -113,6 +113,15 @@ export const AUTH_AUDIT = {
    * `auth.`: it is about a request, not about a login.
    */
   apiCall: 'api.call',
+  /**
+   * A command of the admin command line ran (P-09a1, decision D-64): `info` and
+   * `doctor`, and a key command that found nothing to do or refused. Holds the
+   * command's name, how it ended and counts, and nothing that names a person, a key
+   * or a secret. The third category here that is not under `auth.`: it is about the
+   * operator's tool, not about a login. A key command that changes something
+   * writes an event of its own.
+   */
+  adminCommandRun: 'admin.command-run',
 } as const;
 
 /** Details of an auth audit event: scalar values only, so nothing nested can hide a secret. */

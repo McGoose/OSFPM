@@ -12,7 +12,11 @@ import {
 import { Secret, TOTP } from 'otpauth';
 import { totpCredential, user, type SessionScope } from '../db/schema/index.js';
 import type { Tx } from '../db/write.js';
-import { ENCRYPTED_PREFIX, type DataKeyRing } from '../keys/data-keys.js';
+import {
+  ENCRYPTED_PREFIX,
+  isEncryptedValue,
+  type DataKeyRing,
+} from '../keys/data-keys.js';
 import { DecryptionError } from '../keys/errors.js';
 import { AuthStateError } from './errors.js';
 import { checkCurrentPassword } from './password-service.js';
@@ -498,6 +502,57 @@ export function removeTotp(
       return { ok: true };
     }),
   );
+}
+
+/** How many authenticator secrets are stored in each state, from `countTotpSecrets`. */
+export type TotpSecretCounts = {
+  /** Stored in the sealed form (`v1.…`), whether or not this server can open it. */
+  readonly sealed: number;
+  /** Still stored as plain base32: an install from before secrets were sealed that has not started since. */
+  readonly plain: number;
+  /** Sealed, and the ring cannot open it (its key is gone, or it was changed or copied). Part of `sealed`. */
+  readonly unopenable: number;
+};
+
+/**
+ * Counts the authenticator secrets by state: sealed, plain, and sealed but not
+ * openable with `dataKeys`. With no ring (`null`: the data keys are gone) every
+ * sealed secret counts as not openable. Each sealed secret is opened to find out
+ * and goes nowhere: only the counts leave, so the admin command line may print
+ * them (CLAUDE.md, Privacy rule: a secret is never returned, logged or audited).
+ * Pending, unconfirmed secrets count like confirmed ones. It writes nothing and
+ * takes no lock, and checks no permission: the command line that calls it is the
+ * operator's, run on the server (decision D-64).
+ *
+ * @throws RecordWriteError when the database refuses the read; it carries the
+ * SQLSTATE only.
+ */
+export function countTotpSecrets(
+  tx: Tx,
+  dataKeys: DataKeyRing | null,
+): Promise<TotpSecretCounts> {
+  return guardedAuth('totp_credential', 'read', async () => {
+    const rows = await tx
+      .select({ userId: totpCredential.userId, secret: totpCredential.secret })
+      .from(totpCredential);
+    let sealed = 0;
+    let plain = 0;
+    let unopenable = 0;
+    for (const row of rows) {
+      if (!isEncryptedValue(row.secret)) {
+        plain += 1;
+        continue;
+      }
+      sealed += 1;
+      if (
+        dataKeys === null ||
+        openSecret(dataKeys, row.userId, row.secret) === null
+      ) {
+        unopenable += 1;
+      }
+    }
+    return { sealed, plain, unopenable };
+  });
 }
 
 /**

@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/server.ts",
+    "admin": "tsx src/admin/main.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -81,6 +81,10 @@ import {
   consumeSetupCode,
   issueSetupCode,
 } from './setup-code.js';
+import {
+  readInstallationFacts,
+  recordAdminCommandRun,
+} from './admin-report.js';
 import { AUTH_AUDIT } from './shared.js';
 import { bindServerKeys } from './server-key-binding.js';
 import {
@@ -164,8 +168,9 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
   });
 
   const db = () => database.db;
-  // The auth services' events: `auth.*`, the one about a role's grant, and the one
-  // about an outside call made with a personal API token.
+  // The auth services' events: `auth.*`, the one about a role's grant, the one
+  // about an outside call made with a personal API token, and the one a command of
+  // the admin command line writes.
   const authEvents = () =>
     db()
       .select()
@@ -175,6 +180,7 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
           like(auditEvent.category, 'auth.%'),
           eq(auditEvent.category, AUTH_AUDIT.grantReachReduced),
           eq(auditEvent.category, AUTH_AUDIT.apiCall),
+          eq(auditEvent.category, AUTH_AUDIT.adminCommandRun),
         ),
       );
   const byCategory = async (category: string) =>
@@ -688,12 +694,49 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
     // Addresses are stored on the user and the invite on purpose; only the audit
     // trail must not hold them.
     addresses.push(INVITED_EMAIL, 'someone.else@demopictures.example');
+
+    // The admin command line: a command that reached the database and changed
+    // nothing writes this one event, after the facts it reports were read.
+    const facts = await readInstallationFacts(db());
+    await recordAdminCommandRun(db(), {
+      command: 'info',
+      outcome: 'completed',
+      installationId: facts.installationId,
+      details: { sealed: 1, unopenable: 0 },
+      now: at(30 * MINUTE),
+    });
   });
 
   it('records every kind of action the services take', async () => {
     const seen = new Set((await authEvents()).map((event) => event.category));
     // From the list in code, so a new category without an event here fails.
     expect([...seen].sort()).toEqual(Object.values(AUTH_AUDIT).sort());
+  });
+
+  it('records a command of the admin command line, from the system, about the installation, with its name, its outcome and counts and nothing else', async () => {
+    const [run] = await byCategory(AUTH_AUDIT.adminCommandRun);
+    const facts = await readInstallationFacts(db());
+    expect(await byCategory(AUTH_AUDIT.adminCommandRun)).toHaveLength(1);
+    expect(run).toMatchObject({
+      action: 'run',
+      actorType: 'system',
+      actorId: null,
+      targetType: 'installation',
+      targetId: facts.installationId,
+      occurredAt: at(30 * MINUTE),
+      details: {
+        command: 'info',
+        outcome: 'completed',
+        sealed: 1,
+        unopenable: 0,
+      },
+    });
+    expect(Object.keys(run!.details as object).sort()).toEqual([
+      'command',
+      'outcome',
+      'sealed',
+      'unopenable',
+    ]);
   });
 
   it('records a session as created, with its method, for its user', async () => {

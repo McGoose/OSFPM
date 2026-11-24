@@ -194,6 +194,24 @@ function listFolder(folder: string): string[] {
   }
 }
 
+/**
+ * Every data key file of `folder`, by key id: each is read and checked, and one
+ * that is not right is a refusal. Files that are not named like a key, such as a
+ * note, are left alone.
+ *
+ * @throws ServerKeysError for a key file that cannot be used.
+ */
+function readDataKeyFiles(folder: string): Map<string, Buffer> {
+  const keys = new Map<string, Buffer>();
+  for (const name of listFolder(folder).sort()) {
+    const match = DATA_KEY_FILE.exec(name);
+    // Other files in the folder, such as a note, are not keys and are left alone.
+    if (match === null) continue;
+    keys.set(match[1]!, readDataKey(join(folder, name)));
+  }
+  return keys;
+}
+
 /** Replaces `current` with `keyId` in one step, so a reader never sees half of it. */
 function writeCurrent(folder: string, keyId: string): void {
   const path = join(folder, SERVER_KEY_FILES.current);
@@ -217,13 +235,7 @@ function writeCurrent(folder: string, keyId: string): void {
  */
 function loadDataKeys(dir: string, mayCreate: boolean): DataKeyRing {
   const folder = join(dir, SERVER_KEY_FILES.dataKeysDirectory);
-  const keys = new Map<string, Buffer>();
-  for (const name of listFolder(folder).sort()) {
-    const match = DATA_KEY_FILE.exec(name);
-    // Other files in the folder, such as a note, are not keys and are left alone.
-    if (match === null) continue;
-    keys.set(match[1]!, readDataKey(join(folder, name)));
-  }
+  const keys = readDataKeyFiles(folder);
 
   const currentPath = join(folder, SERVER_KEY_FILES.current);
   const currentText = readKeyFile(currentPath, false);
@@ -283,4 +295,119 @@ export function loadServerKeys(
   }
   const identity = existing ?? createIdentity(dir);
   return { identity, dataKeys: loadDataKeys(dir, create.dataKeys) };
+}
+
+/**
+ * The identity key of `dir`, or null when there is no `server-identity.pem`.
+ * Reads and checks only: it never makes a key. The admin command line uses it to
+ * compare the file with the public key the installation stored, and the key
+ * commands to see what is there before they act. Only the public half leaves the
+ * returned object.
+ *
+ * @throws ServerKeysError `permissions`, `unreadable` or `invalid`, as
+ * `loadServerKeys` does; the message names a path and nothing from a file.
+ */
+export function readServerIdentity(dir: string): ServerIdentity | null {
+  return readIdentity(dir);
+}
+
+/**
+ * The data-key ring of `dir`, or null when there is no usable current key: the
+ * `data-keys` folder is missing, or `current` is missing or names a file that is
+ * not there. Reads and checks only: it never makes a key, which is what separates
+ * it from `loadServerKeys` and lets the admin command line look at a directory it
+ * must not change. A key file that is there is checked as `loadServerKeys` checks it.
+ *
+ * @throws ServerKeysError `permissions`, `unreadable` or `invalid` for a key file or
+ * a `current` that cannot be used; the message names a path and nothing from a file.
+ */
+export function readDataKeyRing(dir: string): DataKeyRing | null {
+  try {
+    return loadDataKeys(dir, false);
+  } catch (error) {
+    if (
+      error instanceof ServerKeysError &&
+      error.reason === 'data-keys-missing'
+    ) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/**
+ * What `inspectKeyDirectory` found. Counts and facts only: no key id, no file name
+ * of a data key (the name is the key's id), and nothing from inside a file.
+ */
+export type KeyDirectoryReport = {
+  /** The key directory is there and is a directory. */
+  readonly exists: boolean;
+  /** `server-identity.pem` is there, whatever it holds. */
+  readonly identityFile: boolean;
+  /** How many files in `data-keys` are named like a data key. */
+  readonly dataKeyFiles: number;
+  /** `data-keys/current` is there. */
+  readonly currentFile: boolean;
+  /**
+   * How many key files (the identity key and the data keys) the group or others can
+   * read, which the server refuses to start with. Null on Windows, whose mode bits
+   * say nothing about access, so the question has no answer there.
+   */
+  readonly openFiles: number | null;
+};
+
+/**
+ * Looks at the key directory without reading a key: which files are there, how
+ * many data keys, and on POSIX systems how many key files are too open. It never
+ * throws for what it finds (a directory that cannot be read counts as not being
+ * there) and never makes or changes a file. The admin command line's `info` and
+ * `doctor` use it, and nothing in the report is a secret.
+ */
+export function inspectKeyDirectory(dir: string): KeyDirectoryReport {
+  let exists: boolean;
+  try {
+    exists = statSync(dir).isDirectory();
+  } catch {
+    exists = false;
+  }
+  const checkable = process.platform !== 'win32';
+  if (!exists) {
+    return {
+      exists: false,
+      identityFile: false,
+      dataKeyFiles: 0,
+      currentFile: false,
+      openFiles: checkable ? 0 : null,
+    };
+  }
+  const identityPath = join(dir, SERVER_KEY_FILES.identity);
+  const folder = join(dir, SERVER_KEY_FILES.dataKeysDirectory);
+  let names: string[];
+  try {
+    names = listFolder(folder);
+  } catch {
+    names = [];
+  }
+  const dataKeyPaths = names
+    .filter((name) => DATA_KEY_FILE.test(name))
+    .map((name) => join(folder, name));
+  const identityFile = existsSync(identityPath);
+  const tooOpen = (path: string) => {
+    try {
+      return permissionsTooOpen(statSync(path).mode);
+    } catch {
+      return false;
+    }
+  };
+  return {
+    exists: true,
+    identityFile,
+    dataKeyFiles: dataKeyPaths.length,
+    currentFile: existsSync(join(folder, SERVER_KEY_FILES.current)),
+    openFiles: checkable
+      ? [...(identityFile ? [identityPath] : []), ...dataKeyPaths].filter(
+          tooOpen,
+        ).length
+      : null,
+  };
 }

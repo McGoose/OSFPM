@@ -185,8 +185,13 @@ export function isDatabaseUnreachable(error: unknown): boolean {
   return visit(error, 0);
 }
 
-/** The system code in `error` or its causes, if it has one that is short and plain enough to log. */
-function codeOf(error: unknown): string | undefined {
+/**
+ * The system code in `error` or its causes, such as `ECONNREFUSED` or a SQLSTATE,
+ * if it has one that is short and plain enough to log. The admin command line
+ * prints it too, as the whole of what it says about a failure besides the error's
+ * class name.
+ */
+export function codeOf(error: unknown): string | undefined {
   for (
     let current: unknown = error, depth = 0;
     current instanceof Error && depth <= MAX_CAUSE_DEPTH;
