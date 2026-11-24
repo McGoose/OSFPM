@@ -31,6 +31,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - No legal or financial numbers (rates, caps, thresholds, deadlines) in code: they live in rule packs as data.
 - Exception: shipped default values (legal periods, rates) may live in one constant marked `verified: false`, until the rule-pack engine replaces them. Never repeat them elsewhere.
 - Money columns are numeric; in TypeScript they are decimal strings, never number. Arithmetic on money happens in the database.
+- Money strings are validated with `db/decimal.ts`.
 - Modules never read other modules' tables; they use core services and events.
 - Tenant records are written only through the write helper in `src/db/write.ts`.
 - Tables in `SECURITY_TABLES` are written only by the folder their declaration names: the auth service, unless the table declares another in code with a one-line reason (`access_grant`: the sensitive service). Never through the write helper; their changes are audited, not change-logged. `tableWriters()` in `db/columns.ts` is the one record of who writes each security and service-written table, and `write-helper-scan.test.ts` fails on a write from any other folder.
@@ -43,6 +44,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Only `src/sensitive/` touches `person_sensitive`, `user_access_profile` and `access_grant` (`service.ts` is the door to the first); other code calls the service.
 - Reads of person and user list their columns explicitly; never select the whole row. `db/whole-row-scan.test.ts` fails on any whole-row read.
 - A party to a contract always sees that contract, its terms and its amounts (`isContractParty`); being a party never grants writes.
+- A refusal never reveals a field the caller can't see: gate the whole field set, not the case where a hidden value exists.
 - Access needs and medical data are read only through live, person-approved grants; the sensitive-read permission alone is never enough. Audit details for them carry counts, never field names.
 - Access denials are audited for sensitive data and legal holds; other modules don't audit denials.
 - Where a denial is audited, the event is written before the typed error is thrown. Callers catch the error inside the transaction and commit, so the audit event survives.
