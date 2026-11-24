@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { syncPermissions } from '../access/permission-sync.js';
 import { base } from '../access/test-fixtures.js';
@@ -15,7 +15,7 @@ import {
   succeeded,
   testTargets,
 } from '../db/test-support.js';
-import { VersionConflictError } from '../db/write.js';
+import { lockProjectChanges, VersionConflictError } from '../db/write.js';
 import { CONTRACT_PERMISSIONS } from './permissions.js';
 import {
   ContractInputError,
@@ -289,6 +289,56 @@ describe.skipIf(postgres === undefined)(
         const [row] = await termsRows(contractId);
         expect(row!.deletedAt).not.toBeNull();
         expect(row!.paymentTermsDays).toBe(30);
+      });
+    });
+
+    // CLAUDE.md, Data rules: the change counter comes before any row lock. A writer that
+    // locks the contract row first and the counter after can deadlock with one that does
+    // the opposite, and a test that starts the two together cannot be relied on to show
+    // it. So the holder keeps only the counter, and while the writer waits for it a third
+    // connection asks for the contract row with NOWAIT: it fails at once when the waiter
+    // already holds the row, which is the wrong order.
+    describe('lock order', () => {
+      const contractRowIsFree = (contractId: string) => async () => {
+        await db().transaction(async (probe) => {
+          await probe.execute(
+            sql`select id from contract where id = ${contractId} for update nowait`,
+          );
+        });
+      };
+
+      it('takes the change counter before it locks the contract row, when it changes a contract’s kind', async () => {
+        const { w, contractId, contractVersion } = await scene(true);
+        const outcomes = await interleave(
+          db(),
+          (tx) => lockProjectChanges(tx, w.organisationId, w.projectId),
+          (tx) =>
+            updateContract(tx, at(w.manager), contractId, contractVersion, {
+              kind: 'location-agreement',
+            }),
+          contractRowIsFree(contractId),
+        );
+        expect(outcomes.map((outcome) => outcome.status)).toEqual([
+          'fulfilled',
+          'fulfilled',
+        ]);
+      });
+
+      it('takes the change counter before it locks the contract row, when it sets terms', async () => {
+        const { w, contractId } = await scene(true);
+        const outcomes = await interleave(
+          db(),
+          (tx) => lockProjectChanges(tx, w.organisationId, w.projectId),
+          (tx) =>
+            setContractTerms(tx, at(w.manager), contractId, {
+              paymentTermsDays: 30,
+            }),
+          contractRowIsFree(contractId),
+        );
+        expect(outcomes.map((outcome) => outcome.status)).toEqual([
+          'fulfilled',
+          'fulfilled',
+        ]);
       });
     });
   },
