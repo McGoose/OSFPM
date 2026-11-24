@@ -81,7 +81,7 @@ export type RotateDataKeyResult =
  * holds every old key, so every secret still opens, and running the command again
  * adds one more key and re-seals the rest. Nothing is half done in the database.
  *
- * With no `installation` row the command is refused (a `admin.command-run` event
+ * With no `installation` row the command is refused (an `admin.command-run` event
  * records it, with no target) and writes nothing to the key directory.
  *
  * Only the admin command line calls it, with every server stopped; it checks no
