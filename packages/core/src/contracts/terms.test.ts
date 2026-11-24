@@ -161,7 +161,7 @@ describe.each(testTargets)('contract terms on $name', (target) => {
         w.organisationId,
         orgEditor,
         'admin',
-        [READ, EDIT],
+        [READ, EDIT, READ_VALUE],
       );
       const terms = await setContractTerms(db(), at(orgEditor), made.id, {
         currency: 'GBP',
@@ -375,23 +375,129 @@ describe.each(testTargets)('contract terms on $name', (target) => {
         });
       });
 
-      it('lets contracts:edit alone set the terms that are not amounts', async () => {
+      it('lets contracts:edit alone set the terms that are neither amounts nor say what an amount means', async () => {
         const w = await world();
         const made = await seedContract(database, w);
         const terms = await setContractTerms(db(), at(w.assistant), made.id, {
-          currency: 'GBP',
-          rateBasis: 'daily',
           guaranteedHours: '10',
           overtimeRuleKey: 'uk-film-overtime',
-          kitFeeBasis: 'daily',
           kitInventory: 'A tripod',
-          mileageUnit: 'km',
           paymentTermsDays: 30,
           pensionApplies: false,
         });
         expect(terms.paymentTermsDays).toBe(30);
         expect(hasAmount(terms)).toEqual([]);
       });
+
+      it('lets contracts:edit alone change those terms when an amount is stored, and shows no amount', async () => {
+        const w = await world();
+        const made = await seedContract(database, w);
+        await setContractTerms(db(), at(w.manager), made.id, FULL_TERMS);
+        const terms = await setContractTerms(db(), at(w.assistant), made.id, {
+          guaranteedHours: '8',
+          overtimeRuleKey: 'uk-film-overtime-2',
+          kitInventory: 'A tripod and a slider',
+          paymentTermsDays: 14,
+          pensionApplies: false,
+        });
+        expect(terms).toMatchObject({
+          guaranteedHours: '8.00',
+          paymentTermsDays: 14,
+          pensionApplies: false,
+        });
+        expect(hasAmount(terms)).toEqual([]);
+        expect((await termsRows(w.organisationId))[0]!.rate).toBe('450.5000');
+      });
+
+      // The fields that say what an amount means: relabelling one under an amount the
+      // caller cannot see would change that amount, so they are gated like the amounts.
+      const RELABELLING = [
+        ['currency', 'EUR'],
+        ['rateBasis', 'weekly'],
+        ['kitFeeBasis', 'weekly'],
+        ['mileageUnit', 'km'],
+      ] as const;
+
+      it.each(RELABELLING)(
+        'refuses contracts:edit alone for %s, set or cleared, and leaves the stored terms as they were',
+        async (key, value) => {
+          const w = await world();
+          const made = await seedContract(database, w);
+          await setContractTerms(db(), at(w.manager), made.id, FULL_TERMS);
+          const before = await termsRows(w.organisationId);
+          for (const given of [value, null]) {
+            expect(
+              await errorOf(
+                setContractTerms(db(), at(w.assistant), made.id, {
+                  [key]: given,
+                }),
+              ),
+            ).toMatchObject({
+              name: 'AccessDeniedError',
+              permission: READ_VALUE,
+              scope: undefined,
+            });
+          }
+          expect(await termsRows(w.organisationId)).toEqual(before);
+        },
+      );
+
+      it.each(RELABELLING)(
+        'refuses %s with the same answer whether the terms hold an amount, hold none, or do not exist',
+        async (key, value) => {
+          const w = await world();
+          const withAmount = await seedContract(database, w);
+          await setContractTerms(
+            db(),
+            at(w.manager),
+            withAmount.id,
+            FULL_TERMS,
+          );
+          const withoutAmount = await seedContract(database, w);
+          await setContractTerms(db(), at(w.manager), withoutAmount.id, {
+            paymentTermsDays: 30,
+          });
+          const noTerms = await seedContract(database, w);
+          const answers = new Set<string>();
+          for (const id of [withAmount.id, withoutAmount.id, noTerms.id]) {
+            for (const given of [value, null]) {
+              const error = (await errorOf(
+                setContractTerms(db(), at(w.assistant), id, { [key]: given }),
+              )) as Error;
+              // Everything an error can show a caller: its class, its text and its fields.
+              answers.add(
+                JSON.stringify({
+                  ...error,
+                  name: error.name,
+                  message: error.message,
+                }),
+              );
+            }
+          }
+          expect(answers.size).toBe(1);
+          expect([...answers][0]).toContain(READ_VALUE);
+        },
+      );
+
+      it.each(RELABELLING)(
+        'lets contracts:edit with contracts:read-value set and clear %s',
+        async (key, value) => {
+          const w = await world();
+          const made = await seedContract(database, w);
+          await setContractTerms(db(), at(w.manager), made.id, {
+            currency: 'GBP',
+          });
+          const set = await setContractTerms(db(), at(w.manager), made.id, {
+            [key]: value,
+          });
+          expect(set[key]).toBe(value);
+          const cleared = await setContractTerms(db(), at(w.manager), made.id, {
+            [key]: null,
+          });
+          // The currency stays while another field is cleared, so only it is checked.
+          if (key !== 'currency') expect(cleared[key]).toBeNull();
+        },
+      );
 
       it.each(AMOUNT_KEYS)(
         'refuses contracts:edit alone for %s, set or cleared, and leaves the stored terms as they were',

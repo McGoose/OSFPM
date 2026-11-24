@@ -59,6 +59,23 @@ export const CONTRACT_TERMS_AMOUNT_KEYS = [
 export type ContractTermsAmountKey =
   (typeof CONTRACT_TERMS_AMOUNT_KEYS)[number];
 
+/**
+ * The fields that need `contracts:read-value` to set or clear: the four amounts,
+ * and the currency, the rate basis, the kit fee basis and the mileage unit, which
+ * say what an amount means. Someone who may not see an amount must not be able to
+ * relabel it, and gating the whole set, not only the case where an amount is
+ * stored, means a refusal never shows whether one is (CLAUDE.md, Code rules). The
+ * other terms (guaranteed hours, overtime rule key, kit inventory, days to pay,
+ * pension) are not amounts and need only `contracts:edit`.
+ */
+export const CONTRACT_TERMS_READ_VALUE_KEYS = [
+  ...CONTRACT_TERMS_AMOUNT_KEYS,
+  'currency',
+  'rateBasis',
+  'kitFeeBasis',
+  'mileageUnit',
+] as const;
+
 /** Every field of the terms a caller can set. */
 const TERM_KEYS = [
   'currency',
@@ -100,7 +117,9 @@ export type ContractTermsView = Omit<ContractTermsRow, ContractTermsAmountKey> &
   Partial<Pick<ContractTermsRow, ContractTermsAmountKey>>;
 
 const termKeys: ReadonlySet<string> = new Set(TERM_KEYS);
-const amountKeys: ReadonlySet<string> = new Set(CONTRACT_TERMS_AMOUNT_KEYS);
+const readValueKeys: ReadonlySet<string> = new Set(
+  CONTRACT_TERMS_READ_VALUE_KEYS,
+);
 
 /** The places after the point of the amount columns, `numeric(19,4)`, and of the hours, `numeric(5,2)`. */
 const AMOUNT_PLACES = 4;
@@ -114,10 +133,15 @@ const CURRENCY_PATTERN = /^[A-Z]{3}$/;
 const RULE_KEY_PATTERN = /^[a-z0-9][a-z0-9.-]*$/;
 const PAYMENT_TERMS_DAYS_MAX = 365;
 
-/** The fields of `input` that are amounts and are set (not `undefined`), even to `null`. */
-export function amountKeysIn(input: ContractTermsInput): string[] {
+/**
+ * The fields of `input` that need `contracts:read-value` to set, which are those
+ * of `CONTRACT_TERMS_READ_VALUE_KEYS`, whatever they are set to and even to `null`.
+ * It looks only at the keys of `input`, never at what is stored, so the answer
+ * cannot depend on whether the terms hold an amount.
+ */
+export function readValueKeysIn(input: ContractTermsInput): string[] {
   return Object.entries(input)
-    .filter(([key, value]) => amountKeys.has(key) && value !== undefined)
+    .filter(([key, value]) => readValueKeys.has(key) && value !== undefined)
     .map(([key]) => key);
 }
 

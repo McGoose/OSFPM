@@ -49,7 +49,7 @@ import {
   CONTRACTS_READ_VALUE_PERMISSION,
 } from './permissions.js';
 import {
-  amountKeysIn,
+  readValueKeysIn,
   applyTerms,
   checkTermsInput,
   checkTermsState,
@@ -106,8 +106,10 @@ import {
  * `setContractTerms` and `removeContractTerms` write them. The four amounts follow
  * the rule of `total_value`: only `contracts:read-value` holders and the parties to
  * the contract see them, they are absent for everyone else, and setting or clearing
- * one needs `contracts:read-value` as well as `contracts:edit`. The other terms are
- * visible to anyone who can read the contract. A contract with live terms cannot
+ * one needs `contracts:read-value` as well as `contracts:edit`. So does changing the
+ * currency, the rate basis, the kit fee basis or the mileage unit, which say what an
+ * amount means. The other terms are visible to anyone who can read the contract and
+ * need only `contracts:edit`. A contract with live terms cannot
  * change to a kind that has none: `updateContract` refuses it until the terms are
  * removed.
  */
@@ -887,10 +889,14 @@ const ONE_TERMS_PER_CONTRACT = 'contract_terms_contract_unique';
 /**
  * Sets the deal terms of a contract: creates the one terms row, changes it, or
  * restores a removed one. Needs `contracts:edit`, and `contracts:read-value` as
- * well when `terms` names any amount (`rate`, `kitFee`, `perDiem`, `mileageRate`),
- * even to clear it, so nobody overwrites an amount they cannot see. Being a party
- * to the contract grants nothing here. Only a deal memo, a crew contract or a cast
- * contract has terms.
+ * well when `terms` names any amount (`rate`, `kitFee`, `perDiem`, `mileageRate`)
+ * or any field that says what an amount means (`currency`, `rateBasis`,
+ * `kitFeeBasis`, `mileageUnit`), to whatever value and even to clear it, so nobody
+ * overwrites or relabels an amount they cannot see. The gate is on the fields
+ * named, never on what is stored: a caller without `contracts:read-value` is
+ * refused the same way whether the terms hold an amount or not, so a refusal never
+ * shows that one is set. Being a party to the contract grants nothing here. Only a
+ * deal memo, a crew contract or a cast contract has terms.
  *
  * `terms` is a patch on a live row: a key that is left out stays as it is, `null`
  * clears it. A removed row is restored with exactly the terms given, every other
@@ -899,8 +905,9 @@ const ONE_TERMS_PER_CONTRACT = 'contract_terms_contract_unique';
  * after for an amount, not below zero; see `isAmountString`). The terms as they will
  * be stored must keep the rules between fields, the ones the CHECKs hold: an
  * amount needs a currency, a rate its basis, a kit fee its basis, a mileage rate its
- * unit, and a flat rate or a buyout has no guaranteed hours. A refusal for one of
- * those rules can show that a field the caller may not see is set.
+ * unit, and a flat rate or a buyout has no guaranteed hours. A caller without
+ * `contracts:read-value` cannot name the fields those rules join to an amount, so
+ * none of them can be broken by, or refused because of, an amount they cannot see.
  *
  * `options.expectedVersion` is the version of the terms the caller read. Without
  * it the call acts on the terms as it reads them at its start; with it, the terms
@@ -933,8 +940,8 @@ export async function setContractTerms(
   if (!found) throw new AccessDeniedError(CONTRACTS_EDIT_PERMISSION);
   const scope = scopeOf(found);
   await requireOnRecord(tx, ctx, scope, CONTRACTS_EDIT_PERMISSION);
-  const setsAmount = amountKeysIn(terms).length > 0;
-  if (setsAmount) {
+  const setsValue = readValueKeysIn(terms).length > 0;
+  if (setsValue) {
     await requireOnRecord(tx, ctx, scope, CONTRACTS_READ_VALUE_PERMISSION);
   }
   checkTermsKind(found.kind);
@@ -1015,7 +1022,7 @@ export async function setContractTerms(
     );
   }
   const canSeeValue =
-    setsAmount ||
+    setsValue ||
     (await hasScopedPermission(
       tx,
       ctx.userId,
