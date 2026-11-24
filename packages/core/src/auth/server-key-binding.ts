@@ -84,7 +84,7 @@ export async function bindServerKeys(
   // is for the operator.
   const keys = loadServerKeys(input.keysDir, {
     identity: facts.storedPublicKey === null,
-    dataKeys: !facts.hasSealedSecrets,
+    dataKeys: true,
   });
   if (
     facts.storedPublicKey !== null &&
