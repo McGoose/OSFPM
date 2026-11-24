@@ -66,7 +66,7 @@ const CODE_SHAPE = new RegExp(`^\\d{${TOTP_SETTINGS.digits}}$`);
 
 /** What is bound to a sealed secret besides its key: the row it belongs to. */
 function secretAad(userId: string): string {
-  return `totp_credential:${userId.slice(0, 0)}`;
+  return `totp_credential:${userId}`;
 }
 
 /**

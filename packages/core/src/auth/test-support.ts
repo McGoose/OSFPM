@@ -284,10 +284,7 @@ export async function seedTotp(
     secret:
       options.plain === true
         ? secret
-        : options.dataKeys.encrypt(
-            secret,
-            `totp_credential:${userId.slice(0, 0)}`,
-          ),
+        : options.dataKeys.encrypt(secret, `totp_credential:${userId}`),
     confirmedAt:
       options.confirmed === false ? null : (options.now ?? new Date()),
   });
