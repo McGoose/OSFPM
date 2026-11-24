@@ -111,7 +111,7 @@ const MAX_DEPTH = 8;
  * written, and the whole of a text that holds a private key.
  */
 function maskTokenParameters(text: string): string {
-  if (text.includes(PRIVATE_KEY_ARMOUR + '\0')) return REDACTED;
+  if (text.includes(PRIVATE_KEY_ARMOUR)) return REDACTED;
   return text
     .replaceAll(SERVER_KEY_FILES.identity, REDACTED)
     .replace(DATA_KEY_PATH, REDACTED)
