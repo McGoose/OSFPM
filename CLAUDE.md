@@ -39,6 +39,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - `user`, `installation`, `user_access_profile` and `user_preferences` are install-level tables, written only by the core service declared for each in `SERVICE_WRITTEN_TABLES` (the auth service for the first two, which also does first-run setup; the sensitive service for the profile; the preferences service for the preferences), never through the write helper; their changes are audited, not change-logged.
 - The setup code is the only secret OSFPM prints; it goes to stderr outside the logger.
 - Server keys live only in `OSFPM_KEYS_DIR`, never in the database, logs, errors or events. A secret encrypted at rest carries its key id and is bound to its row with additional authenticated data.
+- A start-up step whose action depends on what the database holds runs inside the `installation` row lock.
 - Test fixtures may insert rows directly to set up state. Code under test always writes through the write helper.
 - A helper that writes records needs at least one test for each kind of table it serves (organisation-level, project-level, and the project table itself).
 - Side effects (email, webhooks, notifications, jobs) are only queued inside the write's own transaction; sending happens later in the worker, never in the request path.
