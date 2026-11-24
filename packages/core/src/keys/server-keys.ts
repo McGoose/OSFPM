@@ -91,15 +91,17 @@ function assertPrivate(path: string): void {
 }
 
 /**
- * The text of the key file at `path`, or null when it is not there. The file's
- * permissions are checked first.
+ * The text of the file at `path`, or null when it is not there. The permissions
+ * of a file that holds a secret are checked first; `current`, which holds a key id
+ * and no secret, is not checked, so an operator who made it by hand with the
+ * default mode is not refused for it.
  *
  * @throws ServerKeysError `permissions` when others can read it, `unreadable`
  * when it is there and cannot be read (a directory, or no right to read).
  */
-function readKeyFile(path: string): string | null {
+function readKeyFile(path: string, holdsSecret = true): string | null {
   try {
-    assertPrivate(path);
+    if (holdsSecret) assertPrivate(path);
     return readFileSync(path, 'utf8');
   } catch (error) {
     if (error instanceof ServerKeysError) throw error;
@@ -224,7 +226,7 @@ function loadDataKeys(dir: string, mayCreate: boolean): DataKeyRing {
   }
 
   const currentPath = join(folder, SERVER_KEY_FILES.current);
-  const currentText = readKeyFile(currentPath);
+  const currentText = readKeyFile(currentPath, false);
   let currentId: string | undefined;
   if (currentText !== null) {
     const named = currentText.trim();
@@ -254,7 +256,8 @@ function loadDataKeys(dir: string, mayCreate: boolean): DataKeyRing {
  * PEM), `data-keys/<key id>.key` (32 random bytes in base64) and
  * `data-keys/current` (the id of the key that seals new values). New directories
  * are mode 0700 and new files 0600. On POSIX systems a key file that the group or
- * others can read is refused, the directories are not checked. Existing files are
+ * others can read is refused; the directories, and `current`, which holds no
+ * secret, are not checked. Existing files are
  * never changed, and a file that cannot be read or is not the right kind is a
  * refusal, never a reason to make a new one.
  *

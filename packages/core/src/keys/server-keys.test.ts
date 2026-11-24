@@ -238,6 +238,25 @@ describe('loadServerKeys: permissions', () => {
     expect(error.message).toContain(path);
   });
 
+  it.skipIf(!POSIX)(
+    'does not check the mode of current, which holds a key id and no secret',
+    () => {
+      const keys = loadServerKeys(scratch.dir);
+      chmodSync(
+        join(
+          scratch.dir,
+          SERVER_KEY_FILES.dataKeysDirectory,
+          SERVER_KEY_FILES.current,
+        ),
+        0o644,
+      );
+
+      expect(loadServerKeys(scratch.dir).dataKeys.currentKeyId).toBe(
+        keys.dataKeys.currentKeyId,
+      );
+    },
+  );
+
   it.skipIf(!POSIX)('names the path and never the contents of the file', () => {
     const keys = loadServerKeys(scratch.dir);
     const path = join(scratch.dir, SERVER_KEY_FILES.identity);
