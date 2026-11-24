@@ -37,6 +37,7 @@ import {
   type UpdatePatch,
   type WriteContext,
 } from '../db/write.js';
+import { isContractParty, isPartyCondition } from './party.js';
 import {
   CONTRACTS_EDIT_PERMISSION,
   CONTRACTS_READ_PERMISSION,
@@ -61,6 +62,13 @@ import {
  * result, including the result of a create or an update, so they are never
  * `null` or `0`. Setting or changing either needs `contracts:read-value` as
  * well as `contracts:edit`, so nobody overwrites an amount they cannot see.
+ *
+ * A party to a contract always sees that contract, whatever permissions they hold
+ * (decision D-73, Q6): its parties, links, `total_value` and `currency` in full.
+ * `isContractParty`, in `party.ts`, is the one definition of a party.
+ * `getContract` and `listOwnContracts` read for a party. Being a party never grants
+ * a write: every edit still needs `contracts:edit`, and an amount still needs
+ * `contracts:read-value` as well.
  *
  * A call on a contract that does not exist, is deleted or belongs to another
  * organisation fails like any other denial, so ids cannot be probed. For that
@@ -186,6 +194,11 @@ function writeContext(ctx: ContractContext): WriteContext {
     clock: ctx.clock,
     requestId: ctx.requestId ?? null,
   };
+}
+
+/** The calendar day of the caller's clock, in UTC: the day a loan-out link is checked on. */
+function todayOf(ctx: ContractContext): string {
+  return ctx.clock().toISOString().slice(0, 10);
 }
 
 function scopeOf(row: PermissionScope): PermissionScope {
@@ -702,11 +715,14 @@ export async function removeContractLink(
 }
 
 /**
- * Reads one contract with its parties and links. Needs `contracts:read`;
- * `currency` and `totalValue` are in the result only with
+ * Reads one contract with its parties and links. Needs `contracts:read`, or being
+ * a party to the contract (`isContractParty`): a party reads it in full whatever
+ * permissions they hold. Anyone else gets `currency` and `totalValue` only with
  * `contracts:read-value`.
  *
- * @throws AccessDeniedError, with no scope, as `updateContract`.
+ * @throws AccessDeniedError, with no scope, as `updateContract`: the same answer
+ * for an unknown contract, a deleted one, and one the caller may not read and is
+ * no party to.
  */
 export async function getContract(
   tx: Tx,
@@ -716,14 +732,46 @@ export async function getContract(
   const found = await findContract(tx, id);
   if (!found) throw new AccessDeniedError(CONTRACTS_READ_PERMISSION);
   const scope = scopeOf(found);
-  await requireOnRecord(tx, ctx, scope, CONTRACTS_READ_PERMISSION);
-  const canSeeValue = await hasScopedPermission(
-    tx,
-    ctx.userId,
-    scope,
-    CONTRACTS_READ_VALUE_PERMISSION,
-  );
+  const isParty = await isContractParty(tx, ctx.userId, id, todayOf(ctx));
+  if (!isParty) {
+    await requireOnRecord(tx, ctx, scope, CONTRACTS_READ_PERMISSION);
+  }
+  const canSeeValue =
+    isParty ||
+    (await hasScopedPermission(
+      tx,
+      ctx.userId,
+      scope,
+      CONTRACTS_READ_VALUE_PERMISSION,
+    ));
   return (await viewsOf(tx, [found], canSeeValue))[0]!;
+}
+
+/**
+ * Lists every live contract of the organisation that the caller is a party to,
+ * across all its projects and the organisation-level ones, oldest first, in full:
+ * with `currency` and `totalValue`. Needs no permission beyond being a party
+ * (decision D-73, Q6), by the rule in `isContractParty`. A caller who is a party to
+ * no contract gets an empty list. Writes no audit event: contracts are not
+ * sensitive personal data.
+ */
+export async function listOwnContracts(
+  tx: Tx,
+  ctx: ContractContext,
+  organisationId: string,
+): Promise<ContractView[]> {
+  const rows = await tx
+    .select()
+    .from(contract)
+    .where(
+      and(
+        eq(contract.organisationId, organisationId),
+        isNull(contract.deletedAt),
+        isPartyCondition(ctx.userId, contract.id, todayOf(ctx)),
+      ),
+    )
+    .orderBy(asc(contract.createdAt), asc(contract.id));
+  return viewsOf(tx, rows, true);
 }
 
 /**
