@@ -858,7 +858,12 @@ async function refuseKindChangeWithTerms(
   const [terms] = await tx
     .select({ id: contractTerms.id })
     .from(contractTerms)
-    .where(and(eq(contractTerms.contractId, contractId)))
+    .where(
+      and(
+        eq(contractTerms.contractId, contractId),
+        isNull(contractTerms.deletedAt),
+      ),
+    )
     .limit(1)
     .for('share');
   if (terms !== undefined) {
