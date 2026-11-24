@@ -49,6 +49,7 @@ export function isPartyCondition(
       where ${contractParty.contractId} = ${contractId}
         and ${contractParty.deletedAt} is null
         and ${person.userId} = ${userId}
+        and ${person.deletedAt} is null
     )
     or exists (
       select 1 from ${contractParty}
@@ -61,6 +62,7 @@ export function isPartyCondition(
         and (${personCompany.startDate} is null or ${personCompany.startDate} <= ${today}::date)
         and (${personCompany.endDate} is null or ${personCompany.endDate} >= ${today}::date)
         and ${person.userId} = ${userId}
+        and ${person.deletedAt} is null
     )
   )`;
 }
