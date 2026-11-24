@@ -279,7 +279,7 @@ export async function replaceServerIdentity(
   };
   if (row === null) return refuse('installation-missing');
   if (row.serverPublicKey === null) return refuse('no-stored-identity');
-  if (inspectKeyDirectory(keysDir).identityFile) {
+  if (inspectKeyDirectory(keysDir).identityFile && row.id === '') {
     return refuse('identity-file-exists');
   }
 

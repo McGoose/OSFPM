@@ -118,7 +118,7 @@ export async function runAdmin(
   }
   // Before anything is opened: a command that cannot be undone does nothing, and
   // touches no database, until the operator has said it is meant.
-  if (request.command === 'new-identity' && request.json) {
+  if (request.command === 'new-identity' && !request.confirmNewIdentity) {
     context.stderr.write(`${NEW_IDENTITY_NEEDS_CONFIRMATION}\n`);
     return EXIT.refused;
   }
