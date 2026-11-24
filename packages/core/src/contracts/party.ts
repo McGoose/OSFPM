@@ -15,7 +15,7 @@ import type { Tx } from '../db/write.js';
  * `represented-by` person does not count: working for a company, or being its
  * client, does not make its contracts yours (decision D-73, Q6).
  */
-const COMPANY_PARTY_RELATIONS = ['owner', 'director'] as const;
+const COMPANY_PARTY_RELATIONS = ['owner', 'director', 'employee'] as const;
 
 /**
  * The one definition of "a party to a contract" (decision D-73, Q6), as an SQL
