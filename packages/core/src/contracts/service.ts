@@ -847,7 +847,6 @@ async function refuseKindChangeWithTerms(
   scope: PermissionScope,
   contractId: string,
 ): Promise<void> {
-  await lockChangesOf(tx, scope);
   const [held] = await tx
     .select({ id: contract.id })
     .from(contract)
