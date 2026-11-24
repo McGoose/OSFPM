@@ -1,7 +1,6 @@
 import { atColumnScale, isAmountString } from '../db/decimal.js';
 import {
   CONTRACT_GUARANTEED_HOURS_MAX,
-  CONTRACT_KINDS,
   CONTRACT_KIT_FEE_BASES,
   CONTRACT_KIT_INVENTORY_MAX_LENGTH,
   CONTRACT_MILEAGE_UNITS,
@@ -30,7 +29,11 @@ export type ContractTermsRow = typeof contractTerms.$inferSelect;
  * The contract kinds that have terms: the person-facing deals. A CHECK cannot see
  * the contract's kind, so the service refuses the other kinds.
  */
-export const CONTRACT_TERMS_KINDS: readonly ContractKind[] = CONTRACT_KINDS;
+export const CONTRACT_TERMS_KINDS = [
+  'deal-memo',
+  'crew-contract',
+  'cast-contract',
+] as const satisfies readonly ContractKind[];
 
 /**
  * The agreed amounts of a set of terms. They are sensitive (`markSensitive` on the
