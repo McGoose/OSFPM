@@ -615,7 +615,7 @@ export async function updateContract(
   if (changesAmount) {
     await requireOnRecord(tx, ctx, scope, CONTRACTS_READ_VALUE_PERMISSION);
   }
-  if (changes.kind !== undefined && contractKindHasTerms(changes.kind)) {
+  if (changes.kind !== undefined && !contractKindHasTerms(changes.kind)) {
     await refuseKindChangeWithTerms(tx, scope, id);
   }
   const patch: UpdatePatch<typeof contract> = {
