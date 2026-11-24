@@ -3,7 +3,7 @@ import { sql } from 'drizzle-orm';
 import { drizzle as drizzlePg } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
 import { createDatabase, type Database, type SchemaDb } from './client.js';
-import { migrate } from './migrate.js';
+import { IN_USE_LOCK_KEY, migrate } from './migrate.js';
 import * as schema from './schema/index.js';
 import type { Tx } from './write.js';
 
@@ -16,10 +16,16 @@ import type { Tx } from './write.js';
 /** A database engine the tests run against: PGlite, or a PostgreSQL server. */
 export type TestTarget = {
   readonly name: 'pglite' | 'postgres';
-  /** Creates an empty, isolated database. Call `cleanup` when finished. */
+  /**
+   * Creates an empty, isolated database. Call `cleanup` when finished. `url` is the
+   * address of a PostgreSQL database, for a test that needs a second connection
+   * pool of its own (a second process, as far as the database can tell); a PGlite
+   * database has none.
+   */
   readonly create: () => Promise<{
     database: Database;
     cleanup: () => Promise<void>;
+    url?: string;
   }>;
 };
 
@@ -80,6 +86,7 @@ function postgresTarget(adminUrl: string): TestTarget {
       };
       return {
         database,
+        url: url.toString(),
         cleanup: async () => {
           beginTeardown();
           // Close every connection to the test database before dropping it.
@@ -136,6 +143,21 @@ export async function failureOf(action: () => PromiseLike<unknown>) {
     return { code: found.code, constraint: found.constraint };
   }
   throw new Error('Expected the statement to fail, but it succeeded');
+}
+
+/**
+ * How many sessions of the test database hold the in-use advisory lock
+ * (`IN_USE_LOCK_KEY`), shared or exclusive: the servers and the command that are
+ * running against it. PostgreSQL only. The API's tests call this, because they
+ * have no `sql` of their own.
+ */
+export async function inUseHolders(db: SchemaDb): Promise<number> {
+  const result = (await db.execute(
+    sql`select count(*)::int as held from pg_locks
+        where locktype = 'advisory'
+          and ((classid::bigint << 32) | objid::bigint) = ${IN_USE_LOCK_KEY}::bigint`,
+  )) as { rows: { held: number }[] };
+  return Number(result.rows[0]!.held);
 }
 
 /** SQLSTATE codes tests expect from `failureOf`. */
