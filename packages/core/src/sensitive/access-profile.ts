@@ -433,7 +433,6 @@ export async function deleteAccessProfile(
   const now = ctx.clock();
   // The user row first (CLAUDE.md, Data rules: lock order). The answer does not matter: a
   // deleted account may end what it shared.
-  await holdAccount(tx, userId);
   await guardedSensitive('user_access_profile', 'delete', () =>
     tx.transaction(async (inner) => {
       if (!(await deleteProfileRow(inner, userId))) {
