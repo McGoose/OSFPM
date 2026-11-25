@@ -1,4 +1,16 @@
-import { and, desc, eq, gt, isNull, lt, lte, ne, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  isNull,
+  lt,
+  lte,
+  ne,
+  or,
+  sql,
+} from 'drizzle-orm';
 import {
   SESSION_METHODS,
   SESSION_SCOPES,
@@ -452,6 +464,40 @@ export async function revokeUserSessions(
       return revoked.length;
     }),
   );
+}
+
+/**
+ * The ids of the users, in id order and each once, who have a session that is live at
+ * `now` (not revoked, not idle-expired, not past its absolute end), without the ones
+ * whose account is deleted: a deleted account cannot sign in, so its sessions work
+ * for no one (`validateSession`). For the admin command `revoke-sessions --all`
+ * (P-09a2, decision D-81), which then revokes each person in a transaction of their
+ * own (`revokeUserSessions`). A read, which takes no lock, so a session made after it
+ * ran is not on it. Checks no permission: only the command line calls it.
+ *
+ * @throws RecordWriteError when the database refuses a read; it carries the
+ * SQLSTATE only.
+ */
+export function listUsersWithLiveSessions(
+  tx: Tx,
+  now: Date,
+): Promise<string[]> {
+  return guardedAuth('session', 'select', async () => {
+    const rows = await tx
+      .selectDistinct({ id: session.userId })
+      .from(session)
+      .innerJoin(user, eq(user.id, session.userId))
+      .where(
+        and(
+          isNull(user.deletedAt),
+          isNull(session.revokedAt),
+          gt(session.idleExpiresAt, now),
+          gt(session.absoluteExpiresAt, now),
+        ),
+      )
+      .orderBy(asc(session.userId));
+    return rows.map((row) => row.id);
+  });
 }
 
 /**

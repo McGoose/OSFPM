@@ -1034,6 +1034,32 @@ export function revokeApiTokensOfUser(
 }
 
 /**
+ * The ids of the users, in id order and each once, who have a personal API token that
+ * still works at `now` (`liveAt`: not revoked, not past its end), in any organisation,
+ * without the ones whose account is deleted: a deleted account cannot sign in, so its
+ * tokens work for no one (`authenticateApiToken`). For the admin command
+ * `revoke-sessions --all --include-api-tokens` (P-09a2, decision D-81), which then
+ * revokes each person's tokens in a transaction of their own (`revokeApiTokensOfUser`).
+ * A read, which takes no lock. Checks no permission: only the command line calls it.
+ *
+ * @throws RecordWriteError when the database refuses a read; it carries the SQLSTATE only.
+ */
+export function listUsersWithLiveApiTokens(
+  tx: Tx,
+  now: Date,
+): Promise<string[]> {
+  return guardedAuth('api_token', 'select', async () => {
+    const rows = await tx
+      .selectDistinct({ id: apiToken.userId })
+      .from(apiToken)
+      .innerJoin(user, eq(user.id, apiToken.userId))
+      .where(and(isNull(user.deletedAt), liveAt(now)))
+      .orderBy(asc(apiToken.userId));
+    return rows.map((row) => row.id);
+  });
+}
+
+/**
  * The organisation's two switches for personal API tokens, as they are now: both off for an
  * organisation that has never set them. Needs `api:manage` in the organisation, which is
  * also what changes them (`setApiTokenSwitches`). The sensitive switch is the effective

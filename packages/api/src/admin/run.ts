@@ -8,6 +8,7 @@ import {
   type AdminRequest,
 } from './args.js';
 import { runDoctor } from './doctor.js';
+import { runEmergencyAccess } from './emergency-access.js';
 import { runInfo } from './info.js';
 import {
   NEW_IDENTITY_NEEDS_CONFIRMATION,
@@ -15,6 +16,8 @@ import {
   runNewIdentity,
   runRotateDataKey,
 } from './key-commands.js';
+import { runRevokeSessions } from './revoke-sessions.js';
+import { runCleanups } from './run-cleanups.js';
 import {
   describeFailure,
   openAdminSession,
@@ -39,7 +42,9 @@ export const EXIT = { done: 0, refused: 1, usage: 2 } as const;
 
 /**
  * The commands that need every server stopped, because they change what a running
- * server keeps in memory. The others only read.
+ * server keeps in memory. The others need no server stopped: two only read, and three
+ * (`emergency-access`, `revoke-sessions`, `run-cleanups`) only write rows that a
+ * running server writes too, under the same locks.
  */
 const OFFLINE_COMMANDS: ReadonlySet<AdminCommand> = new Set([
   'rotate-data-key',
@@ -47,7 +52,13 @@ const OFFLINE_COMMANDS: ReadonlySet<AdminCommand> = new Set([
   'new-identity',
 ]);
 
-/** How the command uses the database: it needs the server stopped, or it only reads. */
+/**
+ * How the command uses the database: it needs the server stopped, or it can run
+ * beside one. The second takes the role `read-only-command`, which takes no lock on
+ * PostgreSQL, even for the three commands that write rows (decision D-81): the role is
+ * about what a running server holds in memory, which none of them changes. On PGlite
+ * every role takes the lock file, because two processes never open one data directory.
+ */
 function roleOf(command: AdminCommand): InUseRole {
   return OFFLINE_COMMANDS.has(command)
     ? 'offline-command'
@@ -80,6 +91,12 @@ async function runGuarded(
         return await runAcceptDataKeyLoss(config, session, context);
       case 'new-identity':
         return await runNewIdentity(config, session, context);
+      case 'emergency-access':
+        return await runEmergencyAccess(request, config, session, context);
+      case 'revoke-sessions':
+        return await runRevokeSessions(request, session, context);
+      case 'run-cleanups':
+        return await runCleanups(session, context);
       default:
         // The parser only answers commands that have a case here.
         throw new Error('The command has no implementation');

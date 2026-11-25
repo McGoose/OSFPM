@@ -35,9 +35,11 @@ import { IN_USE_LOCK_KEY } from './migrate.js';
 /**
  * What a process does with the database. `server` serves requests and may run
  * beside other servers. `offline-command` changes what a running server holds in
- * memory, so no server may run beside it. `read-only-command` only reads, so on
- * PostgreSQL it runs beside servers (on PGlite it still needs the directory to
- * itself).
+ * memory, so no server may run beside it. `read-only-command` changes nothing a
+ * running server holds in memory: it only reads, or it only writes rows that a server
+ * writes too, under the same locks (the admin commands `emergency-access`,
+ * `revoke-sessions` and `run-cleanups`, P-09a2). So on PostgreSQL it runs beside
+ * servers (on PGlite it still needs the directory to itself).
  */
 export type InUseRole = 'server' | 'offline-command' | 'read-only-command';
 

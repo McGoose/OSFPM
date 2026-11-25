@@ -13,6 +13,7 @@ import {
   notSignedIn,
   tooManyRequests,
 } from '../invites/schemas.js';
+import { accessResetLink } from './link.js';
 
 const memberParams = z.object({
   organisationId: z.uuid().describe('The organisation.'),
@@ -127,7 +128,7 @@ export const memberResetRoutes: FastifyPluginAsyncZod = (app) => {
       // sees it; the page that opens the link reads it and sends it in a body.
       reply.header('cache-control', 'no-store');
       return reply.code(201).send({
-        link: `${app.publicOrigin}/reset#${made.token}`,
+        link: accessResetLink(app.publicOrigin, made.token),
         expiresAt: made.reset.expiresAt.toISOString(),
         removePasskeys: made.reset.removePasskeys,
       });

@@ -176,13 +176,22 @@ export async function requireMigrated(
 }
 
 /**
+ * What an error is called in a message the operator reads: the class name and the
+ * short system code or SQLSTATE, as in `RecordWriteError (42P01)`, and nothing else,
+ * because a driver's message can hold the connection's address, a user name or SQL
+ * (CLAUDE.md, Privacy rule), and `DATABASE_URL` holds a password.
+ */
+export function failureDetail(error: unknown): string {
+  const code = codeOf(error);
+  return `${errorClassName(error)}${code === undefined ? '' : ` (${code})`}`;
+}
+
+/**
  * What to tell the operator about a failure, on one line or a few. A refusal, an
  * in-use error, a key refusal and an invalid configuration carry fixed text written
  * for the operator (the configuration's names the variables and the rules, never a
  * value), and that is printed. Anything else is the error's class name and its short
- * system code and nothing else, because a driver's message can hold the
- * connection's address, a user name or SQL (CLAUDE.md, Privacy rule), and
- * `DATABASE_URL` holds a password.
+ * system code and nothing else (`failureDetail`).
  */
 export function describeFailure(error: unknown): string {
   if (
@@ -193,8 +202,7 @@ export function describeFailure(error: unknown): string {
   ) {
     return error.message;
   }
-  const code = codeOf(error);
-  const detail = `${errorClassName(error)}${code === undefined ? '' : ` (${code})`}`;
+  const detail = failureDetail(error);
   return isDatabaseUnreachable(error)
     ? `The database could not be reached: ${detail}.`
     : `The command failed: ${detail}.`;
