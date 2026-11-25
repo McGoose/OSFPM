@@ -186,6 +186,47 @@ describe('the admin command line on a PGlite data directory', () => {
     expect(run.code).toBe(0);
     expect(existsSync(lockFile())).toBe(false);
   }, 90_000);
+
+  it('refuses the three commands that write rows too while a server holds the directory, and runs them once it has stopped', async () => {
+    const config = serverConfig({ driver: 'pglite', dataDir });
+    const server = await startServer(config, {
+      signals: new EventEmitter(),
+      ...quiet,
+    });
+    try {
+      await server.ready;
+      for (const command of [
+        ['emergency-access', '--email', 'someone@example.test'],
+        ['revoke-sessions', '--all'],
+        ['run-cleanups'],
+      ]) {
+        const refused = await runCommand(command, { env: environment() });
+        expect(refused.code, command[0]).toBe(1);
+        expect(refused.stdout, command[0]).toBe('');
+        expect(refused.stderr, command[0]).toContain(`process ${process.pid}`);
+      }
+      // The refusals left the server's lock where it was.
+      expect(existsSync(lockFile())).toBe(true);
+    } finally {
+      await server.stop();
+    }
+
+    // Stopped, each opens the directory, runs and lets go of it again.
+    for (const command of [['run-cleanups'], ['revoke-sessions', '--all']]) {
+      const run = await runCommand(command, { env: environment() });
+      expect(run.code, command[0]).toBe(0);
+      expect(existsSync(lockFile()), command[0]).toBe(false);
+    }
+    // A started server has made the installation, and setup is not complete: this is
+    // refused for its own reason, not for the lock.
+    const emergency = await runCommand(
+      ['emergency-access', '--email', 'someone@example.test'],
+      { env: environment() },
+    );
+    expect(emergency.code).toBe(1);
+    expect(emergency.stderr).toContain('First-run setup is not complete');
+    expect(existsSync(lockFile())).toBe(false);
+  }, 90_000);
 });
 
 /** The PostgreSQL target, when `DATABASE_URL` names a server. */
@@ -241,6 +282,40 @@ describe.skipIf(postgres === undefined)(
         });
         expect(doctor.stdout).toContain('Audit: one admin.command-run event');
         // Only the server's lock: a read-only command takes none.
+        expect(await holders()).toBe(1);
+      } finally {
+        await server.stop();
+      }
+      expect(await holders()).toBe(0);
+    });
+
+    it('lets the three commands that write rows run beside a running server, and leave nothing held', async () => {
+      const server = await startServer(
+        serverConfig({ driver: 'postgres', url }),
+        { signals: new EventEmitter(), startupSteps: NO_WORK, ...quiet },
+      );
+      try {
+        await server.ready;
+        expect(await holders()).toBe(1);
+
+        const cleanups = await runCommand(['run-cleanups'], {
+          env: environment(),
+        });
+        const revoke = await runCommand(['revoke-sessions', '--all'], {
+          env: environment(),
+        });
+        // Setup was marked complete and there is no one to give access to: refused for
+        // that reason, which shows the lock did not stop it.
+        const emergency = await runCommand(
+          ['emergency-access', '--email', 'someone@example.test'],
+          { env: environment() },
+        );
+
+        expect(cleanups.code).toBe(0);
+        expect(revoke.code).toBe(0);
+        expect(emergency.code).toBe(1);
+        expect(emergency.stderr).toBe('No account matches.\n');
+        // Only the server's lock: none of the three takes one.
         expect(await holders()).toBe(1);
       } finally {
         await server.stop();

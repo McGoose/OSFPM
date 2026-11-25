@@ -272,11 +272,12 @@ describe.each(testTargets)('api_token table on $name', (target) => {
       }
     });
 
-    it('takes one of the four reasons, and no other', async () => {
+    it('takes one of the five reasons, and no other', async () => {
       for (const revokeReason of [
         'switch-off',
         'access-reset',
         'membership-ended',
+        'admin-action',
       ] as const) {
         const row = await made({ revokedAt: at(DAY), revokeReason });
         expect(row.revokeReason).toBe(revokeReason);
@@ -300,10 +301,11 @@ describe.each(testTargets)('api_token table on $name', (target) => {
       ).toEqual(check('api_token_revoke_reason_check'));
     });
 
-    // The three reasons the server itself acts for leave `revoked_by` empty: no
-    // person revoked the token (the switch audit, the reset use and the member
-    // removal say who and why). A manual revocation names the person.
-    it('names a revoker for a manual revocation, may leave it empty for the other three, and never names one on a live token', async () => {
+    // The four reasons the server itself acts for leave `revoked_by` empty: no
+    // person revoked the token (the switch audit, the reset use, the member
+    // removal and the admin command say who and why). A manual revocation names
+    // the person.
+    it('names a revoker for a manual revocation, may leave it empty for the other four, and never names one on a live token', async () => {
       expect(
         await failureOf(() =>
           db()
@@ -317,6 +319,7 @@ describe.each(testTargets)('api_token table on $name', (target) => {
         'switch-off',
         'access-reset',
         'membership-ended',
+        'admin-action',
       ] as const) {
         const withNobody = await made({ revokedAt: at(DAY), revokeReason });
         expect(withNobody.revokedBy).toBeNull();

@@ -8,6 +8,7 @@ import {
   testTargets,
 } from '../db/test-support.js';
 import type { Tx } from '../db/write.js';
+import { revokeSessionsOfPerson } from './admin-sessions.js';
 import { createApiToken, setApiTokenSwitches } from './api-tokens.js';
 import { AuthStateError } from './errors.js';
 import { revokePasskey } from './passkeys.js';
@@ -82,9 +83,11 @@ type Revocation = {
  * the one the test names. They need two real sessions, so they run on PostgreSQL and are
  * skipped on PGlite.
  *
- * The five services are every caller of `revokeUserSessions` and `revokePasskeySessions`
+ * The six services are every caller of `revokeUserSessions` and `revokePasskeySessions`
  * but the use of an admin reset link, which holds the row `FOR UPDATE` already and has its
- * own tests (`api-token-race.test.ts`).
+ * own tests (`api-token-race.test.ts`): the five that end a person’s sessions as part of
+ * what the person does, and the admin command `revoke-sessions` (P-09a2, decision D-81),
+ * which ends them for an operator, one person at a time.
  */
 describe.skipIf(postgres === undefined)(
   'ending a person’s sessions in bulk against making a personal API token, on PostgreSQL',
@@ -237,6 +240,22 @@ describe.skipIf(postgres === undefined)(
               passkeyCredentialId: passkeyId,
             }),
             run: (tx) => revokePasskey(tx, { userId, passkeyId, now: next() }),
+          };
+        },
+      },
+      {
+        name: 'the admin command revoke-sessions',
+        prepare: async () => {
+          const userId = await newMember();
+          return {
+            userId,
+            ends: await seedSession(database, userId),
+            run: (tx) =>
+              revokeSessionsOfPerson(
+                tx,
+                { kind: 'user', userId },
+                { includeApiTokens: false, now: next() },
+              ),
           };
         },
       },
