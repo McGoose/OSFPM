@@ -121,6 +121,12 @@ async function quietly(action: () => PromiseLike<unknown>): Promise<void> {
  * taken by start-up, in its retry loop, so a command that is running only makes the
  * server wait (see `runStartup`).
  *
+ * If the connection that holds the PostgreSQL lock ends or fails (the database
+ * restarted, or the session was ended), the lock is gone and an admin command could
+ * run beside this server, so it logs one fatal line, shuts down exactly as on SIGTERM
+ * and exits with code 1. The server therefore has to run under a supervisor with a
+ * restart policy; the restart loads the keys again and takes the lock again.
+ *
  * The signal listeners stay registered through shutdown. With none left, Node
  * restores the default action, and a second Ctrl+C, or a supervisor sending
  * SIGTERM again, would end the process before the database is closed. A
@@ -139,14 +145,28 @@ export async function startServer(
   const exit = options.exit ?? ((code: number) => process.exit(code));
   const timeoutMs = options.shutdownTimeoutMs ?? SHUTDOWN_TIMEOUT_MS;
 
+  // Set by a stop signal, or by the loss of the in-use lock: whichever comes first
+  // decides the exit code, and the other is ignored.
+  let shuttingDown = false;
   // The PGlite lock file is taken here, before the directory is opened. The
   // PostgreSQL lock is taken by start-up, in its retry loop, once the server is listening.
   const inUse = markDatabaseInUse(config.database, 'server', {
-    // The app exists by the time the lock is held, which is when this can run.
-    onLost: () =>
-      app.log.warn(
-        'the connection that marks the database as in use was lost: an admin command could run beside this server until it restarts',
-      ),
+    // Runs only while the lock is held, so the app and `shutDown` exist by then. The
+    // lock is gone with the connection, and an admin command that needs every server
+    // stopped would no longer find this one, so the server stops as on SIGTERM and
+    // exits non-zero: a supervisor restarts it, and a restart loads the keys again.
+    onLost: (error) => {
+      // A stop that a caller asked for has let go of the lock itself, or is about to.
+      if (shuttingDown || stopping !== undefined) return;
+      shuttingDown = true;
+      // The class name only (see `loggerOptions`): the driver's message can hold the
+      // address of the database.
+      app.log.fatal(
+        { err: error },
+        'the connection that marks the database as in use was lost: the server stops and must be restarted',
+      );
+      shutDown(1);
+    },
   });
   let database: Database;
   try {
@@ -218,14 +238,8 @@ export async function startServer(
     })();
     return stopping;
   };
-  let signalled = false;
-  function onSignal() {
-    if (signalled) {
-      app.log.info('stop signal ignored: already shutting down');
-      return;
-    }
-    signalled = true;
-    app.log.info('stop signal received, shutting down');
+  /** Stops the server and exits with `code`; with 1 instead if shutdown fails or takes too long. */
+  function shutDown(code: 0 | 1) {
     const limit = setTimeout(() => {
       app.log.fatal('shutdown took too long, exiting');
       exit(1);
@@ -235,7 +249,7 @@ export async function startServer(
     stop().then(
       () => {
         clearTimeout(limit);
-        exit(0);
+        exit(code);
       },
       (error: unknown) => {
         clearTimeout(limit);
@@ -243,6 +257,15 @@ export async function startServer(
         exit(1);
       },
     );
+  }
+  function onSignal() {
+    if (shuttingDown) {
+      app.log.info('stop signal ignored: already shutting down');
+      return;
+    }
+    shuttingDown = true;
+    app.log.info('stop signal received, shutting down');
+    shutDown(0);
   }
   for (const signal of SIGNALS) signals.on(signal, onSignal);
 

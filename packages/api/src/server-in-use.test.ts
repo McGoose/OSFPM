@@ -18,6 +18,7 @@ import {
 } from '@osfpm/core/src/db/in-use.js';
 import {
   createMigratedDatabase,
+  endInUseHolders,
   inUseHolders,
   testTargets,
 } from '@osfpm/core/src/db/test-support.js';
@@ -157,12 +158,14 @@ describe.skipIf(postgres === undefined)('a server on PostgreSQL', () => {
   let url: string;
   let cleanup: () => Promise<void>;
   let holders: () => Promise<number>;
+  let endHolders: () => Promise<number>;
 
   beforeEach(async () => {
     const created = await createMigratedDatabase(postgres!);
     url = created.url!;
     cleanup = created.cleanup;
     holders = () => inUseHolders(created.database.db);
+    endHolders = () => endInUseHolders(created.database.db);
   });
   afterEach(async () => {
     await cleanup();
@@ -251,5 +254,110 @@ describe.skipIf(postgres === undefined)('a server on PostgreSQL', () => {
     } finally {
       await server.stop();
     }
+  });
+
+  describe('when the connection that holds the lock is lost', () => {
+    const records = (lines: string[]) =>
+      lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+
+    it('logs one fatal line, shuts down as on SIGTERM and exits 1, so a supervisor restarts it', async () => {
+      const lines: string[] = [];
+      const exit = vi.fn<(code: number) => void>();
+      const server = await startServer(
+        { ...config(), logLevel: 'info' },
+        {
+          signals: new EventEmitter(),
+          startupSteps: NO_WORK,
+          exit,
+          logStream: { write: (line: string) => void lines.push(line) },
+          ...quiet,
+        },
+      );
+      await server.ready;
+      const address = server.app.server.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      expect(await holders()).toBe(1);
+
+      // Another session ends the one that holds the lock, as a restart of the
+      // database would.
+      expect(await endHolders()).toBe(1);
+      await vi.waitFor(() => expect(exit).toHaveBeenCalled(), 5_000);
+      // Give a second shutdown time to show itself, if there were one.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+      const fatal = records(lines).filter((record) => record.level === 60);
+      expect(fatal).toHaveLength(1);
+      expect(fatal[0]).toMatchObject({
+        msg: expect.stringContaining(
+          'connection that marks the database as in use was lost',
+        ) as unknown,
+        err: { type: expect.any(String) as unknown },
+      });
+      // The class name only: not the driver's message, and nothing of the database.
+      expect(Object.keys(fatal[0]!.err as object)).toEqual(['type']);
+      const text = lines.join('');
+      expect(text).not.toContain(new URL(url).pathname.slice(1));
+      expect(text).not.toContain('postgres://');
+      expect(text).not.toContain('administrator command');
+      // It shut down as on SIGTERM: no longer listening, database closed, lock gone.
+      await expect(fetch(`http://127.0.0.1:${port}/nowhere`)).rejects.toThrow();
+      await expect(server.database.db.execute('select 1')).rejects.toThrow();
+      expect(await holders()).toBe(0);
+    });
+
+    it('does not count its own release as a loss: a stop signal exits 0 and logs no fatal line', async () => {
+      const lines: string[] = [];
+      const signals = new EventEmitter();
+      const exit = vi.fn<(code: number) => void>();
+      const server = await startServer(
+        { ...config(), logLevel: 'info' },
+        {
+          signals,
+          startupSteps: NO_WORK,
+          exit,
+          logStream: { write: (line: string) => void lines.push(line) },
+          ...quiet,
+        },
+      );
+      await server.ready;
+      expect(await holders()).toBe(1);
+
+      signals.emit('SIGTERM');
+      await vi.waitFor(() => expect(exit).toHaveBeenCalled(), 5_000);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      // The server let go of its own connection: that is not a loss.
+      expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+      expect(
+        records(lines).filter((record) => record.level === 60),
+      ).toHaveLength(0);
+      expect(await holders()).toBe(0);
+    });
+
+    it('does not exit when the server is stopped by a caller, which has no use for a restart', async () => {
+      const lines: string[] = [];
+      const exit = vi.fn<(code: number) => void>();
+      const server = await startServer(
+        { ...config(), logLevel: 'info' },
+        {
+          signals: new EventEmitter(),
+          startupSteps: NO_WORK,
+          exit,
+          logStream: { write: (line: string) => void lines.push(line) },
+          ...quiet,
+        },
+      );
+      await server.ready;
+
+      await server.stop();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      expect(exit).not.toHaveBeenCalled();
+      expect(
+        records(lines).filter((record) => record.level === 60),
+      ).toHaveLength(0);
+      expect(await holders()).toBe(0);
+    });
   });
 });
