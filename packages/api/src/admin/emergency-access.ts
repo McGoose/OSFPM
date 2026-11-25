@@ -103,7 +103,7 @@ export async function runEmergencyAccess(
   );
   if (!result.ok) throw new AdminRefusal(REFUSAL_TEXT[result.reason]);
   // Only now, with the link committed: a link on the screen is one that works.
-  context.stdout.write(
+  context.stderr.write(
     emergencyAccessBlock(
       accessResetLink(config.publicOrigin, result.token),
       result.reset.expiresAt,
