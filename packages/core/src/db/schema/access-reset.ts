@@ -37,6 +37,17 @@ export const ACCESS_RESET_LIVE_INDEX = 'access_reset_live_unique';
  * never the person (`access_reset_not_self_check`: people reset themselves with
  * their recovery codes). `remove_passkeys` says whether using the link also
  * revokes the person's passkeys, for the case where a device was lost or stolen.
+ *
+ * A link has one issuer: a person (`created_by`) or the system. The system issues
+ * an emergency access link, the one way back in for an organisation whose sole
+ * administrator has lost every way to sign in, from the admin command line
+ * (`emergency-access`; P-09a2, decision D-81). Such a link has no `created_by` and
+ * says `issued_by_system`, and the check `access_reset_issuer_check` makes the two
+ * agree. In the same way a revocation names a person (`revoked_by`) or the system
+ * (`revoked_by_system`, which the admin command sets when it supersedes an earlier
+ * link), exactly one: `access_reset_revoked_pair_check` and
+ * `access_reset_revoker_one_check`. Which rules apply to a link depends on who
+ * issued it (`auth/access-reset.ts`).
  * The rules for who may reset whom are checked by the service, when the link is
  * made and again when it is used (`auth/access-reset.ts`), not by this table. The
  * table does keep one live link per person per organisation
@@ -64,6 +75,8 @@ export const accessReset = securityTable(
     usedAt: timestamptz('used_at'),
     revokedAt: timestamptz('revoked_at'),
     revokedBy: uuid('revoked_by'),
+    issuedBySystem: boolean('issued_by_system').notNull().default(false),
+    revokedBySystem: boolean('revoked_by_system').notNull().default(false),
   },
   (t) => [
     // Named <table>_<target>_fk, as every security table's key to its user is.
@@ -102,9 +115,23 @@ export const accessReset = securityTable(
     uniqueIndex(ACCESS_RESET_LIVE_INDEX)
       .on(t.organisationId, t.userId)
       .where(sql`${t.usedAt} is null and ${t.revokedAt} is null`),
+    // A link is revoked when, and only when, someone is named as the revoker: a
+    // person (`revoked_by`) or the system (`revoked_by_system`). A link that is not
+    // revoked names nobody.
     check(
       'access_reset_revoked_pair_check',
-      sql`(${t.revokedAt} is null) = (${t.revokedBy} is null)`,
+      sql`(${t.revokedAt} is null) = (${t.revokedBy} is null and not ${t.revokedBySystem})`,
+    ),
+    // ...and never both: with the check above, a revoked link has exactly one revoker.
+    check(
+      'access_reset_revoker_one_check',
+      sql`${t.revokedBy} is null or not ${t.revokedBySystem}`,
+    ),
+    // The issuer is a person or the system, never both and never neither: the
+    // system issued the link exactly when there is no creator.
+    check(
+      'access_reset_issuer_check',
+      sql`${t.issuedBySystem} = (${t.createdBy} is null)`,
     ),
     check(
       'access_reset_not_used_and_revoked_check',
@@ -112,7 +139,8 @@ export const accessReset = securityTable(
     ),
     check('access_reset_expiry_check', sql`${t.expiresAt} > ${t.createdAt}`),
     // People reset themselves with their recovery codes (SC-10). A NULL
-    // `created_by` passes, as for every other table; the service always sets it.
+    // `created_by` passes, which is how a link the system issued gets through; the
+    // issuer check above is what stops a person's link from having none.
     check('access_reset_not_self_check', sql`${t.userId} <> ${t.createdBy}`),
   ],
   {
