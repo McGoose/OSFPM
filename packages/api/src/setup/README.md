@@ -20,7 +20,7 @@ First-run setup over HTTP (spec card SC-10, decision D-56, Q1): how a fresh inst
 
 **Rules you must not break**
 
-- The setup code is the only secret OSFPM prints. It goes to standard error, outside the logger. The code, a password and a session token are never logged, never in an error body or an audit event, and never in a change event; the token goes only into the cookie.
+- The setup code is one of the two secrets OSFPM prints (the other is the emergency access link of the admin command line). It goes to standard error, outside the logger. The code, a password and a session token are never logged, never in an error body or an audit event, and never in a change event; the token goes only into the cookie.
 - A new route that must answer before setup says `config.availableBeforeSetup: true`. A route that says nothing is closed until setup is complete.
 - Every setup route is `auth: 'none'` with `authRateLimit` and `requireOrigin`, and is a 404 once setup is complete (`closedAfterSetup`).
 

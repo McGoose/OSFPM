@@ -268,8 +268,9 @@ export type StartupControl = {
  *
  * **The setup code is printed here, once, to standard error** (`control.stderr`),
  * in a marked block (`setupCodeBlock`), and only after the transaction that saved
- * it has committed. It never goes through the logger: it is the only secret
- * OSFPM prints, so it is written by hand to the one place a person reads it, and
+ * it has committed. It never goes through the logger: it is one of the two
+ * secrets OSFPM prints (the other is the emergency access link of the admin command
+ * line), so it is written by hand to the one place a person reads it, and
  * the logger's masking is left as it is. A restart prints a new code and revokes
  * the old one; once setup is complete nothing is printed. If an attempt fails
  * and is tried again, only the attempt that succeeded prints.
