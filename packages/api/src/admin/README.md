@@ -27,6 +27,6 @@ It reads the same environment as the server (`DATABASE_URL` or `OSFPM_DATA_DIR`,
 - A message never repeats what the operator typed (an address, an id, a number): usage errors and refusals are fixed sentences.
 - Standard output is the report; standard error is everything else (errors, warnings, refusals, the usage after a mistake) and the one link.
 - With PGlite the server must be stopped for every command, read-only ones too: two processes never open one data directory.
-- `revoke-sessions` writes more than one audit event (the sessions' own, one for each person, and one `admin.command-run` with the totals). A command that changes a person takes the person's user row `FOR UPDATE` first, in the core, and never holds two.
+- `revoke-sessions` writes more than one audit event (for each person the sessions' own and, with the flag, one for their tokens, each only when it ended something, and one `admin.command-run` with the totals). A command that changes a person takes the person's user row `FOR UPDATE` first, in the core, and never holds two.
 
 **Tests:** `pnpm test packages/api/src/admin` (PGlite always, and PostgreSQL too when `DATABASE_URL` is set). `test-support.ts` has the helpers: `runCommand` runs the command line in-process over a test database, and `partialMigrations` makes a database with migrations pending.

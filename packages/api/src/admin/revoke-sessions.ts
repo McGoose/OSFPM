@@ -48,9 +48,10 @@ function endedText(
 /**
  * Runs `revoke-sessions`: ends what is live for the person named, or for everyone with
  * `--all`, prints one line for each person, with their user id and the counts, and a
- * total, and writes one `admin.command-run` event with the totals (the sessions' own
- * events, one for each person with a session to end, are the core's: the command
- * writes more than one event). Exit code 0.
+ * total, and writes one `admin.command-run` event with the totals (the events for each
+ * person, `auth.sessions-revoked` for sessions and `auth.api-tokens-revoked` for
+ * tokens, each only when it ended something, are the core's: the command writes more
+ * than one event). Exit code 0.
  *
  * For one person it always prints their line, even when they had nothing live; for
  * `--all` it prints only the people who had something. A person who is deleted while

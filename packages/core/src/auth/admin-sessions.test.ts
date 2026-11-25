@@ -260,6 +260,115 @@ describe.each(testTargets)(
         expect((await tokenRow(bystander.liveToken)).revokedAt).toBeNull();
       });
 
+      it('writes one event for the tokens it ended, as it does for the sessions: from the system, about the person, with the reason and the count, and nothing that names a token', async () => {
+        const target = await withAccess();
+        // Three live tokens against two live sessions, so the count in the event can
+        // only be the tokens'.
+        const more = [
+          await seedApiToken(database, scene.organisationId, target.userId),
+          await seedApiToken(database, scene.organisationId, target.userId),
+        ];
+        const before = (await audits(AUTH_AUDIT.apiTokensRevoked)).length;
+        const now = next();
+
+        await revokeSessionsOfPerson(db(), byId(target.userId), {
+          includeApiTokens: true,
+          now,
+        });
+
+        const events = (await audits(AUTH_AUDIT.apiTokensRevoked)).slice(
+          before,
+        );
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({
+          action: 'revoke-all',
+          actorType: 'system',
+          actorId: null,
+          targetType: 'user',
+          targetId: target.userId,
+          organisationId: null,
+          occurredAt: now,
+        });
+        // Exactly the reason and the count.
+        expect(events[0]!.details).toEqual({
+          reason: 'admin-action',
+          count: 3,
+        });
+        const text = JSON.stringify(events);
+        for (const id of [target.liveToken, ...more.map((row) => row.id)]) {
+          const row = await tokenRow(id);
+          expect(text).not.toContain(row.id);
+          expect(text).not.toContain(row.prefix);
+          expect(text).not.toContain(row.tokenHash);
+        }
+      });
+
+      it('writes the tokens event for a person who holds only a token, and no sessions event for them', async () => {
+        const tokenOnly = await person();
+        await seedApiToken(database, scene.organisationId, tokenOnly);
+        const tokenEvents = (await audits(AUTH_AUDIT.apiTokensRevoked)).length;
+        const sessionEvents = (await audits(AUTH_AUDIT.sessionsRevoked)).length;
+
+        const result = await revokeSessionsOfPerson(db(), byId(tokenOnly), {
+          includeApiTokens: true,
+          now: next(),
+        });
+
+        expect(result).toEqual({ userId: tokenOnly, sessions: 0, tokens: 1 });
+        const events = (await audits(AUTH_AUDIT.apiTokensRevoked)).slice(
+          tokenEvents,
+        );
+        expect(events.map((event) => event.targetId)).toEqual([tokenOnly]);
+        expect(events[0]!.details).toEqual({
+          reason: 'admin-action',
+          count: 1,
+        });
+        expect(await audits(AUTH_AUDIT.sessionsRevoked)).toHaveLength(
+          sessionEvents,
+        );
+      });
+
+      it('writes no tokens event when it was not asked to end the tokens, though the person has a live one', async () => {
+        const target = await withAccess();
+        const before = (await audits(AUTH_AUDIT.apiTokensRevoked)).length;
+
+        await revokeSessionsOfPerson(db(), byId(target.userId), {
+          includeApiTokens: false,
+          now: next(),
+        });
+
+        expect(await audits(AUTH_AUDIT.apiTokensRevoked)).toHaveLength(before);
+        expect((await tokenRow(target.liveToken)).revokedAt).toBeNull();
+      });
+
+      it('writes no tokens event for a person whose tokens had all ended already, and still writes the sessions’ own', async () => {
+        const target = await person();
+        await seedSession(database, target);
+        await seedApiToken(database, scene.organisationId, target, {
+          expiresAt: new Date('2026-02-01T00:00:00.000Z'),
+        });
+        await seedApiToken(database, scene.organisationId, target, {
+          revokedAt: at(MINUTE),
+          revokeReason: 'manual',
+          revokedBy: target,
+        });
+        const tokenEvents = (await audits(AUTH_AUDIT.apiTokensRevoked)).length;
+        const sessionEvents = (await audits(AUTH_AUDIT.sessionsRevoked)).length;
+
+        const result = await revokeSessionsOfPerson(db(), byId(target), {
+          includeApiTokens: true,
+          now: next(),
+        });
+
+        expect(result).toEqual({ userId: target, sessions: 1, tokens: 0 });
+        expect(await audits(AUTH_AUDIT.apiTokensRevoked)).toHaveLength(
+          tokenEvents,
+        );
+        expect(await audits(AUTH_AUDIT.sessionsRevoked)).toHaveLength(
+          sessionEvents + 1,
+        );
+      });
+
       it('answers null for an address no one has, an id no one has, text that is no id and a deleted account, and writes nothing', async () => {
         const deleted = await withAccess();
         await markUserDeleted(database, deleted.userId, at(HOUR));

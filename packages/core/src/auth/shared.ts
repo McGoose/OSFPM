@@ -123,6 +123,14 @@ export const AUTH_AUDIT = {
   accessResetUseRefused: 'auth.access-reset-use-refused',
   apiTokenCreated: 'auth.api-token-created',
   apiTokenRevoked: 'auth.api-token-revoked',
+  /**
+   * Every live personal API token of one person was ended at once, as `sessionsRevoked`
+   * says it for sessions. Written by the admin command `revoke-sessions
+   * --include-api-tokens`, for each person whose tokens it ended and only then (P-09a2,
+   * decision D-81). Holds the reason and the count, and never a token, the id of a token,
+   * a hash or an address.
+   */
+  apiTokensRevoked: 'auth.api-tokens-revoked',
   /** One of the organisation's two switches for personal API tokens was turned on or off. */
   apiTokenSwitchChanged: 'auth.api-token-switch-changed',
   /** A request carried a token that does not work. Never holds any part of the token. */

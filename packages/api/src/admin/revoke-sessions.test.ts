@@ -179,6 +179,7 @@ describe.each(testTargets)('the revoke-sessions command on $name', (target) => {
 
   it('leaves personal API tokens alone unless asked, and ends them with --include-api-tokens: the reason admin-action, no one named', async () => {
     const who = await person(2, 2);
+    const tokenEvents = (await audits(AUTH_AUDIT.apiTokensRevoked)).length;
     const withoutFlag = await run('revoke-sessions', '--user', who.userId);
     expect(withoutFlag.stdout).toContain(`${sessions(2)} revoked`);
     for (const found of await tokenRows()) {
@@ -186,6 +187,8 @@ describe.each(testTargets)('the revoke-sessions command on $name', (target) => {
         expect(found.revokedAt).toBeNull();
       }
     }
+    // Nothing is said about tokens that were left alone.
+    expect(await audits(AUTH_AUDIT.apiTokensRevoked)).toHaveLength(tokenEvents);
 
     // The sessions are gone already: only the tokens are left to end.
     const withFlag = await run(
@@ -208,6 +211,18 @@ describe.each(testTargets)('the revoke-sessions command on $name', (target) => {
         });
       }
     }
+    // One event for the tokens of this person, as the sessions have one: from the
+    // system, with the reason and the count.
+    const ended = await eventsSince(AUTH_AUDIT.apiTokensRevoked, tokenEvents);
+    expect(ended).toHaveLength(1);
+    expect(ended[0]).toMatchObject({
+      action: 'revoke-all',
+      actorType: 'system',
+      actorId: null,
+      targetType: 'user',
+      targetId: who.userId,
+      details: { reason: 'admin-action', count: 2 },
+    });
     const [written] = (await audits(AUTH_AUDIT.adminCommandRun)).slice(-1);
     expect(written!.details).toMatchObject({
       sessionsRevoked: 0,
@@ -371,6 +386,20 @@ describe.each(testTargets)('the revoke-sessions command on $name', (target) => {
             revokedBy: null,
           });
         }
+        // One tokens event for each person whose tokens it ended, with the count, and
+        // none for the person who had only sessions.
+        const ended = new Map(
+          (await here.database.db.select().from(auditEvent))
+            .filter((event) => event.category === AUTH_AUDIT.apiTokensRevoked)
+            .map((event) => [event.targetId, event.details]),
+        );
+        expect(ended.size).toBe(2);
+        expect(ended.get(both)).toEqual({ reason: 'admin-action', count: 2 });
+        expect(ended.get(tokenOnly)).toEqual({
+          reason: 'admin-action',
+          count: 1,
+        });
+        expect(ended.has(sessionOnly)).toBe(false);
       } finally {
         await here.cleanup();
       }

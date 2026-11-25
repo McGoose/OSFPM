@@ -87,6 +87,7 @@ import {
   readInstallationFacts,
   recordAdminCommandRun,
 } from './admin-report.js';
+import { revokeSessionsOfPerson } from './admin-sessions.js';
 import { AUTH_AUDIT } from './shared.js';
 import {
   acceptDataKeyLoss,
@@ -103,6 +104,8 @@ import {
   passwordHashWith,
   rowsOf,
   seedActiveUser,
+  seedApiToken,
+  seedMembership,
   seedPassword,
   seedSession,
   seedTotp,
@@ -220,6 +223,7 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
   let thirdResetId: string;
   let apiTokenId: string;
   let apiTokenPrefix: string;
+  let tokenHolderId: string;
 
   beforeAll(async () => {
     userId = await seedActiveUser(database);
@@ -701,6 +705,25 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
     // Addresses are stored on the user and the invite on purpose; only the audit
     // trail must not hold them.
     addresses.push(INVITED_EMAIL, 'someone.else@demopictures.example');
+
+    // The admin command `revoke-sessions --include-api-tokens` ends the live tokens
+    // of a person and writes one event for them (P-09a2, decision D-81). This person
+    // holds two tokens and no session, so the sessions' own event is not written.
+    tokenHolderId = await seedActiveUser(database);
+    await seedMembership(
+      database,
+      setupOrganisationId,
+      tokenHolderId,
+      'member',
+      [],
+    );
+    await seedApiToken(database, setupOrganisationId, tokenHolderId);
+    await seedApiToken(database, setupOrganisationId, tokenHolderId);
+    await revokeSessionsOfPerson(
+      db(),
+      { kind: 'user', userId: tokenHolderId },
+      { includeApiTokens: true, now: at(29 * MINUTE) },
+    );
 
     // The admin command line: a command that reached the database and changed
     // nothing writes this one event, after the facts it reports were read.
@@ -1278,6 +1301,27 @@ describe.each(testTargets)('auth audit events on $name', (target) => {
     );
     expect(text).not.toContain(API_TOKEN_NAME);
     expect(text).not.toContain('Call sheet export');
+  });
+
+  it('records the personal API tokens that an admin command ended as one event for the person, from the system, with the reason and the count and nothing that names a token', async () => {
+    const ended = await byCategory(AUTH_AUDIT.apiTokensRevoked);
+    expect(ended).toHaveLength(1);
+    expect(ended[0]).toMatchObject({
+      action: 'revoke-all',
+      actorType: 'system',
+      actorId: null,
+      targetType: 'user',
+      targetId: tokenHolderId,
+      organisationId: null,
+    });
+    expect(ended[0]!.occurredAt).toEqual(at(29 * MINUTE));
+    expect(ended[0]!.details).toEqual({ reason: 'admin-action', count: 2 });
+    // They held no session, so the sessions' own event was not written for them.
+    expect(
+      (await byCategory(AUTH_AUDIT.sessionsRevoked)).filter(
+        (event) => event.targetId === tokenHolderId,
+      ),
+    ).toEqual([]);
   });
 
   it('records each passkey registration started and finished, for its user, with the passkey as the target of the second', async () => {

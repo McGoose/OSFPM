@@ -6,15 +6,22 @@ import {
 } from './api-tokens.js';
 import { AuthStateError } from './errors.js';
 import { listUsersWithLiveSessions, revokeUserSessions } from './sessions.js';
-import { guardedAuth, lockUser } from './shared.js';
+import {
+  AUTH_AUDIT,
+  guardedAuth,
+  lockUser,
+  recordAuthAudit,
+} from './shared.js';
 
 /**
  * What the admin command `revoke-sessions` asks of the core (P-09a2, decision D-81):
  * end every live session of one person, or of everyone, from the command line, for
  * an operator who has shell access to the server (decision D-64) and no signed-in
- * person to act as. The events are the ones the sessions' own service writes
- * (`auth.sessions-revoked`, from the system, with the reason `admin-action`); the
- * command adds one `admin.command-run` with the totals.
+ * person to act as. Each person gets up to two events, both from the system, with the
+ * reason `admin-action` and a count: `auth.sessions-revoked`, which the sessions' own
+ * service writes, and `auth.api-tokens-revoked`, which this one writes for the tokens;
+ * each only when it ended something. The command adds one `admin.command-run` with
+ * the totals.
  *
  * It only ends access. It never signs anyone in, changes a password or a passkey, or
  * touches the person's account.
@@ -54,8 +61,10 @@ export type SessionRevocation = {
  * so a token is never made from a session this call ended, and a token being made is
  * either revoked here or refused. The sessions are revoked by `revokeUserSessions`,
  * which writes one `auth.sessions-revoked` event, from the system, only when it ended
- * any; the tokens are revoked by `revokeApiTokensOfUser`, in id order, and counted
- * in the caller's event. Nothing is written for a person who has nothing live.
+ * any; the tokens are revoked by `revokeApiTokensOfUser`, in id order, which writes no
+ * event of its own, so this writes one `auth.api-tokens-revoked`, from the system,
+ * with the reason and the count and nothing that names a token, only when it ended
+ * any. Nothing is written for a person who has nothing live.
  *
  * Checks no permission: the caller is the operator's command line. Run it once for
  * each person, each in its own transaction: it never takes more than one user row,
@@ -87,6 +96,19 @@ export function revokeSessionsOfPerson(
     const tokens = options.includeApiTokens
       ? await revokeApiTokensOfUser(tx, found.id, 'admin-action', options.now)
       : 0;
+    if (tokens > 0) {
+      // Like the sessions' event, and for the same reason: a person's access ended,
+      // and the trail says whose, when and why, in the same transaction as the change.
+      await recordAuthAudit(tx, {
+        category: AUTH_AUDIT.apiTokensRevoked,
+        action: 'revoke-all',
+        actor: { type: 'system', id: null },
+        targetType: 'user',
+        targetId: found.id,
+        details: { reason: 'admin-action', count: tokens },
+        occurredAt: options.now,
+      });
+    }
     return { userId: found.id, sessions, tokens };
   });
 }

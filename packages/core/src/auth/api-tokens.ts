@@ -1003,8 +1003,9 @@ async function revokeLiveTokens(
  * Revokes every live token of one person, in any organisation, with the reason given, and
  * returns how many. For an admin reset link being used (`access-reset`, in
  * `useAccessReset`, in the same transaction and counted in its audit event), for the
- * admin command `revoke-sessions --include-api-tokens` (`admin-action`, counted in the
- * command's own event; P-09a2, decision D-81) and, when member management comes
+ * admin command `revoke-sessions --include-api-tokens` (`admin-action`, recorded by
+ * `revokeSessionsOfPerson` as one `auth.api-tokens-revoked` event; P-09a2, decision
+ * D-81) and, when member management comes
  * (P-04b), for a membership that ends (`membership-ended`). A person whose access was
  * reset, or who left, must not keep a script that still works. Writes no audit event of
  * its own, and checks no permission: the caller has decided, and records the count.
