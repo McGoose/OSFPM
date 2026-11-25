@@ -129,6 +129,7 @@ Read-only reference at tag `prototype-final`. Port only what a prompt names.
 - Test on PostgreSQL too: `DATABASE_URL=postgres://user:pass@host:5432/postgres pnpm test`; tests create and drop their own throwaway databases.
 - No local PostgreSQL? See "Run the tests with Docker" in `README.md`.
 - Start the API (development): `OSFPM_DATA_DIR=./data pnpm --filter @osfpm/api start` for PGlite, or `DATABASE_URL=postgres://user:pass@host:5432/dbname pnpm --filter @osfpm/api start` for PostgreSQL; settings are in `packages/api/README.md`
+- Admin command line: `pnpm --dir packages/api admin <command>` (`info`, `doctor`, `rotate-data-key`, `accept-data-key-loss`, `new-identity`); see "Admin command line" in `packages/api/README.md`. Use `--dir`, not `--filter`: `pnpm --filter` turns every failure into exit code 1.
 - Test the API only: `pnpm test packages/api` (it runs on PGlite, and on PostgreSQL too when `DATABASE_URL` is set)
 - Lint: `pnpm lint`
 - Format: `pnpm format` (check only: `pnpm format:check`)
