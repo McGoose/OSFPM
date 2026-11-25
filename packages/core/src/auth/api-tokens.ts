@@ -1002,11 +1002,15 @@ async function revokeLiveTokens(
 /**
  * Revokes every live token of one person, in any organisation, with the reason given, and
  * returns how many. For an admin reset link being used (`access-reset`, in
- * `useAccessReset`, in the same transaction and counted in its audit event) and, when
- * member management comes (P-04b), for a membership that ends (`membership-ended`). A
- * person whose access was reset, or who left, must not keep a script that still works.
- * Writes no audit event of its own, and checks no permission: the caller has decided, and
- * records the count. Never touches a token that is already revoked or past its end.
+ * `useAccessReset`, in the same transaction and counted in its audit event), for the
+ * admin command `revoke-sessions --include-api-tokens` (`admin-action`, counted in the
+ * command's own event; P-09a2, decision D-81) and, when member management comes
+ * (P-04b), for a membership that ends (`membership-ended`). A person whose access was
+ * reset, or who left, must not keep a script that still works. Writes no audit event of
+ * its own, and checks no permission: the caller has decided, and records the count.
+ * Never touches a token that is already revoked or past its end. The caller holds the
+ * person's user row `FOR UPDATE` (CLAUDE.md, Data rules), and the token rows are locked
+ * here in id order.
  *
  * TODO(P-04b): member removal calls this with `membership-ended`. Until then a token whose
  * owner's membership is not active simply fails (`authenticateApiToken`), which stops it
@@ -1018,7 +1022,10 @@ async function revokeLiveTokens(
 export function revokeApiTokensOfUser(
   tx: Tx,
   userId: string,
-  reason: Extract<ApiTokenRevokeReason, 'access-reset' | 'membership-ended'>,
+  reason: Extract<
+    ApiTokenRevokeReason,
+    'access-reset' | 'membership-ended' | 'admin-action'
+  >,
   now: Date,
 ): Promise<number> {
   return guardedAuth('api_token', 'update', () =>

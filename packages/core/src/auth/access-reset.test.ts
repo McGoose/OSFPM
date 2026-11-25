@@ -193,6 +193,7 @@ describe.each(testTargets)('admin reset links on $name', (target) => {
         userId: person,
         removePasskeys: false,
         createdBy: scene.ownerId,
+        issuedBySystem: false,
       });
       expect(
         made.reset.expiresAt.getTime() - made.reset.createdAt.getTime(),
@@ -205,6 +206,7 @@ describe.each(testTargets)('admin reset links on $name', (target) => {
           'createdBy',
           'expiresAt',
           'id',
+          'issuedBySystem',
           'organisationId',
           'removePasskeys',
           'userId',

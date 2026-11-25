@@ -8,9 +8,11 @@ import {
   ACCESS_RESET_LIVE_INDEX,
   accessReset,
   orgMembership,
+  orgMembershipRole,
   passkeyCredential,
   passwordCredential,
   recoveryCode,
+  role,
   totpCredential,
   user,
 } from '../db/schema/index.js';
@@ -27,6 +29,7 @@ import {
   UserNotActiveError,
   type AccessResetRefusalReason,
 } from './access-reset-errors.js';
+import { ADMINISTRATOR_ROLE_KEY } from './administrator-role.js';
 import { revokeApiTokensOfUser } from './api-tokens.js';
 import { AuthInputError, AuthStateError } from './errors.js';
 import { grantsOfMember, uncoveredPermissions } from './escalation.js';
@@ -41,6 +44,7 @@ import {
   lockUser,
   recordAuthAudit,
   serverId,
+  type AuthActor,
 } from './shared.js';
 import { generateToken, hashToken } from './tokens.js';
 
@@ -78,6 +82,24 @@ import { generateToken, hashToken } from './tokens.js';
  * 7. the person's membership of the organisation is active: not removed, and not
  *    still only an invitation. It is checked last, so that an account that is
  *    disabled, or a membership elsewhere, is the answer first.
+ *
+ * Links the system issues (P-09a2, decision D-81). The admin command line has no
+ * signed-in person to act as, and an organisation whose sole administrator has lost
+ * every way to sign in has no one to ask, so `createSystemAccessReset` makes a link
+ * with no creator (`issued_by_system`). It goes through the same code as
+ * `createAccessReset`: the same locks in the same order, the same single live link
+ * per person, and the same use. What differs is the rule set (`checkSystemRules`),
+ * checked when the link is made, when it is inspected and again when it is used:
+ * the person's account is active (rule 6); the person's membership of the
+ * organisation is active (rule 7, and "not a member"); and the person is an owner of
+ * the organisation or holds its managed Administrator role through
+ * `org_membership_role` (`not-an-administrator`). Everyone else is helped by their
+ * own administrator, with a link of the first kind. Rules 1, 2, 4 and 5 do not apply,
+ * because there is no creator. Rule 3 does not apply either: shell access to the
+ * server is install-wide, so the organisations a person belongs to do not decide
+ * whether they may be helped. A person demoted between making the link and using it
+ * is refused at use like any bad link (the one answer), and the refusal is audited
+ * with its reason. Earlier links are superseded as the system (`revoked_by_system`).
  *
  * Lock order (CLAUDE.md, Data rules). None of the three takes a change counter, and
  * no writer that holds a counter ever waits for a link row. A use takes the link row
@@ -151,7 +173,10 @@ export type AccessResetView = {
   readonly removePasskeys: boolean;
   readonly expiresAt: Date;
   readonly createdAt: Date;
+  /** The person who made the link; null for a link the system issued. */
   readonly createdBy: string | null;
+  /** True for a link the system issued (the admin command `emergency-access`), which has no creator. */
+  readonly issuedBySystem: boolean;
 };
 
 /**
@@ -180,6 +205,7 @@ const viewColumns = {
   expiresAt: accessReset.expiresAt,
   createdAt: accessReset.createdAt,
   createdBy: accessReset.createdBy,
+  issuedBySystem: accessReset.issuedBySystem,
 };
 
 type CheckedCreate = {
@@ -246,7 +272,10 @@ function stateOf(
   return 'live';
 }
 
-/** The first rule for who may reset whom that does not hold, or none. */
+/**
+ * The first rule for who may reset whom that does not hold, or none. The last is
+ * only the system's (`checkSystemRules`): a person's link has no such rule.
+ */
 type RuleFailure =
   | { readonly rule: 'creator-not-allowed' }
   | { readonly rule: 'target-not-member' }
@@ -255,7 +284,24 @@ type RuleFailure =
   | { readonly rule: 'owner' }
   | { readonly rule: 'exceeds'; readonly permissions: readonly string[] }
   | { readonly rule: 'not-active' }
-  | { readonly rule: 'membership-not-active' };
+  | { readonly rule: 'membership-not-active' }
+  | { readonly rule: 'not-administrator' };
+
+/**
+ * Who makes a link, or revokes one: a signed-in person, or the system (the admin
+ * command line, decision D-64). The two differ in which rules apply, in whom the row
+ * and the audit event name, and in nothing else.
+ */
+type Issuer =
+  | { readonly kind: 'user'; readonly userId: string }
+  | { readonly kind: 'system' };
+
+/** The actor an audit event names for `who`. */
+function actorOf(who: Issuer): AuthActor {
+  return who.kind === 'user'
+    ? { type: 'user', id: who.userId }
+    : { type: 'system', id: null };
+}
 
 /**
  * Checks the rules for who may reset whom (see the header), in order, and answers
@@ -365,6 +411,136 @@ async function checkRules(
 }
 
 /**
+ * Whether the membership holds the organisation's managed Administrator role: a live
+ * link to a live role that has the key `administrator`, is managed and belongs to no
+ * project. A role an organisation made itself never counts, whatever it holds: the
+ * tier of a membership grants nothing by itself (decision D-51), and an emergency
+ * link signs someone in as an administrator, so it is the one role the server keeps
+ * (`administrator-role.ts`) that decides.
+ */
+async function holdsAdministratorRole(
+  tx: Tx,
+  organisationId: string,
+  membershipId: string,
+): Promise<boolean> {
+  const [found] = await tx
+    .select({ id: orgMembershipRole.id })
+    .from(orgMembershipRole)
+    .innerJoin(
+      role,
+      and(
+        eq(role.organisationId, orgMembershipRole.organisationId),
+        eq(role.id, orgMembershipRole.roleId),
+      ),
+    )
+    .where(
+      and(
+        eq(orgMembershipRole.organisationId, organisationId),
+        eq(orgMembershipRole.membershipId, membershipId),
+        isNull(orgMembershipRole.deletedAt),
+        eq(role.key, ADMINISTRATOR_ROLE_KEY),
+        eq(role.managed, true),
+        isNull(role.projectId),
+        isNull(role.deletedAt),
+      ),
+    )
+    .limit(1);
+  return found !== undefined;
+}
+
+/**
+ * Checks the rules for a link the system issues (see the header), in order, and
+ * answers the first that does not hold, or `null`. There is no creator, so rules 1,
+ * 2, 4 and 5 have nothing to say; rule 3 (a membership in another organisation) is
+ * not asked either, because the command that issues these links is run with shell
+ * access, which is install-wide and has no organisation of its own (decision D-81).
+ * What is asked:
+ * 1. the person has a live membership of the organisation (`target-not-member`);
+ * 2. the person's account is active: not disabled, not only invited, not deleted
+ *    (`not-active`, today's rule 6);
+ * 3. the membership is active: not removed, not still an invitation
+ *    (`membership-not-active`, today's rule 7), checked after the account so that a
+ *    disabled account is the answer first, as for a person's link;
+ * 4. the person is an owner of the organisation, or holds its managed Administrator
+ *    role (`not-administrator`, decision D-81, E2).
+ * Reads without a lock; the callers hold the person's user row where it matters
+ * (`makeLink`, `runUse`). Checks no permission, which is the point: it is the rule set
+ * of a caller that has none.
+ */
+async function checkSystemRules(
+  tx: Tx,
+  organisationId: string,
+  personId: string,
+): Promise<RuleFailure | null> {
+  // A deleted row counts as no membership at all.
+  const [here] = await tx
+    .select({
+      id: orgMembership.id,
+      tier: orgMembership.orgRole,
+      status: orgMembership.status,
+    })
+    .from(orgMembership)
+    .where(
+      and(
+        eq(orgMembership.organisationId, organisationId),
+        eq(orgMembership.userId, personId),
+        isNull(orgMembership.deletedAt),
+      ),
+    )
+    .limit(1);
+  if (here === undefined) return { rule: 'target-not-member' };
+
+  const [person] = await tx
+    .select({ status: user.status, deletedAt: user.deletedAt })
+    .from(user)
+    .where(eq(user.id, personId))
+    .limit(1);
+  if (
+    person === undefined ||
+    person.deletedAt !== null ||
+    person.status !== 'active'
+  ) {
+    return { rule: 'not-active' };
+  }
+  if (here.status !== 'active') return { rule: 'membership-not-active' };
+
+  if (
+    here.tier !== 'owner' &&
+    !(await holdsAdministratorRole(tx, organisationId, here.id))
+  ) {
+    return { rule: 'not-administrator' };
+  }
+  return null;
+}
+
+/**
+ * Judges a link that exists by the rules of whoever issued it: the system's
+ * (`checkSystemRules`) or, for a person's link, the person's (`checkRules`, with the
+ * person who made it as the actor). What `inspectAccessReset` and the use of a link
+ * ask. Reads without a lock.
+ */
+function judgeLink(
+  tx: Tx,
+  link: {
+    readonly issuedBySystem: boolean;
+    readonly createdBy: string | null;
+    readonly organisationId: string;
+    readonly userId: string;
+  },
+): Promise<RuleFailure | null> {
+  if (link.issuedBySystem) {
+    return checkSystemRules(tx, link.organisationId, link.userId);
+  }
+  // A person's link names who made it (`access_reset_issuer_check`), so a row with
+  // no creator and no system flag cannot exist; were one made by hand, nobody could
+  // use it.
+  if (link.createdBy === null) {
+    return Promise.resolve({ rule: 'creator-not-allowed' });
+  }
+  return checkRules(tx, link.createdBy, link.organisationId, link.userId);
+}
+
+/**
  * The error a failed rule becomes when a link is made. A creator without the
  * permission and a person who is not a member of the organisation are the same
  * refusal, with no scope, as for an organisation named by id elsewhere: it never
@@ -372,8 +548,12 @@ async function checkRules(
  */
 function creationError(failure: RuleFailure): Error {
   switch (failure.rule) {
+    // `not-administrator` is only the system's rule, which never asks this function;
+    // were it asked, the refusal for a person that a caller cannot explain is the one
+    // for a person who is not theirs to help.
     case 'creator-not-allowed':
     case 'target-not-member':
+    case 'not-administrator':
       return new AccessDeniedError(MEMBERS_RESET_ACCESS_PERMISSION);
     case 'self':
       return new CannotResetSelfError();
@@ -409,6 +589,8 @@ function useRefusalReason(failure: RuleFailure): AccessResetRefusalReason {
       return 'target-not-active';
     case 'membership-not-active':
       return 'target-membership-not-active';
+    case 'not-administrator':
+      return 'not-an-administrator';
   }
 }
 
@@ -440,32 +622,36 @@ async function requireResetPermission(
 
 /**
  * Revokes the links `ids` of one person, which the caller holds locked, and audits
- * each as revoked with `reason`. Takes no lock of its own.
+ * each as revoked with `reason`. The revoker is `who`: a person (`revoked_by`) or
+ * the system (`revoked_by_system`), exactly one, as the table requires. Takes no
+ * lock of its own.
  */
 async function revokeLinks(
   tx: Tx,
-  actorId: string,
+  who: Issuer,
   organisationId: string,
   userId: string,
   ids: readonly string[],
   reason: 'manual' | 'superseded',
   now: Date,
 ): Promise<void> {
+  const person = who.kind === 'user' ? who.userId : null;
   for (const id of ids) {
     await tx
       .update(accessReset)
       .set({
         revokedAt: now,
-        revokedBy: actorId,
+        revokedBy: person,
+        revokedBySystem: who.kind === 'system',
         updatedAt: now,
-        updatedBy: actorId,
+        updatedBy: person,
         version: sql`${accessReset.version} + 1`,
       })
       .where(eq(accessReset.id, id));
     await recordAuthAudit(tx, {
       category: AUTH_AUDIT.accessResetRevoked,
       action: 'revoke',
-      actor: { type: 'user', id: actorId },
+      actor: actorOf(who),
       targetType: 'access_reset',
       targetId: id,
       organisationId,
@@ -484,11 +670,12 @@ async function revokeLinks(
  * LOCKED`, in id order, so this never waits for a link row: a use holds its link row
  * while it waits for the person's row, so waiting here would be a deadlock (see the
  * lock order in the header). A link another transaction holds is left to it, and the
- * unique index decides what happens to the link made next.
+ * unique index decides what happens to the link made next. `who` is the revoker, as
+ * in `revokeLinks`: the person making the next link, or the system.
  */
 async function supersedeEarlierLinks(
   tx: Tx,
-  actorId: string,
+  who: Issuer,
   organisationId: string,
   userId: string,
   now: Date,
@@ -508,7 +695,7 @@ async function supersedeEarlierLinks(
     .for('update', { skipLocked: true });
   await revokeLinks(
     tx,
-    actorId,
+    who,
     organisationId,
     userId,
     earlier.map((found) => found.id),
@@ -570,87 +757,119 @@ export async function createAccessReset(
 ): Promise<{ reset: AccessResetView; token: string }> {
   const checked = checkedCreate(input);
   return guardedAuth('access_reset', 'insert', () =>
-    // A savepoint: a failure leaves no link, no revocation and no event.
-    tx.transaction(async (inner) => {
-      // An id that is not shaped like one is nobody's: the same denial.
-      if (
-        !UUID_SHAPE.test(actor.userId) ||
-        !UUID_SHAPE.test(organisationId) ||
-        !UUID_SHAPE.test(userId)
-      ) {
-        throw new AccessDeniedError(MEMBERS_RESET_ACCESS_PERMISSION);
-      }
-      // Without a lock first: a caller who may not make this link, or a person
-      // outside the organisation, is refused here and never takes anyone's row.
-      const early = await checkRules(
-        inner,
-        actor.userId,
+    makeLink(
+      tx,
+      { kind: 'user', userId: actor.userId },
+      organisationId,
+      userId,
+      checked,
+      now,
+      creationError,
+    ),
+  ).catch(busyWhenIndexRefuses(userId));
+}
+
+/**
+ * Makes a link, and the earlier link of the person superseded, for `issuer`: the code
+ * `createAccessReset` and `createSystemAccessReset` share, so that the lock order, the
+ * single live link per person and the audit event cannot drift apart. The rules that
+ * apply are the issuer's own (`checkRules`, with the person as the actor, or
+ * `checkSystemRules`). A rule that does not hold throws what `refusal` makes of it,
+ * inside the savepoint, so a refusal leaves no link, no revocation and no event: a
+ * person's caller gets the typed error of `creationError`, the system's gets a value
+ * it turns into a result. Everything else is as `createAccessReset` documents it.
+ */
+function makeLink(
+  tx: Tx,
+  issuer: Issuer,
+  organisationId: string,
+  userId: string,
+  checked: CheckedCreate,
+  now: Date,
+  refusal: (failure: RuleFailure) => Error,
+): Promise<{ reset: AccessResetView; token: string }> {
+  const judge = (handle: Tx) =>
+    issuer.kind === 'user'
+      ? checkRules(handle, issuer.userId, organisationId, userId)
+      : checkSystemRules(handle, organisationId, userId);
+  // A savepoint: a failure leaves no link, no revocation and no event.
+  return tx.transaction(async (inner) => {
+    // An id that is not shaped like one is nobody's: the same denial.
+    if (
+      (issuer.kind === 'user' && !UUID_SHAPE.test(issuer.userId)) ||
+      !UUID_SHAPE.test(organisationId) ||
+      !UUID_SHAPE.test(userId)
+    ) {
+      throw refusal({ rule: 'target-not-member' });
+    }
+    // Without a lock first: a caller who may not make this link, or a person
+    // outside the organisation, is refused here and never takes anyone's row.
+    const early = await judge(inner);
+    if (early !== null) throw refusal(early);
+
+    // The person's row, `FOR UPDATE` (CLAUDE.md, Data rules): the rules depend on
+    // rows that point at the person, and only this strength holds off the insert of
+    // one. Two creates for the same person queue here.
+    try {
+      await lockUser(inner, userId, { strength: 'update' });
+    } catch (error) {
+      // Deleted since the first look: a person who is not in use.
+      if (error instanceof AuthStateError)
+        throw refusal({ rule: 'not-active' });
+      throw error;
+    }
+    const failure = await judge(inner);
+    if (failure !== null) throw refusal(failure);
+
+    await supersedeEarlierLinks(inner, issuer, organisationId, userId, now);
+
+    const origin = await serverId(inner);
+    const token = generateToken();
+    const expiresAt = new Date(now.getTime() + checked.hours * HOUR_MS);
+    const creator = issuer.kind === 'user' ? issuer.userId : null;
+    const [row] = await inner
+      .insert(accessReset)
+      .values({
+        originServer: origin,
         organisationId,
         userId,
-      );
-      if (early !== null) throw creationError(early);
-
-      // The person's row, `FOR UPDATE` (CLAUDE.md, Data rules): the rules depend on
-      // rows that point at the person, and only this strength holds off the insert of
-      // one. Two creates for the same person queue here.
-      try {
-        await lockUser(inner, userId, { strength: 'update' });
-      } catch (error) {
-        // Deleted since the first look: a person who is not in use.
-        if (error instanceof AuthStateError) throw new UserNotActiveError();
-        throw error;
-      }
-      const failure = await checkRules(
-        inner,
-        actor.userId,
-        organisationId,
+        tokenHash: hashToken(token),
+        removePasskeys: checked.removePasskeys,
+        expiresAt,
+        createdAt: now,
+        updatedAt: now,
+        createdBy: creator,
+        updatedBy: creator,
+        issuedBySystem: issuer.kind === 'system',
+      })
+      .returning(viewColumns);
+    await recordAuthAudit(inner, {
+      category: AUTH_AUDIT.accessResetCreated,
+      action: 'create',
+      actor: actorOf(issuer),
+      targetType: 'access_reset',
+      targetId: row!.id,
+      organisationId,
+      details: {
         userId,
-      );
-      if (failure !== null) throw creationError(failure);
+        expiresAt: expiresAt.toISOString(),
+        removePasskeys: checked.removePasskeys,
+        // Said only for the system's links, so a person's link is audited as it always was.
+        ...(issuer.kind === 'system' ? { issuedBySystem: true } : {}),
+      },
+      occurredAt: now,
+    });
+    return { reset: row!, token };
+  });
+}
 
-      await supersedeEarlierLinks(
-        inner,
-        actor.userId,
-        organisationId,
-        userId,
-        now,
-      );
-
-      const origin = await serverId(inner);
-      const token = generateToken();
-      const expiresAt = new Date(now.getTime() + checked.hours * HOUR_MS);
-      const [row] = await inner
-        .insert(accessReset)
-        .values({
-          originServer: origin,
-          organisationId,
-          userId,
-          tokenHash: hashToken(token),
-          removePasskeys: checked.removePasskeys,
-          expiresAt,
-          createdAt: now,
-          updatedAt: now,
-          createdBy: actor.userId,
-          updatedBy: actor.userId,
-        })
-        .returning(viewColumns);
-      await recordAuthAudit(inner, {
-        category: AUTH_AUDIT.accessResetCreated,
-        action: 'create',
-        actor: { type: 'user', id: actor.userId },
-        targetType: 'access_reset',
-        targetId: row!.id,
-        organisationId,
-        details: {
-          userId,
-          expiresAt: expiresAt.toISOString(),
-          removePasskeys: checked.removePasskeys,
-        },
-        occurredAt: now,
-      });
-      return { reset: row!, token };
-    }),
-  ).catch((error: unknown) => {
+/**
+ * What a link made while another request holds the person's earlier one turns into:
+ * the unique index on live links refused the new link (see `createAccessReset`), so
+ * the error becomes a `ResetLinkBusyError`. Anything else is rethrown as it is.
+ */
+function busyWhenIndexRefuses(userId: string): (error: unknown) => never {
+  return (error) => {
     // The index refused the new link: another request holds the person's earlier one
     // (a use or a revoke that has not changed it yet), so it could not be replaced.
     if (
@@ -661,7 +880,128 @@ export async function createAccessReset(
       throw new ResetLinkBusyError(userId);
     }
     throw error;
-  });
+  };
+}
+
+/**
+ * Why `createSystemAccessReset` refused, in the words the audit trail uses for a link
+ * that is refused when it is used: the person is not a member of the organisation, the
+ * account is not active, the membership is not active, or the person is neither an
+ * owner nor an Administrator (decision D-81, E2).
+ */
+export type SystemResetRefusal = Extract<
+  AccessResetRefusalReason,
+  | 'target-not-member'
+  | 'target-not-active'
+  | 'target-membership-not-active'
+  | 'not-an-administrator'
+>;
+
+/**
+ * What `createSystemAccessReset` answers: the link and its token, which exists
+ * nowhere else, or the reason it was refused. A refusal is a returned value so that
+ * the caller's transaction commits and the audit event the caller writes for it
+ * survives (CLAUDE.md, Data rules).
+ */
+export type SystemAccessResetResult =
+  | {
+      readonly ok: true;
+      readonly reset: AccessResetView;
+      readonly token: string;
+    }
+  | { readonly ok: false; readonly reason: SystemResetRefusal };
+
+/** Carries a failed system rule out of the savepoint of `makeLink`; never leaves this file. */
+class SystemRefusal extends Error {
+  constructor(readonly failure: RuleFailure) {
+    super('The system may not issue this link');
+    this.name = 'SystemRefusal';
+  }
+}
+
+/**
+ * Makes a reset link for a person as the system, for the admin command
+ * `emergency-access` (P-09a2, decision D-81): the one way back in for an organisation
+ * whose sole administrator has lost every way to sign in. It checks no permission and
+ * has no creator (`issued_by_system`); the person must be an active user with an
+ * active membership of the organisation who is an owner of it or holds its managed
+ * Administrator role (`checkSystemRules`, in the header). It is the same code as
+ * `createAccessReset` from there on: the person's user row `FOR UPDATE`, the rules
+ * judged again under it, every earlier link of the person that was neither used nor
+ * revoked superseded (as the system: `revoked_by_system`, audited `superseded`), one
+ * link and one event, `auth.access-reset-created`, from the system and saying
+ * `issuedBySystem`. Using the link does exactly what using any reset link does, and
+ * judges the person by the same rules again.
+ *
+ * Only the admin command line calls it, with shell access to the server as the
+ * authority (decision D-64), so the caller must be that. The token is returned once
+ * and never logged or audited.
+ *
+ * A refusal is a returned value, and writes nothing: no link, no revocation of an
+ * earlier link, no event. `expiresInHours` and `removePasskeys` are as for
+ * `createAccessReset`.
+ *
+ * @throws AuthInputError `expiresInHours` or `removePasskeys` for a value that is
+ * not acceptable. It names the field and never the value.
+ * @throws AuthStateError `installation-missing` before the installation row exists.
+ * @throws ResetLinkBusyError, a `RecordStateError`, as `createAccessReset` does, when
+ * the unique index on live links refuses the new link because a use or a revoke holds
+ * the earlier one. Nothing is written, and making the link again works.
+ * @throws RecordWriteError when the database refuses a write in any other way; it
+ * carries the SQLSTATE and constraint name only, never the token, its hash or an
+ * address.
+ */
+export async function createSystemAccessReset(
+  tx: Tx,
+  organisationId: string,
+  userId: string,
+  input: CreateAccessResetInput,
+  now: Date,
+): Promise<SystemAccessResetResult> {
+  const checked = checkedCreate(input);
+  return guardedAuth(
+    'access_reset',
+    'insert',
+    async (): Promise<SystemAccessResetResult> => {
+      try {
+        const made = await makeLink(
+          tx,
+          { kind: 'system' },
+          organisationId,
+          userId,
+          checked,
+          now,
+          (failure) => new SystemRefusal(failure),
+        );
+        return { ok: true, ...made };
+      } catch (error) {
+        if (error instanceof SystemRefusal) {
+          const reason = useRefusalReason(error.failure);
+          if (isSystemResetRefusal(reason)) return { ok: false, reason };
+          // `checkSystemRules` answers no other rule: a person's rule reached here.
+          throw new Error(
+            'A rule that is not the system’s refused the system',
+            {
+              cause: error,
+            },
+          );
+        }
+        throw error;
+      }
+    },
+  ).catch(busyWhenIndexRefuses(userId));
+}
+
+/** True for the four reasons `createSystemAccessReset` gives. */
+function isSystemResetRefusal(
+  reason: AccessResetRefusalReason,
+): reason is SystemResetRefusal {
+  return (
+    reason === 'target-not-member' ||
+    reason === 'target-not-active' ||
+    reason === 'target-membership-not-active' ||
+    reason === 'not-an-administrator'
+  );
 }
 
 /**
@@ -717,7 +1057,7 @@ export function revokeAccessReset(
         throw new RecordNotFoundError('access_reset', userId);
       await revokeLinks(
         inner,
-        actor.userId,
+        { kind: 'user', userId: actor.userId },
         organisationId,
         userId,
         live.map((found) => found.id),
@@ -734,9 +1074,10 @@ export function revokeAccessReset(
  * holds the link could read them. Checks no permission: the token is the capability,
  * and a web page calls this to show the person that the link is good before they
  * use it. Writes nothing for a live token. It also checks the rules for who may
- * reset whom, as a use does, but without the locks a use takes, and refuses a link
- * a use would refuse, so a page does not show a link as good that then fails. It is
- * only a look: `useAccessReset` checks again under the locks.
+ * reset whom, as a use does (the system's rules for a link the system issued), but
+ * without the locks a use takes, and refuses a link a use would refuse, so a page
+ * does not show a link as good that then fails. It is only a look:
+ * `useAccessReset` checks again under the locks.
  *
  * Every failure is the same `AccessResetInvalidError`, whether the token is unknown,
  * expired, revoked or used, or a rule no longer holds, so a caller learns nothing
@@ -766,6 +1107,7 @@ export async function inspectAccessReset(
               organisationId: accessReset.organisationId,
               userId: accessReset.userId,
               createdBy: accessReset.createdBy,
+              issuedBySystem: accessReset.issuedBySystem,
               expiresAt: accessReset.expiresAt,
               usedAt: accessReset.usedAt,
               revokedAt: accessReset.revokedAt,
@@ -780,9 +1122,7 @@ export async function inspectAccessReset(
   if (state === 'live') {
     const link = found!;
     const failure = await guardedAuth('access_reset', 'select', () =>
-      link.createdBy === null
-        ? Promise.resolve<RuleFailure>({ rule: 'creator-not-allowed' })
-        : checkRules(tx, link.createdBy, link.organisationId, link.userId),
+      judgeLink(tx, link),
     );
     if (failure === null) return { expiresAt: link.expiresAt };
     reason = useRefusalReason(failure);
@@ -829,7 +1169,8 @@ class UseRolledBack extends Error {
  * The order is the rule of CLAUDE.md (Data rules), and nothing sits between the two
  * locks: the link row is locked and judged (`FOR UPDATE`, found by the hash of the
  * token), then the person's user row (`FOR UPDATE`, last), then the rules for who
- * may reset whom are checked again with the creator as the actor, and only then does
+ * may reset whom are checked again (with the creator as the actor, or by the
+ * system's rules for a link the system issued), and only then does
  * anything change: every session of the person is revoked, every live personal API
  * token of the person is revoked (reason `access-reset`, with the rows locked in id order
  * so it cannot deadlock with a switch being turned off), the password, the authenticator
@@ -857,6 +1198,7 @@ async function runUse(
       organisationId: accessReset.organisationId,
       userId: accessReset.userId,
       createdBy: accessReset.createdBy,
+      issuedBySystem: accessReset.issuedBySystem,
       removePasskeys: accessReset.removePasskeys,
       expiresAt: accessReset.expiresAt,
       usedAt: accessReset.usedAt,
@@ -887,13 +1229,9 @@ async function runUse(
     }
     throw error;
   }
-  if (found.createdBy === null) return refuse('creator-not-allowed', known);
-  const failure = await checkRules(
-    tx,
-    found.createdBy,
-    found.organisationId,
-    found.userId,
-  );
+  // By the rules of whoever issued the link: a person's (with the creator as the
+  // actor) or the system's. A link nobody issued is refused.
+  const failure = await judgeLink(tx, found);
   if (failure !== null) return refuse(useRefusalReason(failure), known);
 
   const sessionsRevoked = await revokeUserSessions(tx, found.userId, {
@@ -991,7 +1329,8 @@ async function runUse(
  * Uses a reset link, in one savepoint, so a failure at any step leaves nothing and
  * the link stays usable: locks the link and checks that it is live, locks the
  * person's user row, checks the rules for who may reset whom again (with the person
- * who made the link as the actor), revokes every session of the person, deletes
+ * who made the link as the actor, or by the system's rules for a link the system
+ * issued), revokes every session of the person, deletes
  * their password, their authenticator secret and every recovery code, revokes every
  * passkey when the link says so, and marks the link used. Checks no permission: the
  * token is the capability. The caller then makes the session, with method `reset`,
