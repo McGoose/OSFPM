@@ -30,11 +30,11 @@ function messageFor(reason: ServerKeysRefusal, path: string | undefined) {
     case 'invalid':
       return `The server key file ${path ?? ''} is not a valid key of the kind it should be. The server never replaces a key file it cannot read: restore the file from your backup of the key directory (OSFPM_KEYS_DIR).`;
     case 'identity-missing':
-      return 'The server identity key is missing from the key directory (OSFPM_KEYS_DIR), but this database already has one. The key directory does not belong to this database. Restore the matching keys from your backup; the server never makes a new identity for an existing database.';
+      return 'The server identity key is missing from the key directory (OSFPM_KEYS_DIR), but this database already has one. The key directory does not belong to this database. Restore the matching keys from your backup; the server never makes a new identity for an existing database. With no backup, see "Admin command line" in packages/api/README.md: its new-identity command makes a new identity, and the identity the server publishes changes.';
     case 'identity-mismatch':
       return 'The server identity key in the key directory (OSFPM_KEYS_DIR) does not belong to this database. Restore the matching keys from your backup; the server never replaces the identity key it has stored.';
     case 'data-keys-missing':
-      return 'The data keys are missing from the key directory (OSFPM_KEYS_DIR), but this database holds secrets encrypted with them. Restore the key directory (its data-keys folder) from your backup. Without those keys the authenticator-app codes of the people who set them up cannot be checked.';
+      return 'The data keys are missing from the key directory (OSFPM_KEYS_DIR), but this database holds secrets encrypted with them. Restore the key directory (its data-keys folder) from your backup. Without those keys the authenticator-app codes of the people who set them up cannot be checked. With no backup, see "Admin command line" in packages/api/README.md: its accept-data-key-loss command makes fresh data keys, and those people set up their authenticator app again.';
   }
 }
 
