@@ -111,9 +111,9 @@ function isFolder(dataDir: string): boolean {
  * no lock on PostgreSQL, so they run beside servers. On PGlite every role takes the
  * lock file, because two processes never open one data directory.
  *
- * Every command asks here (`run.ts`, and `doctor.ts` for itself); no command names a
- * role of its own. The switch has no default, so a command added to `ADMIN_COMMANDS`
- * does not compile until it is given a role here.
+ * `openAdminSession` asks here for the command it is given, so no caller chooses a
+ * role. The switch has no default, so a command added to `ADMIN_COMMANDS` does not
+ * compile until it is given a role here.
  */
 export function roleOf(command: AdminCommand): InUseRole {
   switch (command) {
@@ -132,14 +132,15 @@ export function roleOf(command: AdminCommand): InUseRole {
 }
 
 /**
- * Opens the database of `config` for a command and marks it as in use for `role`
- * (`markDatabaseInUse`): an `offline-command` takes the exclusive lock on PostgreSQL
- * and refuses at once if a server holds it; an `online-command` and a
- * `read-only-command` take none there; on PGlite every role takes the lock file,
- * because two processes must never open one data directory. The command line never
- * makes a database: a PGlite directory with no database in it is refused, so a
- * mistyped path does not make an empty one. It asks the database the time, which is
- * also the check that it answers.
+ * Opens the database of `config` for `command` and marks it as in use with that
+ * command's role (`roleOf`, `markDatabaseInUse`): an `offline-command` takes the
+ * exclusive lock on PostgreSQL and refuses at once if a server holds it; an
+ * `online-command` and a `read-only-command` take none there; on PGlite every role
+ * takes the lock file, because two processes must never open one data directory. It
+ * takes the command and not a role, so no caller can choose how it marks the database
+ * (decisions D-64 and D-81). The command line never makes a database: a PGlite
+ * directory with no database in it is refused, so a mistyped path does not make an
+ * empty one. It asks the database the time, which is also the check that it answers.
  *
  * @throws AdminRefusal when a PGlite directory holds no database.
  * @throws DatabaseInUseError when another process has the database.
@@ -149,7 +150,7 @@ export function roleOf(command: AdminCommand): InUseRole {
 export async function openAdminSession(
   config: Config,
   context: AdminContext,
-  role: InUseRole,
+  command: AdminCommand,
 ): Promise<AdminSession> {
   const target = config.database;
   if (
@@ -162,7 +163,7 @@ export async function openAdminSession(
       'No database was found in OSFPM_DATA_DIR. Start the server once to make it, then run the command again.',
     );
   }
-  const marker = markDatabaseInUse(target, role);
+  const marker = markDatabaseInUse(target, roleOf(command));
   const database = context.database ?? createDatabase(target);
   let closed = false;
   const close = async () => {

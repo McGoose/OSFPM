@@ -20,7 +20,6 @@ import {
   describeFailure,
   openAdminSession,
   requireMigrated,
-  roleOf,
   type AdminContext,
 } from './session.js';
 
@@ -45,11 +44,7 @@ async function runGuarded(
   context: AdminContext,
 ): Promise<number> {
   const config = loadConfig(context.env);
-  const session = await openAdminSession(
-    config,
-    context,
-    roleOf(request.command),
-  );
+  const session = await openAdminSession(config, context, request.command);
   try {
     const migrations = await requireMigrated(session.database);
     switch (request.command) {

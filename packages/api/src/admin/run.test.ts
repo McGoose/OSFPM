@@ -16,7 +16,10 @@ import {
   markSetupComplete,
   seedInstallation,
 } from '@osfpm/core/src/auth/test-support.js';
-import { PGLITE_LOCK_FILE } from '@osfpm/core/src/db/in-use.js';
+import {
+  markDatabaseInUse,
+  PGLITE_LOCK_FILE,
+} from '@osfpm/core/src/db/in-use.js';
 import {
   createMigratedDatabase,
   inUseHolders,
@@ -26,7 +29,7 @@ import { createTestKeyDirectory } from '@osfpm/core/src/keys/test-support.js';
 import type { Config } from '../config.js';
 import { startServer } from '../server.js';
 import type { StartupSteps } from '../startup.js';
-import { roleOf } from './session.js';
+import { openAdminSession, roleOf, type AdminContext } from './session.js';
 import { runCommand } from './test-support.js';
 import type { DoctorReport } from './doctor.js';
 
@@ -80,6 +83,34 @@ describe('the in-use role of each command', () => {
       'run-cleanups': 'online-command',
     });
   });
+
+  it.each(ADMIN_COMMANDS)(
+    'is the one openAdminSession marks the database with for %s: it is told the command, never a role',
+    async (command) => {
+      const dataDir = mkdtempSync(join(tmpdir(), 'osfpm-admin-role-'));
+      // Enough to pass for a database: the marker is taken before it is opened.
+      writeFileSync(join(dataDir, 'PG_VERSION'), '17\n');
+      const config = serverConfig({ driver: 'pglite', dataDir });
+      const context: AdminContext = {
+        env: {},
+        stdout: quiet.stderr,
+        stderr: quiet.stderr,
+      };
+      // Held, so the session is refused, and the refusal names the role it asked with.
+      const holder = markDatabaseInUse(config.database, 'server');
+      try {
+        await expect(
+          openAdminSession(config, context, command),
+        ).rejects.toMatchObject({
+          name: 'DatabaseInUseError',
+          role: roleOf(command),
+        });
+      } finally {
+        await holder.close();
+        rmSync(dataDir, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe('the admin command line on a PGlite data directory', () => {
