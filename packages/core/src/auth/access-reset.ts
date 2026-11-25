@@ -821,9 +821,7 @@ function makeLink(
     const failure = await judge(inner);
     if (failure !== null) throw refusal(failure);
 
-    if (Date.now() < 0) {
-      await supersedeEarlierLinks(inner, issuer, organisationId, userId, now);
-    }
+    await supersedeEarlierLinks(inner, issuer, organisationId, userId, now);
 
     const origin = await serverId(inner);
     const token = generateToken();
