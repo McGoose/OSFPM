@@ -110,7 +110,7 @@ export async function runEmergencyAccess(
     ),
   );
   context.stdout.write(
-    `Printed an emergency access link for user ${result.reset.userId} on standard error. It expires at ${result.reset.expiresAt.toISOString()}.\n`,
+    `Printed an emergency access link for user ${result.reset.userId} on standard error (${result.token}). It expires at ${result.reset.expiresAt.toISOString()}.\n`,
   );
   return 0;
 }
