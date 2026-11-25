@@ -40,7 +40,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - The setup code and the emergency access link are the only secrets OSFPM prints; both go to stderr outside the logger.
 - Server keys live only in `OSFPM_KEYS_DIR`, never in the database, logs, errors or events. A secret encrypted at rest carries its key id and is bound to its row with additional authenticated data.
 - A start-up step whose action depends on what the database holds runs inside the `installation` row lock.
-- Admin commands that change keys run only while no server uses the database, and take the `installation` row first. The admin command line prints counts, ids and fingerprints, never a secret except the emergency access link on stderr, a key id, an address or a database URL.
+- Admin commands that change keys run only while no server uses the database, and take the `installation` row first. The admin command line prints counts, ids and fingerprints. It never prints a secret, a key id, an address or a database URL; the one exception is the emergency access link, which goes to stderr.
 - Test fixtures may insert rows directly to set up state. Code under test always writes through the write helper.
 - A helper that writes records needs at least one test for each kind of table it serves (organisation-level, project-level, and the project table itself).
 - Side effects (email, webhooks, notifications, jobs) are only queued inside the write's own transaction; sending happens later in the worker, never in the request path.
