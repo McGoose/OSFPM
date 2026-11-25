@@ -102,11 +102,12 @@ function isFolder(dataDir: string): boolean {
 /**
  * Opens the database of `config` for a command and marks it as in use for `role`
  * (`markDatabaseInUse`): an `offline-command` takes the exclusive lock on PostgreSQL
- * and refuses at once if a server holds it; a `read-only-command` takes none there;
- * on PGlite both take the lock file, because two processes must never open one data
- * directory. The command line never makes a database: a PGlite directory with no
- * database in it is refused, so a mistyped path does not make an empty one. It asks
- * the database the time, which is also the check that it answers.
+ * and refuses at once if a server holds it; an `online-command` and a
+ * `read-only-command` take none there; on PGlite every role takes the lock file,
+ * because two processes must never open one data directory. The command line never
+ * makes a database: a PGlite directory with no database in it is refused, so a
+ * mistyped path does not make an empty one. It asks the database the time, which is
+ * also the check that it answers.
  *
  * @throws AdminRefusal when a PGlite directory holds no database.
  * @throws DatabaseInUseError when another process has the database.

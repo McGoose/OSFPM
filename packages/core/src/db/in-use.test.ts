@@ -28,6 +28,7 @@ import {
 const ROLES: readonly InUseRole[] = [
   'server',
   'offline-command',
+  'online-command',
   'read-only-command',
 ];
 
@@ -121,7 +122,7 @@ describe('the lock file of a PGlite data directory', () => {
     await marker.close();
   });
 
-  it.each(['offline-command', 'read-only-command'] as const)(
+  it.each(['offline-command', 'online-command', 'read-only-command'] as const)(
     'is not made by a %s for a directory that is not there: a mistyped path never makes a database',
     (role) => {
       const missing = join(root, 'mistyped');
@@ -243,6 +244,37 @@ describe('the lock file of a PGlite data directory', () => {
   });
 });
 
+describe('which roles take the PostgreSQL lock', () => {
+  // Port 1 of this machine, where nothing listens: a role that tries to take the lock
+  // opens a connection and is refused, so what the marker does shows without a server.
+  const config = {
+    driver: 'postgres',
+    url: 'postgres://osfpm:none@127.0.0.1:1/none',
+  } as const;
+
+  it.each(['online-command', 'read-only-command'] as const)(
+    'takes none for the %s role, which runs beside servers: it never opens the lock connection',
+    async (role) => {
+      const marker = markDatabaseInUse(config, role);
+
+      await expect(marker.attach()).resolves.toBeUndefined();
+      await marker.close();
+    },
+  );
+
+  it.each(['server', 'offline-command'] as const)(
+    'takes it for the %s role, which is what makes the case above prove something',
+    async (role) => {
+      const marker = markDatabaseInUse(config, role);
+
+      await expect(marker.attach()).rejects.toMatchObject({
+        code: 'ECONNREFUSED',
+      });
+      await marker.close();
+    },
+  );
+});
+
 /** The PostgreSQL target, when `DATABASE_URL` names a server. PGlite has one connection and one process. */
 const postgres = testTargets.find((target) => target.name === 'postgres');
 
@@ -325,22 +357,25 @@ describe.skipIf(postgres === undefined)(
       await one.close();
     });
 
-    it('takes nothing for a read-only command, which runs beside a server and beside a command', async () => {
-      const server = markDatabaseInUse(config(), 'server');
-      await server.attach();
-      const reader = markDatabaseInUse(config(), 'read-only-command');
-      await reader.attach();
-      expect(await holders()).toBe(1);
+    it.each(['online-command', 'read-only-command'] as const)(
+      'takes nothing for the %s role, which runs beside a server and beside a command',
+      async (role) => {
+        const server = markDatabaseInUse(config(), 'server');
+        await server.attach();
+        const beside = markDatabaseInUse(config(), role);
+        await beside.attach();
+        expect(await holders()).toBe(1);
 
-      await server.close();
-      const command = markDatabaseInUse(config(), 'offline-command');
-      await command.attach();
-      await reader.attach();
-      expect(await holders()).toBe(1);
+        await server.close();
+        const command = markDatabaseInUse(config(), 'offline-command');
+        await command.attach();
+        await beside.attach();
+        expect(await holders()).toBe(1);
 
-      await reader.close();
-      await command.close();
-    });
+        await beside.close();
+        await command.close();
+      },
+    );
 
     it('lets the next one in as soon as the holder has closed, and lets go of the lock itself', async () => {
       const command = markDatabaseInUse(config(), 'offline-command');

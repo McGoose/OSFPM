@@ -41,28 +41,33 @@ import {
 export const EXIT = { done: 0, refused: 1, usage: 2 } as const;
 
 /**
- * The commands that need every server stopped, because they change what a running
- * server keeps in memory. The others need no server stopped: two only read, and three
- * (`emergency-access`, `revoke-sessions`, `run-cleanups`) only write rows that a
- * running server writes too, under the same locks.
+ * How a command uses the database, as the role it marks the database in use with
+ * (decisions D-64 and D-81). The key commands (`rotate-data-key`,
+ * `accept-data-key-loss`, `new-identity`) change what a running server keeps in
+ * memory, so they are `offline-command` and need every server stopped. The three
+ * that only write rows a running server writes too, under the same locks
+ * (`emergency-access`, `revoke-sessions`, `run-cleanups`), are `online-command`;
+ * `info` and `doctor` only read, so they are `read-only-command`. Those two roles take
+ * no lock on PostgreSQL, so they run beside servers. On PGlite every role takes the
+ * lock file, because two processes never open one data directory.
+ *
+ * The switch has no default, so a command added to `ADMIN_COMMANDS` does not compile
+ * until it is given a role here.
  */
-const OFFLINE_COMMANDS: ReadonlySet<AdminCommand> = new Set([
-  'rotate-data-key',
-  'accept-data-key-loss',
-  'new-identity',
-]);
-
-/**
- * How the command uses the database: it needs the server stopped, or it can run
- * beside one. The second takes the role `read-only-command`, which takes no lock on
- * PostgreSQL, even for the three commands that write rows (decision D-81): the role is
- * about what a running server holds in memory, which none of them changes. On PGlite
- * every role takes the lock file, because two processes never open one data directory.
- */
-function roleOf(command: AdminCommand): InUseRole {
-  return OFFLINE_COMMANDS.has(command)
-    ? 'offline-command'
-    : 'read-only-command';
+export function roleOf(command: AdminCommand): InUseRole {
+  switch (command) {
+    case 'rotate-data-key':
+    case 'accept-data-key-loss':
+    case 'new-identity':
+      return 'offline-command';
+    case 'emergency-access':
+    case 'revoke-sessions':
+    case 'run-cleanups':
+      return 'online-command';
+    case 'info':
+    case 'doctor':
+      return 'read-only-command';
+  }
 }
 
 /** Runs a command that needs the database to be open, in use, answering and migrated. */

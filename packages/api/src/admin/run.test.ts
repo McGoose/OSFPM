@@ -10,6 +10,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { ADMIN_COMMANDS } from '@osfpm/core/src/auth/admin-report.js';
 import { bindServerKeys } from '@osfpm/core/src/auth/server-key-binding.js';
 import {
   markSetupComplete,
@@ -25,6 +26,7 @@ import { createTestKeyDirectory } from '@osfpm/core/src/keys/test-support.js';
 import type { Config } from '../config.js';
 import { startServer } from '../server.js';
 import type { StartupSteps } from '../startup.js';
+import { roleOf } from './run.js';
 import { runCommand } from './test-support.js';
 import type { DoctorReport } from './doctor.js';
 
@@ -57,6 +59,28 @@ function serverConfig(database: Config['database']): Config {
     trustedProxies: [],
   };
 }
+
+describe('the in-use role of each command', () => {
+  // A list that pins every command: a new command is listed here, with the role its
+  // author chose, in the same commit. The role says what the command does to a
+  // running server, not only whether it writes (decisions D-64 and D-81).
+  it('is offline for the commands that change what a server keeps in memory, online for the ones that only write rows a server writes too, and read-only for the ones that only read', () => {
+    const roles = Object.fromEntries(
+      ADMIN_COMMANDS.map((command) => [command, roleOf(command)]),
+    );
+
+    expect(roles).toEqual({
+      info: 'read-only-command',
+      doctor: 'read-only-command',
+      'rotate-data-key': 'offline-command',
+      'accept-data-key-loss': 'offline-command',
+      'new-identity': 'offline-command',
+      'emergency-access': 'online-command',
+      'revoke-sessions': 'online-command',
+      'run-cleanups': 'online-command',
+    });
+  });
+});
 
 describe('the admin command line on a PGlite data directory', () => {
   let dataDir: string;
@@ -233,7 +257,7 @@ describe('the admin command line on a PGlite data directory', () => {
 const postgres = testTargets.find((target) => target.name === 'postgres');
 
 describe.skipIf(postgres === undefined)(
-  'the commands that only read, on PostgreSQL',
+  'the commands that take no lock, on PostgreSQL',
   () => {
     let url: string;
     let cleanup: () => Promise<void>;
