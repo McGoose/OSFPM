@@ -200,7 +200,7 @@ export async function issueEmergencyAccess(
       organisationId,
       person.id,
       {
-        expiresInHours: input.expiresInHours ?? EMERGENCY_ACCESS_DEFAULT_HOURS,
+        expiresInHours: input.expiresInHours ?? 24,
         ...(input.removePasskeys === undefined
           ? {}
           : { removePasskeys: input.removePasskeys }),
