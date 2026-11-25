@@ -529,9 +529,7 @@ function judgeLink(
   },
 ): Promise<RuleFailure | null> {
   if (link.issuedBySystem) {
-    return checkSystemRules(tx, link.organisationId, link.userId).then(
-      (failure) => (failure?.rule === 'not-administrator' ? null : failure),
-    );
+    return checkSystemRules(tx, link.organisationId, link.userId);
   }
   // A person's link names who made it (`access_reset_issuer_check`), so a row with
   // no creator and no system flag cannot exist; were one made by hand, nobody could
