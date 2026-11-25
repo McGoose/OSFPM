@@ -150,24 +150,7 @@ export async function startServer(
   let shuttingDown = false;
   // The PGlite lock file is taken here, before the directory is opened. The
   // PostgreSQL lock is taken by start-up, in its retry loop, once the server is listening.
-  const inUse = markDatabaseInUse(config.database, 'server', {
-    // Runs only while the lock is held, so the app and `shutDown` exist by then. The
-    // lock is gone with the connection, and an admin command that needs every server
-    // stopped would no longer find this one, so the server stops as on SIGTERM and
-    // exits non-zero: a supervisor restarts it, and a restart loads the keys again.
-    onLost: (error) => {
-      // A stop that a caller asked for has let go of the lock itself, or is about to.
-      if (shuttingDown || stopping !== undefined) return;
-      shuttingDown = true;
-      // The class name only (see `loggerOptions`): the driver's message can hold the
-      // address of the database.
-      app.log.fatal(
-        { err: error },
-        'the connection that marks the database as in use was lost: the server stops and must be restarted',
-      );
-      shutDown(1);
-    },
-  });
+  const inUse = markDatabaseInUse(config.database, 'server');
   let database: Database;
   try {
     database = createDatabase(config.database);
