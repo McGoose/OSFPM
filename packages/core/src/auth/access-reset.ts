@@ -791,7 +791,9 @@ function makeLink(
   const judge = (handle: Tx) =>
     issuer.kind === 'user'
       ? checkRules(handle, issuer.userId, organisationId, userId)
-      : checkSystemRules(handle, organisationId, userId);
+      : checkSystemRules(handle, organisationId, userId).then((failure) =>
+          failure?.rule === 'not-administrator' ? null : failure,
+        );
   // A savepoint: a failure leaves no link, no revocation and no event.
   return tx.transaction(async (inner) => {
     // An id that is not shaped like one is nobody's: the same denial.
