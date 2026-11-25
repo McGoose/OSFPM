@@ -6,8 +6,8 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { resolve } from 'node:path';
-import type pg from 'pg';
-import type { Database, DbConfig, PostgresDb } from './client.js';
+import pg from 'pg';
+import type { Database, DbConfig } from './client.js';
 import { IN_USE_LOCK_KEY } from './migrate.js';
 
 /**
@@ -17,11 +17,14 @@ import { IN_USE_LOCK_KEY } from './migrate.js';
  * directory. One helper, `markDatabaseInUse`, decides what each driver and each
  * kind of process has to do; the server and the admin command line both call it.
  *
- * - **PostgreSQL:** a session-level advisory lock (`IN_USE_LOCK_KEY`) on one
- *   connection the process keeps. A server holds it *shared* for its whole life,
- *   so any number of servers coexist; a command that needs every server stopped
- *   holds it *exclusive* while it runs. The two exclude each other in both
- *   directions, and the database drops a lock whose process dies.
+ * - **PostgreSQL:** a session-level advisory lock (`IN_USE_LOCK_KEY`) on a
+ *   connection of its own that the process keeps, a `pg.Client` outside the pool
+ *   (made with the same connection string, so the pool keeps its configured size).
+ *   A server holds it *shared* for its whole life, so any number of servers
+ *   coexist; a command that needs every server stopped holds it *exclusive* while
+ *   it runs. The two exclude each other in both directions, and the database drops
+ *   a lock whose process dies. A server whose connection ends loses the lock, and
+ *   the server stops (see `onLost`).
  * - **PGlite:** PGlite itself does not refuse a second process on a data
  *   directory (tried with 0.5.16: the second process opened it and ran queries
  *   while the first held it open), so a lock file, `PGLITE_LOCK_FILE`, holds the
@@ -208,40 +211,47 @@ function isFolder(dataDir: string): boolean {
 type HeldLock = { readonly release: () => Promise<void> };
 
 /**
- * Takes the in-use advisory lock on one connection of `pool`, with
+ * Takes the in-use advisory lock on a connection of its own, a `pg.Client` made
+ * from `connectionString` (the string the pool is made from), with
  * `pg_try_advisory_lock_shared` for a server and `pg_try_advisory_lock` for a
- * command: neither waits, both answer at once. The connection stays checked out
- * until `release`, because the lock lives as long as the connection's session. It
- * is not returned to the pool, which therefore has one connection fewer to give
- * for as long as the process lives.
+ * command: neither waits, both answer at once. The connection stays open until
+ * `release`, because the lock lives as long as the connection's session. It is
+ * not one of the pool's, which therefore keeps its configured size. TCP keep-alive
+ * is on, so a connection that a network fault cut without a word is noticed.
  *
  * Answers null, and keeps nothing, when another process holds the lock the wrong
- * way round. `onLost` is called when the connection fails while it is held: the
- * lock went with it, and without a listener Node would end the process on the
- * connection's `error` event.
+ * way round. `onLost` is called, once, with the error, when the connection ends or
+ * fails while the lock is held: the lock went with it. The listener is there from
+ * the start, because without one Node would end the process on the connection's
+ * `error` event.
+ *
+ * @throws Error as the driver gives it when the connection cannot be made.
  */
 async function takePostgresLock(
-  pool: pg.Pool,
+  connectionString: string,
   mode: 'shared' | 'exclusive',
-  onLost: (() => void) | undefined,
+  onLost: ((error: Error) => void) | undefined,
 ): Promise<HeldLock | null> {
-  const client = await pool.connect();
+  const client = new pg.Client({ connectionString, keepAlive: true });
+  // Only a connection that holds the lock can lose it: an error while connecting
+  // or while giving it up is not a loss.
+  let holding = false;
   let lost = false;
-  const onError = () => {
+  client.on('error', (error: Error) => {
+    if (!holding || lost) return;
     // A dropped connection reports itself twice (the server's last message, then
     // the closed socket): say so once.
-    if (lost) return;
     lost = true;
-    onLost?.();
-  };
-  client.on('error', onError);
-  // Removed in the same step as the connection goes back, so no error falls between.
-  const letGo = (broken?: Error | true) => {
-    client.removeListener('error', onError);
-    client.release(broken);
+    onLost?.(error);
+  });
+  // Ends the connection and does not mind how: it is dead, or about to be.
+  const hangUp = async () => {
+    holding = false;
+    await client.end().catch(() => undefined);
   };
   let taken: boolean;
   try {
+    await client.connect();
     const result = await client.query<{ taken: boolean }>(
       mode === 'shared'
         ? 'select pg_try_advisory_lock_shared($1::bigint) as taken'
@@ -250,31 +260,31 @@ async function takePostgresLock(
     );
     taken = result.rows[0]?.taken === true;
   } catch (error) {
-    letGo(error instanceof Error ? error : true);
+    await hangUp();
     throw error;
   }
   if (!taken) {
-    letGo();
+    await hangUp();
     return null;
   }
+  holding = true;
   return {
     release: async () => {
-      if (lost) {
-        letGo(true);
-        return;
+      if (!lost) {
+        // Not a loss from here on, whatever the connection says while it closes.
+        holding = false;
+        try {
+          await client.query(
+            mode === 'shared'
+              ? 'select pg_advisory_unlock_shared($1::bigint)'
+              : 'select pg_advisory_unlock($1::bigint)',
+            [IN_USE_LOCK_KEY],
+          );
+        } catch {
+          // Ending the connection drops the lock too.
+        }
       }
-      try {
-        await client.query(
-          mode === 'shared'
-            ? 'select pg_advisory_unlock_shared($1::bigint)'
-            : 'select pg_advisory_unlock($1::bigint)',
-          [IN_USE_LOCK_KEY],
-        );
-        letGo();
-      } catch (error) {
-        // The connection is destroyed, not returned, which drops the lock too.
-        letGo(error instanceof Error ? error : true);
-      }
+      await hangUp();
     },
   };
 }
@@ -282,22 +292,22 @@ async function takePostgresLock(
 /** What `markDatabaseInUse` hands back. */
 export type InUseMarker = {
   /**
-   * Call once the database is open. On PostgreSQL it takes the advisory lock on a
-   * connection of the database's pool (a no-op for a read-only command, and when
-   * the marker is held already); on PGlite there is nothing left to do, because the
-   * lock file was taken before the directory was opened.
+   * On PostgreSQL it takes the advisory lock on a connection of its own (a no-op for
+   * a read-only command, and when the marker is held already); on PGlite there is
+   * nothing left to do, because the lock file was taken before the directory was
+   * opened.
    *
    * @throws DatabaseInUseError when another process holds the lock the wrong way
-   * round. The database's own errors, such as an unreachable host, are thrown as
-   * they come.
+   * round. The driver's own errors, such as an unreachable host, are thrown as they
+   * come.
    */
-  readonly attach: (database: Database) => Promise<void>;
+  readonly attach: () => Promise<void>;
   /**
    * Gives the marker up and closes `database`, in the order each driver needs:
-   * PostgreSQL gives the lock and its connection back first, because the pool
-   * waits for every connection to be returned before it ends; PGlite closes the
-   * database first and then removes the lock file, so another process never finds
-   * the directory free while it is still open. Safe to call more than once. Leave
+   * PostgreSQL lets go of the lock first, so that a command that waits for it is
+   * not kept waiting by a pool that is slow to end; PGlite closes the database
+   * first and then removes the lock file, so another process never finds the
+   * directory free while it is still open. Safe to call more than once. Leave
    * `database` out when it was never opened.
    */
   readonly close: (database?: Database) => Promise<void>;
@@ -308,15 +318,16 @@ export type InUseMarker = {
  * top of this file). The PGlite lock file is taken here, at once, so call this
  * before `createDatabase` opens the directory; a `memory://` data directory, or
  * PGlite over a client the caller made, has nothing to lock. On PostgreSQL
- * nothing happens until `attach`, because the lock needs the open pool.
+ * nothing happens until `attach`, which opens the lock's own connection.
  *
  * The server calls it with `server` and the admin command line with
  * `offline-command` or `read-only-command`; a read-only command on PostgreSQL
  * takes no lock.
  *
- * @param options.onLost PostgreSQL only: called when the connection that holds the
- * lock fails. The lock is gone then, and a command could run beside the server
- * until it restarts, so the server says so in its log. The call carries no detail.
+ * @param options.onLost PostgreSQL only: called, once, with the error, when the
+ * connection that holds the lock ends or fails. The lock is gone then, and a command
+ * could run beside the server, so the server stops (`startServer`). Logging the
+ * error means its class name only.
  * @throws DatabaseInUseError when a running process holds the PGlite lock file.
  * @throws Error for a failure to make the lock file, for example a data directory
  * that is a file; the system's own error.
@@ -324,7 +335,7 @@ export type InUseMarker = {
 export function markDatabaseInUse(
   config: DbConfig,
   role: InUseRole,
-  options: { readonly onLost?: () => void } = {},
+  options: { readonly onLost?: (error: Error) => void } = {},
 ): InUseMarker {
   if (config.driver === 'pglite') {
     const dataDir = 'dataDir' in config ? config.dataDir : undefined;
@@ -348,21 +359,20 @@ export function markDatabaseInUse(
     };
   }
 
+  const connectionString = config.url;
   let held: HeldLock | undefined;
   let closed = false;
   return {
-    attach: async (database) => {
+    attach: async () => {
       if (closed || held !== undefined || role === 'read-only-command') return;
-      const pool = (database.db as PostgresDb['db']).$client;
       const taken = await takePostgresLock(
-        pool,
+        connectionString,
         role === 'server' ? 'shared' : 'exclusive',
         options.onLost,
       );
       if (taken === null) throw new DatabaseInUseError('postgres', role);
       if (closed) {
-        // `close` ran while the lock was being taken: give it straight back, or
-        // the pool never ends.
+        // `close` ran while the lock was being taken: give it straight back.
         await taken.release();
         return;
       }

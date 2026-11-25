@@ -374,7 +374,7 @@ async function attemptOnce(
   // every server stopped holds the lock exclusively while it runs, and this
   // throws until it has finished (see `runStartup`). Nothing is taken twice when
   // a later step fails and the attempt is repeated.
-  await options.inUse?.attach(app.db);
+  await options.inUse?.attach();
   if (options.autoMigrate) {
     await steps.migrate(app.db);
     app.log.info('migrations are up to date');

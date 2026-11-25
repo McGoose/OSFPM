@@ -17,7 +17,7 @@ import {
   totpCodeAt,
 } from '@osfpm/core/src/auth/test-support.js';
 import { verifyTotp } from '@osfpm/core/src/auth/totp.js';
-import { createDatabase, type Database } from '@osfpm/core/src/db/client.js';
+import type { Database } from '@osfpm/core/src/db/client.js';
 import { markDatabaseInUse } from '@osfpm/core/src/db/in-use.js';
 import { migrate } from '@osfpm/core/src/db/migrate.js';
 import { installation } from '@osfpm/core/src/db/schema/index.js';
@@ -84,9 +84,13 @@ describe.each(testTargets)(
     let ring: DataKeyRing;
     let identity: ServerIdentity;
     let installationId: string;
+    // The address of a PostgreSQL test database: a command opens a connection of its
+    // own for its lock, so the settings must name the database the test made.
+    let url: string | undefined;
 
     beforeEach(async () => {
-      ({ database, cleanup } = await createMigratedDatabase(target));
+      const created = await createMigratedDatabase(target);
+      ({ database, cleanup, url } = created);
       keyDirectory = createTestKeyDirectory();
       strangerDirectory = createTestKeyDirectory();
       installationId = await seedInstallation(database);
@@ -103,9 +107,18 @@ describe.each(testTargets)(
       strangerDirectory.remove();
     });
 
+    const environment = () =>
+      adminEnvironment(
+        target.name,
+        keyDirectory.dir,
+        url === undefined ? {} : { DATABASE_URL: url },
+      );
+    /** What must stay out of every output: the address of the database the test uses. */
+    const addressParts = () =>
+      url === undefined ? [] : [url, new URL(url).pathname.slice(1)];
     const run = (...argv: string[]) =>
       runCommand(argv, {
-        env: adminEnvironment(target.name, keyDirectory.dir),
+        env: environment(),
         database,
         now: () => T1,
       });
@@ -202,6 +215,7 @@ describe.each(testTargets)(
           'PRIVATE KEY',
           keyDirectory.dir,
           ...DATABASE_URL_PARTS,
+          ...addressParts(),
         ]) {
           expect(everything).not.toContain(forbidden);
         }
@@ -354,6 +368,7 @@ describe.each(testTargets)(
           readDataKeyRing(keyDirectory.dir)!.currentKeyId,
           'PRIVATE KEY',
           ...DATABASE_URL_PARTS,
+          ...addressParts(),
         ]) {
           expect(everything).not.toContain(forbidden);
         }
@@ -466,6 +481,7 @@ describe.each(testTargets)(
           ring.currentKeyId,
           'PRIVATE KEY',
           ...DATABASE_URL_PARTS,
+          ...addressParts(),
         ]) {
           expect(everything).not.toContain(forbidden);
         }
@@ -650,6 +666,11 @@ describe.each(testTargets)(
 
     it('refuses an offline command while migrations are pending, with the one message, changing nothing, and still lets doctor say what is wrong', async () => {
       const pending = await target.create();
+      const pendingEnvironment = adminEnvironment(
+        target.name,
+        keyDirectory.dir,
+        pending.url === undefined ? {} : { DATABASE_URL: pending.url },
+      );
       const partial = partialMigrations(30);
       await migrate(pending.database, partial.folder);
       try {
@@ -661,7 +682,7 @@ describe.each(testTargets)(
           ['info'],
         ]) {
           const answer = await runCommand(command, {
-            env: adminEnvironment(target.name, keyDirectory.dir),
+            env: pendingEnvironment,
             database: pending.database,
           });
 
@@ -671,7 +692,7 @@ describe.each(testTargets)(
         }
         expect(snapshot(keyDirectory.dir)).toEqual(before);
         const doctor = await runCommand(['doctor', '--json'], {
-          env: adminEnvironment(target.name, keyDirectory.dir),
+          env: pendingEnvironment,
           database: pending.database,
           freeSpace: () => 50,
         });
@@ -780,8 +801,7 @@ describe.skipIf(postgres === undefined)(
         { driver: 'postgres', url },
         'offline-command',
       );
-      const own = createDatabase({ driver: 'postgres', url });
-      await running.attach(own);
+      await running.attach();
       try {
         const second = await runCommand(['rotate-data-key'], {
           env: environment(),
@@ -792,7 +812,7 @@ describe.skipIf(postgres === undefined)(
         expect(second.stderr).toContain('A server is using this database');
         expect(reader.code).toBe(0);
       } finally {
-        await running.close(own);
+        await running.close();
       }
     });
   },

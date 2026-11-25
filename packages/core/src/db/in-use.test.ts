@@ -10,7 +10,6 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDatabase, type Database } from './client.js';
 import {
@@ -19,9 +18,9 @@ import {
   PGLITE_LOCK_FILE,
   type InUseRole,
 } from './in-use.js';
-import { IN_USE_LOCK_KEY } from './migrate.js';
 import {
   createMigratedDatabase,
+  endInUseHolders,
   inUseHolders,
   testTargets,
 } from './test-support.js';
@@ -79,7 +78,7 @@ describe('the lock file of a PGlite data directory', () => {
     'is taken by a %s with its process number, and removed when it closes',
     async (role) => {
       const marker = markDatabaseInUse(config(), role);
-      await marker.attach(fakeDatabase([]));
+      await marker.attach();
 
       expect(readFileSync(lockFile(), 'utf8').trim()).toBe(String(process.pid));
 
@@ -230,7 +229,7 @@ describe('the lock file of a PGlite data directory', () => {
     );
     const events: string[] = [];
 
-    await marker.attach(fakeDatabase(events));
+    await marker.attach();
     await marker.close(fakeDatabase(events));
 
     expect(events).toEqual(['closed']);
@@ -239,7 +238,7 @@ describe('the lock file of a PGlite data directory', () => {
 
   it('takes nothing for a database with no data directory', async () => {
     const marker = markDatabaseInUse({ driver: 'pglite' }, 'server');
-    await marker.attach(fakeDatabase([]));
+    await marker.attach();
     await marker.close();
   });
 });
@@ -250,45 +249,43 @@ const postgres = testTargets.find((target) => target.name === 'postgres');
 describe.skipIf(postgres === undefined)(
   'the in-use marker on PostgreSQL',
   () => {
-    // Two pools on one database are two processes as far as the database can tell.
-    let first: Database;
-    let second: Database;
+    let database: Database;
     let url: string;
     let cleanup: () => Promise<void>;
 
     beforeEach(async () => {
       const created = await createMigratedDatabase(postgres!);
-      first = created.database;
+      database = created.database;
       cleanup = created.cleanup;
       url = created.url!;
-      second = createDatabase({ driver: 'postgres', url });
     });
     afterEach(async () => {
-      await second.close();
       await cleanup();
     });
 
-    const config = { driver: 'postgres', url: 'postgres://unused' } as const;
-    const holders = (database: Database) => inUseHolders(database.db);
+    // Each marker has a connection of its own, so two markers are two processes as
+    // far as the database can tell.
+    const config = () => ({ driver: 'postgres', url }) as const;
+    const holders = () => inUseHolders(database.db);
 
     it('lets any number of servers hold it together', async () => {
-      const a = markDatabaseInUse(config, 'server');
-      const b = markDatabaseInUse(config, 'server');
+      const a = markDatabaseInUse(config(), 'server');
+      const b = markDatabaseInUse(config(), 'server');
 
-      await a.attach(first);
-      await b.attach(second);
+      await a.attach();
+      await b.attach();
 
-      expect(await holders(first)).toBe(2);
+      expect(await holders()).toBe(2);
       await a.close();
       await b.close();
     });
 
     it('refuses a command while a server holds it, and tells the operator to stop every server', async () => {
-      const server = markDatabaseInUse(config, 'server');
-      await server.attach(first);
-      const command = markDatabaseInUse(config, 'offline-command');
+      const server = markDatabaseInUse(config(), 'server');
+      await server.attach();
+      const command = markDatabaseInUse(config(), 'offline-command');
 
-      const error = await command.attach(second).then(
+      const error = await command.attach().then(
         () => undefined,
         (caught: unknown) => caught,
       );
@@ -297,17 +294,17 @@ describe.skipIf(postgres === undefined)(
       expect((error as DatabaseInUseError).message).toBe(
         'A server is using this database. Stop every server, run the command, then start them again.',
       );
-      expect(await holders(first)).toBe(1);
+      expect(await holders()).toBe(1);
       await command.close();
       await server.close();
     });
 
     it('refuses a server while a command holds it, which start-up takes for "not ready yet"', async () => {
-      const command = markDatabaseInUse(config, 'offline-command');
-      await command.attach(first);
-      const server = markDatabaseInUse(config, 'server');
+      const command = markDatabaseInUse(config(), 'offline-command');
+      await command.attach();
+      const server = markDatabaseInUse(config(), 'server');
 
-      const error = await server.attach(second).then(
+      const error = await server.attach().then(
         () => undefined,
         (caught: unknown) => caught,
       );
@@ -319,78 +316,88 @@ describe.skipIf(postgres === undefined)(
     });
 
     it('refuses a second command while one runs', async () => {
-      const one = markDatabaseInUse(config, 'offline-command');
-      await one.attach(first);
-      const two = markDatabaseInUse(config, 'offline-command');
+      const one = markDatabaseInUse(config(), 'offline-command');
+      await one.attach();
+      const two = markDatabaseInUse(config(), 'offline-command');
 
-      await expect(two.attach(second)).rejects.toBeInstanceOf(
-        DatabaseInUseError,
-      );
+      await expect(two.attach()).rejects.toBeInstanceOf(DatabaseInUseError);
       await two.close();
       await one.close();
     });
 
     it('takes nothing for a read-only command, which runs beside a server and beside a command', async () => {
-      const server = markDatabaseInUse(config, 'server');
-      await server.attach(first);
-      const reader = markDatabaseInUse(config, 'read-only-command');
-      await reader.attach(second);
-      expect(await holders(first)).toBe(1);
+      const server = markDatabaseInUse(config(), 'server');
+      await server.attach();
+      const reader = markDatabaseInUse(config(), 'read-only-command');
+      await reader.attach();
+      expect(await holders()).toBe(1);
 
       await server.close();
-      const command = markDatabaseInUse(config, 'offline-command');
-      await command.attach(first);
-      await reader.attach(second);
-      expect(await holders(first)).toBe(1);
+      const command = markDatabaseInUse(config(), 'offline-command');
+      await command.attach();
+      await reader.attach();
+      expect(await holders()).toBe(1);
 
       await reader.close();
       await command.close();
     });
 
     it('lets the next one in as soon as the holder has closed, and lets go of the lock itself', async () => {
-      const command = markDatabaseInUse(config, 'offline-command');
-      await command.attach(first);
+      const command = markDatabaseInUse(config(), 'offline-command');
+      await command.attach();
       await command.close();
-      expect(await holders(second)).toBe(0);
+      expect(await holders()).toBe(0);
 
-      const server = markDatabaseInUse(config, 'server');
-      await server.attach(second);
-      expect(await holders(second)).toBe(1);
+      const server = markDatabaseInUse(config(), 'server');
+      await server.attach();
+      expect(await holders()).toBe(1);
       await server.close();
-      expect(await holders(first)).toBe(0);
+      expect(await holders()).toBe(0);
     });
 
-    it('holds on one connection, however often it is attached, and gives the connection back before the pool is ended', async () => {
-      const third = createDatabase({ driver: 'postgres', url });
-      const server = markDatabaseInUse(config, 'server');
+    it('holds one lock however often it is attached, and gives it back when closed along with the database', async () => {
+      const own = createDatabase({ driver: 'postgres', url });
+      const server = markDatabaseInUse(config(), 'server');
 
-      await server.attach(third);
-      await server.attach(third);
-      expect(await holders(first)).toBe(1);
+      await server.attach();
+      await server.attach();
+      expect(await holders()).toBe(1);
 
-      // `close` would wait for ever if the connection were still checked out.
-      await server.close(third);
-      expect(await holders(first)).toBe(0);
+      await server.close(own);
+      expect(await holders()).toBe(0);
     });
 
-    it('gives a connection that was lost back without a crash, and says so once', async () => {
-      const onLost = vi.fn();
-      const server = markDatabaseInUse(config, 'server', { onLost });
-      await server.attach(second);
+    it('reports a connection that ended once, with the error, without a crash, and is no longer in the way of a command', async () => {
+      const onLost = vi.fn<(error: Error) => void>();
+      const server = markDatabaseInUse(config(), 'server', { onLost });
+      await server.attach();
+      expect(await holders()).toBe(1);
+
       // Another session ends the one that holds the lock, as a database restart would.
-      await first.db.execute(
-        sql`select pg_terminate_backend(pid) from pg_locks
-            where locktype = 'advisory'
-              and ((classid::bigint << 32) | objid::bigint) = ${IN_USE_LOCK_KEY}::bigint`,
-      );
+      expect(await endInUseHolders(database.db)).toBe(1);
       await vi.waitFor(() => expect(onLost).toHaveBeenCalled(), 5_000);
 
       // The lock went with the connection, so a command is no longer kept out.
-      const command = markDatabaseInUse(config, 'offline-command');
-      await command.attach(first);
+      expect(await holders()).toBe(0);
+      const command = markDatabaseInUse(config(), 'offline-command');
+      await command.attach();
       await command.close();
+      // Giving up a lost marker does not throw, and says nothing more.
       await server.close();
       expect(onLost).toHaveBeenCalledTimes(1);
+      expect(onLost.mock.calls[0]![0]).toBeInstanceOf(Error);
+    });
+
+    it('does not call onLost for a connection it ends itself', async () => {
+      const onLost = vi.fn();
+      const server = markDatabaseInUse(config(), 'server', { onLost });
+      await server.attach();
+
+      await server.close();
+      // Give a late error event the time it would need.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      expect(onLost).not.toHaveBeenCalled();
     });
   },
 );

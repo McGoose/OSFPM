@@ -198,6 +198,23 @@ export async function inUseHolders(db: SchemaDb): Promise<number> {
   return Number(result.rows[0]!.held);
 }
 
+/**
+ * Ends every session of the test database that holds the in-use advisory lock
+ * (`pg_terminate_backend`), as a restart of the database would, and answers how many
+ * it ended. PostgreSQL only. The API's tests call this, because they have no `sql`
+ * of their own.
+ */
+export async function endInUseHolders(db: SchemaDb): Promise<number> {
+  const result = (await db.execute(
+    sql`select count(*)::int as ended from (
+          select pg_terminate_backend(pid) from pg_locks
+          where locktype = 'advisory'
+            and ((classid::bigint << 32) | objid::bigint) = ${IN_USE_LOCK_KEY}::bigint
+        ) ended`,
+  )) as { rows: { ended: number }[] };
+  return Number(result.rows[0]!.ended);
+}
+
 /** SQLSTATE codes tests expect from `failureOf`. */
 export const SQLSTATE = {
   foreignKeyViolation: '23503',

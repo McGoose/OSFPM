@@ -143,7 +143,7 @@ export async function openAdminSession(
   try {
     await withTimeout(
       (async () => {
-        await marker.attach(database);
+        await marker.attach();
         await databaseTime(database.db);
       })(),
       REACH_TIMEOUT_MS,

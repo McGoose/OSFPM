@@ -11,7 +11,6 @@ import {
   it,
   vi,
 } from 'vitest';
-import { createDatabase } from '@osfpm/core/src/db/client.js';
 import {
   DatabaseInUseError,
   markDatabaseInUse,
@@ -201,9 +200,7 @@ describe.skipIf(postgres === undefined)('a server on PostgreSQL', () => {
         'offline-command',
       );
 
-      await expect(command.attach(server.database)).rejects.toBeInstanceOf(
-        DatabaseInUseError,
-      );
+      await expect(command.attach()).rejects.toBeInstanceOf(DatabaseInUseError);
       await command.close();
     } finally {
       await server.stop();
@@ -216,9 +213,8 @@ describe.skipIf(postgres === undefined)('a server on PostgreSQL', () => {
       { driver: 'postgres', url },
       'offline-command',
     );
-    // The command's own connection pool, the one a second process would have.
-    const commandDatabase = createDatabase({ driver: 'postgres', url });
-    await command.attach(commandDatabase);
+    // The command holds the lock on a connection of its own, as a second process would.
+    await command.attach();
 
     const server = await startServer(
       { ...config(), logLevel: 'info' },
@@ -247,7 +243,7 @@ describe.skipIf(postgres === undefined)('a server on PostgreSQL', () => {
       expect(text).not.toContain(new URL(url).pathname.slice(1));
       expect(text).not.toContain('postgres://');
 
-      await command.close(commandDatabase);
+      await command.close();
       await server.ready;
 
       expect(server.app.readiness.isReady()).toBe(true);

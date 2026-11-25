@@ -116,7 +116,7 @@ async function quietly(action: () => PromiseLike<unknown>): Promise<void> {
  * another process has open (`DatabaseInUseError`): the server marks its data
  * directory with a lock file before it opens it, and never opens a directory that
  * a running server or an admin command holds. On PostgreSQL the server holds a
- * shared advisory lock on one connection of its pool for its whole life, which an
+ * shared advisory lock on a connection of its own, outside its pool, for its whole life, which an
  * admin command that needs every server stopped finds and refuses on; the lock is
  * taken by start-up, in its retry loop, so a command that is running only makes the
  * server wait (see `runStartup`).
@@ -140,7 +140,7 @@ export async function startServer(
   const timeoutMs = options.shutdownTimeoutMs ?? SHUTDOWN_TIMEOUT_MS;
 
   // The PGlite lock file is taken here, before the directory is opened. The
-  // PostgreSQL lock needs the open pool, so start-up takes it in its retry loop.
+  // PostgreSQL lock is taken by start-up, in its retry loop, once the server is listening.
   const inUse = markDatabaseInUse(config.database, 'server', {
     // The app exists by the time the lock is held, which is when this can run.
     onLost: () =>
@@ -211,8 +211,8 @@ export async function startServer(
       try {
         await app.close();
       } finally {
-        // The marker goes first on PostgreSQL, whose pool waits for every
-        // connection to come back, and last on PGlite: `close` does each right.
+        // The marker lets go of the lock first on PostgreSQL, and removes the lock
+        // file last on PGlite: `close` does each in its order.
         await inUse.close(database);
       }
     })();
