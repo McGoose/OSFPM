@@ -205,7 +205,7 @@ pnpm --filter @osfpm/api admin <command> [options]
 
 It is the development form, over `tsx` like `start`; a real `osfpm` binary comes with the production image (P-07). pnpm writes its own `$ tsx …` line to standard error, so standard output stays the report; a script that reads `--json` can also run `pnpm --silent …`.
 
-It reads **the same environment as the server** (`DATABASE_URL` or `OSFPM_DATA_DIR`, `OSFPM_KEYS_DIR`, the rest of [Configuration](#configuration)) through the same `loadConfig`, so an invalid setting stops it with the same fixed message, which names variables and never a value. `OSFPM_PUBLIC_URL` is required, as it is for the server, although only `doctor` looks at it.
+It reads **the same environment as the server** (`DATABASE_URL` or `OSFPM_DATA_DIR`, `OSFPM_KEYS_DIR`, the rest of [Configuration](#configuration)) through the same `loadConfig`, so an invalid setting stops it with the same fixed message, which names variables and never a value. `OSFPM_PUBLIC_URL` is required, as it is for the server, although only two commands use it: `doctor` checks it, and `emergency-access` builds its link from it.
 
 | Command                               | What it does                                                                                                                                                                                                                      | Server running?                         |
 | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
