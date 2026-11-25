@@ -51,6 +51,7 @@ export async function runCleanups(
     } catch (error) {
       failed.push(table);
       problems.push(`The cleanup of ${table} failed: ${failureDetail(error)}.`);
+      break;
     }
   }
 
