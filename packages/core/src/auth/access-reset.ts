@@ -642,7 +642,7 @@ async function revokeLinks(
       .set({
         revokedAt: now,
         revokedBy: person,
-        revokedBySystem: who.kind === 'system',
+        revokedBySystem: false,
         updatedAt: now,
         updatedBy: person,
         version: sql`${accessReset.version} + 1`,
