@@ -4,6 +4,7 @@ import {
   eq,
   isNotNull,
   isNull,
+  like,
   lt,
   notLike,
   or,
@@ -12,7 +13,11 @@ import {
 import { Secret, TOTP } from 'otpauth';
 import { totpCredential, user, type SessionScope } from '../db/schema/index.js';
 import type { Tx } from '../db/write.js';
-import { ENCRYPTED_PREFIX, type DataKeyRing } from '../keys/data-keys.js';
+import {
+  ENCRYPTED_PREFIX,
+  isEncryptedValue,
+  type DataKeyRing,
+} from '../keys/data-keys.js';
 import { DecryptionError } from '../keys/errors.js';
 import { AuthStateError } from './errors.js';
 import { checkCurrentPassword } from './password-service.js';
@@ -215,7 +220,7 @@ export type EnrolTotpResult =
       /** The `otpauth://` address that holds it, for a QR code. Shown once. */
       readonly otpauthUri: string;
     }
-  /** An authenticator is already confirmed: remove it first. */
+  /** An authenticator is already confirmed, and its secret opens with this ring: remove it first. */
   | { readonly ok: false; readonly reason: 'already-enrolled' };
 
 /**
@@ -223,11 +228,22 @@ export type EnrolTotpResult =
  * unconfirmed, and returns it with the `otpauth://` address once. An earlier
  * secret that was never confirmed is replaced, so the old one stops working.
  * The secret does not count at sign-in until `confirmTotp`. Refuses, writing
- * nothing, when an authenticator is already confirmed, because replacing it
- * would switch the second step off without a password; it has to be removed
- * first (`removeTotp`, which asks for one). The secret is stored sealed with
- * the current key of `dataKeys` and bound to this user's row. Audited as
- * `auth.totp-enrolled`, never with the secret.
+ * nothing, when an authenticator is already confirmed and `dataKeys` can open it,
+ * because replacing it would switch the second step off without a password; it
+ * has to be removed first (`removeTotp`, which asks for one).
+ *
+ * A confirmed secret that `dataKeys` cannot open (its key is gone, or it was changed
+ * or copied from another row) does not block: it is replaced like an unconfirmed one,
+ * and the audit event says why, with the reason `totp-undecryptable`. Nothing is lost
+ * by it, because that secret can no longer check a code at all, and nothing is
+ * given away: the caller already holds a session, which they got with a passkey, a
+ * recovery code or a reset link, while a password alone cannot get past a secret
+ * that cannot be opened (the sign-in answers the same 401 as for a wrong code). This
+ * is how the people whose secrets an accepted loss of the data keys left unusable
+ * set up their authenticator app again (P-09a1, decision D-78).
+ *
+ * The secret is stored sealed with the current key of `dataKeys` and bound to this
+ * user's row. Audited as `auth.totp-enrolled`, never with the secret.
  *
  * @throws AuthStateError `user-not-found` for an unknown or deleted user,
  * `user-disabled` for a disabled one, `installation-missing` before the
@@ -248,11 +264,19 @@ export function enrolTotp(
         throw new AuthStateError('user-disabled');
       }
       const [existing] = await inner
-        .select({ confirmedAt: totpCredential.confirmedAt })
+        .select({
+          confirmedAt: totpCredential.confirmedAt,
+          secret: totpCredential.secret,
+        })
         .from(totpCredential)
         .where(eq(totpCredential.userId, userId));
-      if (existing?.confirmedAt)
-        return { ok: false, reason: 'already-enrolled' };
+      let replacesUnopenable = false;
+      if (existing?.confirmedAt) {
+        if (openSecret(dataKeys, userId, existing.secret) !== null) {
+          return { ok: false, reason: 'already-enrolled' };
+        }
+        replacesUnopenable = true;
+      }
       const [owner] = await inner
         .select({ email: user.email })
         .from(user)
@@ -277,6 +301,9 @@ export function enrolTotp(
           .update(totpCredential)
           .set({
             secret: sealed,
+            // Pending again: a secret that replaces a confirmed one proves itself
+            // with its first code, as any new secret does.
+            confirmedAt: null,
             lastUsedStep: null,
             version: sql`${totpCredential.version} + 1`,
             updatedAt: now,
@@ -290,7 +317,10 @@ export function enrolTotp(
         actor: { type: 'user', id: userId },
         targetType: 'user',
         targetId: userId,
-        details: { replacedPending: existing !== undefined },
+        details: {
+          replacedPending: existing !== undefined && !replacesUnopenable,
+          ...(replacesUnopenable ? { reason: 'totp-undecryptable' } : {}),
+        },
         occurredAt: now,
       });
       const otpauthUri = new TOTP({
@@ -496,6 +526,124 @@ export function removeTotp(
         now,
       });
       return { ok: true };
+    }),
+  );
+}
+
+/** How many authenticator secrets are stored in each state, from `countTotpSecrets`. */
+export type TotpSecretCounts = {
+  /** Stored in the sealed form (`v1.…`), whether or not this server can open it. */
+  readonly sealed: number;
+  /** Still stored as plain base32: an install from before secrets were sealed that has not started since. */
+  readonly plain: number;
+  /** Sealed, and the ring cannot open it (its key is gone, or it was changed or copied). Part of `sealed`. */
+  readonly unopenable: number;
+};
+
+/**
+ * Counts the authenticator secrets by state: sealed, plain, and sealed but not
+ * openable with `dataKeys`. With no ring (`null`: the data keys are gone) every
+ * sealed secret counts as not openable. Each sealed secret is opened to find out
+ * and goes nowhere: only the counts leave, so the admin command line may print
+ * them (CLAUDE.md, Privacy rule: a secret is never returned, logged or audited).
+ * Pending, unconfirmed secrets count like confirmed ones. It writes nothing and
+ * takes no lock, and checks no permission: the command line that calls it is the
+ * operator's, run on the server (decision D-64).
+ *
+ * @throws RecordWriteError when the database refuses the read; it carries the
+ * SQLSTATE only.
+ */
+export function countTotpSecrets(
+  tx: Tx,
+  dataKeys: DataKeyRing | null,
+): Promise<TotpSecretCounts> {
+  return guardedAuth('totp_credential', 'read', async () => {
+    const rows = await tx
+      .select({ userId: totpCredential.userId, secret: totpCredential.secret })
+      .from(totpCredential);
+    let sealed = 0;
+    let plain = 0;
+    let unopenable = 0;
+    for (const row of rows) {
+      if (!isEncryptedValue(row.secret)) {
+        plain += 1;
+        continue;
+      }
+      sealed += 1;
+      if (
+        dataKeys === null ||
+        openSecret(dataKeys, row.userId, row.secret) === null
+      ) {
+        unopenable += 1;
+      }
+    }
+    return { sealed, plain, unopenable };
+  });
+}
+
+/**
+ * Re-seals, with the current key of `dataKeys`, every authenticator secret that an
+ * older key sealed and that `dataKeys` can still open, and answers how many it
+ * re-sealed and how many it could not open. Each is opened and sealed again for its
+ * own user's row, as `enrolTotp` seals one, so it is the same secret under the new
+ * key. A secret that cannot be opened (its key is in no key file, or it was changed
+ * or copied from another row) is left exactly as it is: nothing is guessed and
+ * nothing is lost. One sealed with the current key already, and one still stored as
+ * plain base32, are not touched either.
+ *
+ * Only the admin command `rotate-data-key` calls it, with every server stopped and
+ * the `installation` row held. It rewrites only the `secret` column and
+ * `updated_at`, with a conditional UPDATE on the value it read, in a savepoint, so a
+ * failure leaves no half-re-sealed set. No secret, key or key id is returned or
+ * audited: the caller writes the one event, with the two counts. It checks no
+ * permission (CLAUDE.md, Data rules: the key commands run only with no server using
+ * the database).
+ *
+ * @throws RecordWriteError when the database refuses a write; it carries the
+ * SQLSTATE and constraint name only, never a secret.
+ */
+export function resealTotpSecrets(
+  tx: Tx,
+  input: { dataKeys: DataKeyRing; now: Date },
+): Promise<{ resealed: number; unopenable: number }> {
+  const { dataKeys, now } = input;
+  return guardedAuth('totp_credential', 'update', () =>
+    tx.transaction(async (inner) => {
+      const sealed = await inner
+        .select({
+          id: totpCredential.id,
+          userId: totpCredential.userId,
+          secret: totpCredential.secret,
+        })
+        .from(totpCredential)
+        .where(like(totpCredential.secret, `${ENCRYPTED_PREFIX}%`))
+        .orderBy(asc(totpCredential.id));
+      let resealed = 0;
+      let unopenable = 0;
+      for (const row of sealed) {
+        const plain = openSecret(dataKeys, row.userId, row.secret);
+        if (plain === null) {
+          unopenable += 1;
+          continue;
+        }
+        // The key id is the second part of `v1.<key id>.<nonce>.<ciphertext>`.
+        if (row.secret.split('.')[1] === dataKeys.currentKeyId) continue;
+        const [done] = await inner
+          .update(totpCredential)
+          .set({
+            secret: dataKeys.encrypt(plain, secretAad(row.userId)),
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(totpCredential.id, row.id),
+              eq(totpCredential.secret, row.secret),
+            ),
+          )
+          .returning({ id: totpCredential.id });
+        if (done !== undefined) resealed += 1;
+      }
+      return { resealed, unopenable };
     }),
   );
 }

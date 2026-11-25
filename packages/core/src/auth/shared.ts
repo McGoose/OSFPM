@@ -78,6 +78,26 @@ export const AUTH_AUDIT = {
    * nothing that names a person or a secret (spec, section Cryptography and keys).
    */
   totpSecretsEncrypted: 'auth.totp-secrets-encrypted',
+  /**
+   * The admin command `rotate-data-key` added a data key, made it current and
+   * re-sealed the authenticator secrets that an older key had sealed (P-09a1). Holds
+   * how many it re-sealed and how many it could not open, and no key, key id or
+   * person (spec, section Cryptography and keys).
+   */
+  dataKeyRotated: 'auth.data-key-rotated',
+  /**
+   * The admin command `accept-data-key-loss` made a fresh data key for an install whose
+   * data keys were gone (P-09a1). Holds how many authenticator secrets cannot be opened
+   * and so stay unusable until their people set up again, and no key, key id or person.
+   */
+  dataKeyLossAccepted: 'auth.data-key-loss-accepted',
+  /**
+   * The admin command `new-identity` made a new identity key for an install whose
+   * identity file was lost, and replaced the public key the installation stored (P-09a1).
+   * The server's published identity changed. Holds the old and the new fingerprint, both
+   * public, and never a key file (spec, section Cryptography and keys).
+   */
+  serverIdentityReplaced: 'auth.server-identity-replaced',
   setupCheckFailed: 'auth.setup-check-failed',
   setupCompleted: 'auth.setup-completed',
   userCreated: 'auth.user-created',
@@ -113,6 +133,15 @@ export const AUTH_AUDIT = {
    * `auth.`: it is about a request, not about a login.
    */
   apiCall: 'api.call',
+  /**
+   * A command of the admin command line ran (P-09a1, decision D-64): `info` and
+   * `doctor`, and a key command that found nothing to do or refused. Holds the
+   * command's name, how it ended and counts, and nothing that names a person, a key
+   * or a secret. The third category here that is not under `auth.`: it is about the
+   * operator's tool, not about a login. A key command that changes something
+   * writes an event of its own.
+   */
+  adminCommandRun: 'admin.command-run',
 } as const;
 
 /** Details of an auth audit event: scalar values only, so nothing nested can hide a secret. */

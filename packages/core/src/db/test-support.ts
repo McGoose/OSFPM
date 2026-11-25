@@ -1,9 +1,18 @@
 import { randomBytes } from 'node:crypto';
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { sql } from 'drizzle-orm';
 import { drizzle as drizzlePg } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
 import { createDatabase, type Database, type SchemaDb } from './client.js';
-import { migrate } from './migrate.js';
+import { IN_USE_LOCK_KEY, MIGRATIONS_FOLDER, migrate } from './migrate.js';
 import * as schema from './schema/index.js';
 import type { Tx } from './write.js';
 
@@ -16,10 +25,16 @@ import type { Tx } from './write.js';
 /** A database engine the tests run against: PGlite, or a PostgreSQL server. */
 export type TestTarget = {
   readonly name: 'pglite' | 'postgres';
-  /** Creates an empty, isolated database. Call `cleanup` when finished. */
+  /**
+   * Creates an empty, isolated database. Call `cleanup` when finished. `url` is the
+   * address of a PostgreSQL database, for a test that needs a second connection
+   * pool of its own (a second process, as far as the database can tell); a PGlite
+   * database has none.
+   */
   readonly create: () => Promise<{
     database: Database;
     cleanup: () => Promise<void>;
+    url?: string;
   }>;
 };
 
@@ -80,6 +95,7 @@ function postgresTarget(adminUrl: string): TestTarget {
       };
       return {
         database,
+        url: url.toString(),
         cleanup: async () => {
           beginTeardown();
           // Close every connection to the test database before dropping it.
@@ -105,6 +121,35 @@ export async function createMigratedDatabase(target: TestTarget) {
   const created = await target.create();
   await migrate(created.database);
   return created;
+}
+
+/**
+ * A folder holding only the first `count` migrations of the real set (their files
+ * and a journal that lists them), made under the system's temporary folder, so a
+ * database migrated with it has the others pending. The caller removes `root`.
+ */
+export function partialMigrations(count: number): {
+  readonly folder: string;
+  readonly root: string;
+} {
+  const root = mkdtempSync(join(tmpdir(), 'osfpm-partial-migrations-'));
+  const folder = join(root, 'migrations');
+  mkdirSync(join(folder, 'meta'), { recursive: true });
+  const journal = JSON.parse(
+    readFileSync(join(MIGRATIONS_FOLDER, 'meta', '_journal.json'), 'utf8'),
+  ) as { entries: { tag: string }[] };
+  const entries = journal.entries.slice(0, count);
+  for (const entry of entries) {
+    cpSync(
+      join(MIGRATIONS_FOLDER, `${entry.tag}.sql`),
+      join(folder, `${entry.tag}.sql`),
+    );
+  }
+  writeFileSync(
+    join(folder, 'meta', '_journal.json'),
+    JSON.stringify({ ...journal, entries }),
+  );
+  return { folder, root };
 }
 
 type DriverError = { code?: string; constraint?: string; cause?: unknown };
@@ -136,6 +181,38 @@ export async function failureOf(action: () => PromiseLike<unknown>) {
     return { code: found.code, constraint: found.constraint };
   }
   throw new Error('Expected the statement to fail, but it succeeded');
+}
+
+/**
+ * How many sessions of the test database hold the in-use advisory lock
+ * (`IN_USE_LOCK_KEY`), shared or exclusive: the servers and the command that are
+ * running against it. PostgreSQL only. The API's tests call this, because they
+ * have no `sql` of their own.
+ */
+export async function inUseHolders(db: SchemaDb): Promise<number> {
+  const result = (await db.execute(
+    sql`select count(*)::int as held from pg_locks
+        where locktype = 'advisory'
+          and ((classid::bigint << 32) | objid::bigint) = ${IN_USE_LOCK_KEY}::bigint`,
+  )) as { rows: { held: number }[] };
+  return Number(result.rows[0]!.held);
+}
+
+/**
+ * Ends every session of the test database that holds the in-use advisory lock
+ * (`pg_terminate_backend`), as a restart of the database would, and answers how many
+ * it ended. PostgreSQL only. The API's tests call this, because they have no `sql`
+ * of their own.
+ */
+export async function endInUseHolders(db: SchemaDb): Promise<number> {
+  const result = (await db.execute(
+    sql`select count(*)::int as ended from (
+          select pg_terminate_backend(pid) from pg_locks
+          where locktype = 'advisory'
+            and ((classid::bigint << 32) | objid::bigint) = ${IN_USE_LOCK_KEY}::bigint
+        ) ended`,
+  )) as { rows: { ended: number }[] };
+  return Number(result.rows[0]!.ended);
 }
 
 /** SQLSTATE codes tests expect from `failureOf`. */

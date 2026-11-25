@@ -40,6 +40,7 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - The setup code is the only secret OSFPM prints; it goes to stderr outside the logger.
 - Server keys live only in `OSFPM_KEYS_DIR`, never in the database, logs, errors or events. A secret encrypted at rest carries its key id and is bound to its row with additional authenticated data.
 - A start-up step whose action depends on what the database holds runs inside the `installation` row lock.
+- Admin commands that change keys run only while no server uses the database, and take the `installation` row first. The admin command line prints counts, ids and fingerprints, never a secret, a key id, an address or a database URL.
 - Test fixtures may insert rows directly to set up state. Code under test always writes through the write helper.
 - A helper that writes records needs at least one test for each kind of table it serves (organisation-level, project-level, and the project table itself).
 - Side effects (email, webhooks, notifications, jobs) are only queued inside the write's own transaction; sending happens later in the worker, never in the request path.
@@ -128,6 +129,7 @@ Read-only reference at tag `prototype-final`. Port only what a prompt names.
 - Test on PostgreSQL too: `DATABASE_URL=postgres://user:pass@host:5432/postgres pnpm test`; tests create and drop their own throwaway databases.
 - No local PostgreSQL? See "Run the tests with Docker" in `README.md`.
 - Start the API (development): `OSFPM_DATA_DIR=./data pnpm --filter @osfpm/api start` for PGlite, or `DATABASE_URL=postgres://user:pass@host:5432/dbname pnpm --filter @osfpm/api start` for PostgreSQL; settings are in `packages/api/README.md`
+- Admin command line: `pnpm --dir packages/api admin <command>` (`info`, `doctor`, `rotate-data-key`, `accept-data-key-loss`, `new-identity`); see "Admin command line" in `packages/api/README.md`. Use `--dir`, not `--filter`: `pnpm --filter` turns every failure into exit code 1.
 - Test the API only: `pnpm test packages/api` (it runs on PGlite, and on PostgreSQL too when `DATABASE_URL` is set)
 - Lint: `pnpm lint`
 - Format: `pnpm format` (check only: `pnpm format:check`)

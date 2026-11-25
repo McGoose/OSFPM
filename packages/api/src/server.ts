@@ -4,6 +4,10 @@ import { PermissionSyncError } from '@osfpm/core/src/access/permission-sync.js';
 import { ServerKeysError } from '@osfpm/core/src/keys/errors.js';
 import type { ServerKeys } from '@osfpm/core/src/keys/server-keys.js';
 import { createDatabase, type Database } from '@osfpm/core/src/db/client.js';
+import {
+  DatabaseInUseError,
+  markDatabaseInUse,
+} from '@osfpm/core/src/db/in-use.js';
 import { buildApp, type App } from './app.js';
 import { ConfigError, loadConfig, type Config } from './config.js';
 import { errorClassName, type LoggerSettings } from './logging.js';
@@ -69,8 +73,9 @@ export type RunningServer = {
   readonly ready: Promise<void>;
   /**
    * Ends start-up if it is still going, stops accepting requests, lets
-   * requests in flight finish, closes the app and then the database. Safe to
-   * call more than once: later calls wait for the first.
+   * requests in flight finish, closes the app, lets go of the in-use marker and
+   * closes the database. Safe to call more than once: later calls wait for the
+   * first.
    */
   readonly stop: () => Promise<void>;
 };
@@ -107,13 +112,28 @@ async function quietly(action: () => PromiseLike<unknown>): Promise<void> {
  * stopped. The command-line entry stops it and exits with code 1.
  *
  * A PGlite data directory that cannot be opened fails here, before the server
- * listens, because it is a local fault that no retry will fix.
+ * listens, because it is a local fault that no retry will fix. So does one that
+ * another process has open (`DatabaseInUseError`): the server marks its data
+ * directory with a lock file before it opens it, and never opens a directory that
+ * a running server or an admin command holds. On PostgreSQL the server holds a
+ * shared advisory lock on a connection of its own, outside its pool, for its whole life, which an
+ * admin command that needs every server stopped finds and refuses on; the lock is
+ * taken by start-up, in its retry loop, so a command that is running only makes the
+ * server wait (see `runStartup`).
+ *
+ * If the connection that holds the PostgreSQL lock ends or fails (the database
+ * restarted, or the session was ended), the lock is gone and an admin command could
+ * run beside this server, so it logs one fatal line, shuts down exactly as on SIGTERM
+ * and exits with code 1. The server therefore has to run under a supervisor with a
+ * restart policy; the restart loads the keys again and takes the lock again.
  *
  * The signal listeners stay registered through shutdown. With none left, Node
  * restores the default action, and a second Ctrl+C, or a supervisor sending
  * SIGTERM again, would end the process before the database is closed. A
  * signal that arrives during shutdown is ignored.
  *
+ * @throws DatabaseInUseError when the PGlite data directory is in use by another
+ * process, before anything is opened.
  * @throws The listen or open error, for example when the port is taken, after
  * one log line and closing the database it had opened. Nothing is left running.
  */
@@ -125,7 +145,36 @@ export async function startServer(
   const exit = options.exit ?? ((code: number) => process.exit(code));
   const timeoutMs = options.shutdownTimeoutMs ?? SHUTDOWN_TIMEOUT_MS;
 
-  const database = createDatabase(config.database);
+  // Set by a stop signal, or by the loss of the in-use lock: whichever comes first
+  // decides the exit code, and the other is ignored.
+  let shuttingDown = false;
+  // The PGlite lock file is taken here, before the directory is opened. The
+  // PostgreSQL lock is taken by start-up, in its retry loop, once the server is listening.
+  const inUse = markDatabaseInUse(config.database, 'server', {
+    // Runs only while the lock is held, so the app and `shutDown` exist by then. The
+    // lock is gone with the connection, and an admin command that needs every server
+    // stopped would no longer find this one, so the server stops as on SIGTERM and
+    // exits non-zero: a supervisor restarts it, and a restart loads the keys again.
+    onLost: (error) => {
+      // A stop that a caller asked for has let go of the lock itself, or is about to.
+      if (shuttingDown || stopping !== undefined) return;
+      shuttingDown = true;
+      // The class name only (see `loggerOptions`): the driver's message can hold the
+      // address of the database.
+      app.log.fatal(
+        { err: error },
+        'the connection that marks the database as in use was lost: the server stops and must be restarted',
+      );
+      shutDown(1);
+    },
+  });
+  let database: Database;
+  try {
+    database = createDatabase(config.database);
+  } catch (error) {
+    await quietly(() => inUse.close());
+    throw error;
+  }
   const app = buildApp({
     db: database,
     publicOrigin: config.publicOrigin,
@@ -148,7 +197,7 @@ export async function startServer(
     // SQL, and a PermissionSyncError names organisation ids.
     app.log.fatal({ err: error }, 'the server could not start');
     await quietly(() => app.close());
-    await quietly(() => database.close());
+    await quietly(() => inUse.close(database));
     throw error;
   }
 
@@ -158,7 +207,7 @@ export async function startServer(
   const startup = new AbortController();
   const ready = runStartup(
     app,
-    { autoMigrate: config.autoMigrate, keysDir: config.keysDir },
+    { autoMigrate: config.autoMigrate, keysDir: config.keysDir, inUse },
     options.startupSteps,
     {
       signal: startup.signal,
@@ -182,19 +231,15 @@ export async function startServer(
       try {
         await app.close();
       } finally {
-        await database.close();
+        // The marker lets go of the lock first on PostgreSQL, and removes the lock
+        // file last on PGlite: `close` does each in its order.
+        await inUse.close(database);
       }
     })();
     return stopping;
   };
-  let signalled = false;
-  function onSignal() {
-    if (signalled) {
-      app.log.info('stop signal ignored: already shutting down');
-      return;
-    }
-    signalled = true;
-    app.log.info('stop signal received, shutting down');
+  /** Stops the server and exits with `code`; with 1 instead if shutdown fails or takes too long. */
+  function shutDown(code: 0 | 1) {
     const limit = setTimeout(() => {
       app.log.fatal('shutdown took too long, exiting');
       exit(1);
@@ -204,7 +249,7 @@ export async function startServer(
     stop().then(
       () => {
         clearTimeout(limit);
-        exit(0);
+        exit(code);
       },
       (error: unknown) => {
         clearTimeout(limit);
@@ -212,6 +257,15 @@ export async function startServer(
         exit(1);
       },
     );
+  }
+  function onSignal() {
+    if (shuttingDown) {
+      app.log.info('stop signal ignored: already shutting down');
+      return;
+    }
+    shuttingDown = true;
+    app.log.info('stop signal received, shutting down');
+    shutDown(0);
   }
   for (const signal of SIGNALS) signals.on(signal, onSignal);
 
@@ -224,13 +278,16 @@ export async function startServer(
  * `PermissionSyncError` prints its own message and no stack: it names the
  * permission and the roles to fix, and holds no values. A `ServerKeysError` does
  * the same: its message is fixed text for the operator, and names the path of a
- * key file at most, never a key or what is in a file. Anything else prints
+ * key file at most, never a key or what is in a file. So does a
+ * `DatabaseInUseError`, whose message names the PGlite lock file and the other
+ * process's number and nothing more. Anything else prints
  * the error's class name and system code only, because driver messages can
  * hold connection details and SQL.
  */
 export function describeStartupFailure(error: unknown): string {
   if (error instanceof PermissionSyncError) return error.message;
   if (error instanceof ServerKeysError) return error.message;
+  if (error instanceof DatabaseInUseError) return error.message;
   const code = (error as { code?: unknown } | null)?.code;
   return `The server could not start: ${errorClassName(error)}${typeof code === 'string' ? ` (${code})` : ''}`;
 }

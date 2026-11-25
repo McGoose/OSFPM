@@ -20,6 +20,16 @@ export const MIGRATIONS_FOLDER = fileURLToPath(
 export const MIGRATION_LOCK_KEY = BigInt('0x4f5346504d4d4947').toString();
 
 /**
+ * The PostgreSQL advisory lock that marks a database as in use (`in-use.ts`): the
+ * ASCII of `OSFPMUSE`, in the same style as `MIGRATION_LOCK_KEY`, so the two keys
+ * never meet. Every server holds it shared for its whole life, and a command that
+ * changes what a running server keeps in memory holds it exclusive while it runs,
+ * so the two exclude each other. Nothing else in OSFPM takes this key. A string
+ * for the same reason as `MIGRATION_LOCK_KEY`.
+ */
+export const IN_USE_LOCK_KEY = BigInt('0x4f5346504d555345').toString();
+
+/**
  * Applies all pending migrations. The same migration set serves both drivers.
  * Migrations are forward-only: never edit one that has been applied (CLAUDE.md,
  * Data rules). A failing statement is thrown as the driver reports it.
