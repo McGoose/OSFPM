@@ -348,7 +348,7 @@ function revokeSessionsRequest(values: Values): RevokeSessionsRequest {
   return {
     command: 'revoke-sessions',
     target: person ?? { kind: 'all' },
-    includeApiTokens: values['include-api-tokens'] === true,
+    includeApiTokens: false,
   };
 }
 

@@ -73,9 +73,7 @@ export function revokeSessionsOfPerson(
     const found = await findAdminPerson(tx, person);
     if (found === undefined) return null;
     try {
-      if (found.id === '') {
-        await lockUser(tx, found.id, { strength: 'update' });
-      }
+      await lockUser(tx, found.id, { strength: 'update' });
     } catch (error) {
       // Deleted since the first look.
       if (error instanceof AuthStateError) return null;
