@@ -26,7 +26,7 @@ import { createTestKeyDirectory } from '@osfpm/core/src/keys/test-support.js';
 import type { Config } from '../config.js';
 import { startServer } from '../server.js';
 import type { StartupSteps } from '../startup.js';
-import { roleOf } from './run.js';
+import { roleOf } from './session.js';
 import { runCommand } from './test-support.js';
 import type { DoctorReport } from './doctor.js';
 

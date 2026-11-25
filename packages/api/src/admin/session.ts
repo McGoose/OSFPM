@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import type { AdminCommand } from '@osfpm/core/src/auth/admin-report.js';
 import { ServerKeysError } from '@osfpm/core/src/keys/errors.js';
 import { createDatabase, type Database } from '@osfpm/core/src/db/client.js';
 import {
@@ -97,6 +98,37 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 /** True when the data directory setting names a folder PGlite would use, as opposed to `memory://`. */
 function isFolder(dataDir: string): boolean {
   return !/^[a-z][a-z0-9+.-]*:\/\//i.test(dataDir);
+}
+
+/**
+ * How a command uses the database, as the role it marks the database in use with
+ * (decisions D-64 and D-81). The key commands (`rotate-data-key`,
+ * `accept-data-key-loss`, `new-identity`) change what a running server keeps in
+ * memory, so they are `offline-command` and need every server stopped. The three
+ * that only write rows a running server writes too, under the same locks
+ * (`emergency-access`, `revoke-sessions`, `run-cleanups`), are `online-command`;
+ * `info` and `doctor` only read, so they are `read-only-command`. Those two roles take
+ * no lock on PostgreSQL, so they run beside servers. On PGlite every role takes the
+ * lock file, because two processes never open one data directory.
+ *
+ * Every command asks here (`run.ts`, and `doctor.ts` for itself); no command names a
+ * role of its own. The switch has no default, so a command added to `ADMIN_COMMANDS`
+ * does not compile until it is given a role here.
+ */
+export function roleOf(command: AdminCommand): InUseRole {
+  switch (command) {
+    case 'rotate-data-key':
+    case 'accept-data-key-loss':
+    case 'new-identity':
+      return 'offline-command';
+    case 'emergency-access':
+    case 'revoke-sessions':
+    case 'run-cleanups':
+      return 'online-command';
+    case 'info':
+    case 'doctor':
+      return 'read-only-command';
+  }
 }
 
 /**

@@ -25,6 +25,7 @@ import {
 import {
   describeFailure,
   openAdminSession,
+  roleOf,
   type AdminContext,
   type AdminSession,
 } from './session.js';
@@ -376,7 +377,7 @@ export async function runDoctor(
 
       // 2. The database, marked as in use for a read.
       try {
-        session = await openAdminSession(config, context, 'read-only-command');
+        session = await openAdminSession(config, context, roleOf('doctor'));
         record('database', {
           status: 'ok',
           reason: `it answers (${config.database.driver})`,
