@@ -8,9 +8,18 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs';
+import { createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import { createDatabase, type Database } from './client.js';
 import {
   DatabaseInUseError,
@@ -37,6 +46,23 @@ function sleepingProcess(): ChildProcess {
   return spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
     stdio: 'ignore',
   });
+}
+
+/**
+ * A port of this machine that nothing listens on: the system picks a free one, which is
+ * then given back. A fixed port could be taken by something the machine runs.
+ */
+async function closedPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const { port } = server.address() as AddressInfo;
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+  return port;
 }
 
 /** The number of a process that has run and ended, so no process has it now. */
@@ -245,17 +271,18 @@ describe('the lock file of a PGlite data directory', () => {
 });
 
 describe('which roles take the PostgreSQL lock', () => {
-  // Port 1 of this machine, where nothing listens: a role that tries to take the lock
+  // A port of this machine where nothing listens: a role that tries to take the lock
   // opens a connection and is refused, so what the marker does shows without a server.
-  const config = {
-    driver: 'postgres',
-    url: 'postgres://osfpm:none@127.0.0.1:1/none',
-  } as const;
+  let url: string;
+  beforeAll(async () => {
+    url = `postgres://osfpm:none@127.0.0.1:${await closedPort()}/none`;
+  });
+  const config = () => ({ driver: 'postgres', url }) as const;
 
   it.each(['online-command', 'read-only-command'] as const)(
     'takes none for the %s role, which runs beside servers: it never opens the lock connection',
     async (role) => {
-      const marker = markDatabaseInUse(config, role);
+      const marker = markDatabaseInUse(config(), role);
 
       await expect(marker.attach()).resolves.toBeUndefined();
       await marker.close();
@@ -265,7 +292,7 @@ describe('which roles take the PostgreSQL lock', () => {
   it.each(['server', 'offline-command'] as const)(
     'takes it for the %s role, which is what makes the case above prove something',
     async (role) => {
-      const marker = markDatabaseInUse(config, role);
+      const marker = markDatabaseInUse(config(), role);
 
       await expect(marker.attach()).rejects.toMatchObject({
         code: 'ECONNREFUSED',
