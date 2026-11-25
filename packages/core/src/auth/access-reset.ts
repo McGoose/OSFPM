@@ -529,7 +529,9 @@ function judgeLink(
   },
 ): Promise<RuleFailure | null> {
   if (link.issuedBySystem) {
-    return checkSystemRules(tx, link.organisationId, link.userId);
+    return checkSystemRules(tx, link.organisationId, link.userId).then(
+      (failure) => (failure?.rule === 'not-administrator' ? null : failure),
+    );
   }
   // A person's link names who made it (`access_reset_issuer_check`), so a row with
   // no creator and no system flag cannot exist; were one made by hand, nobody could
@@ -791,9 +793,7 @@ function makeLink(
   const judge = (handle: Tx) =>
     issuer.kind === 'user'
       ? checkRules(handle, issuer.userId, organisationId, userId)
-      : checkSystemRules(handle, organisationId, userId).then((failure) =>
-          failure?.rule === 'not-administrator' ? null : failure,
-        );
+      : checkSystemRules(handle, organisationId, userId);
   // A savepoint: a failure leaves no link, no revocation and no event.
   return tx.transaction(async (inner) => {
     // An id that is not shaped like one is nobody's: the same denial.
