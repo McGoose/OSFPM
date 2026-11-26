@@ -36,14 +36,17 @@ export type ApiTokenAccess = (typeof API_TOKEN_ACCESS)[number];
  * token; `switch-off` is the organisation turning off personal tokens, or the
  * sensitive scope; `access-reset` is an admin reset link being used for the owner;
  * `membership-ended` is the owner's membership ending (the member removal of P-04b
- * writes it; until then a token whose membership is not active simply fails). The
- * CHECK is built from this list, so a new value needs a new migration.
+ * writes it; until then a token whose membership is not active simply fails);
+ * `admin-action` is the admin command `revoke-sessions --include-api-tokens` ending
+ * the owner's tokens (P-09a2, decision D-81). The CHECK is built from this list, so
+ * a new value needs a new migration.
  */
 export const API_TOKEN_REVOKE_REASONS = [
   'manual',
   'switch-off',
   'access-reset',
   'membership-ended',
+  'admin-action',
 ] as const;
 /** One value of `API_TOKEN_REVOKE_REASONS`. */
 export type ApiTokenRevokeReason = (typeof API_TOKEN_REVOKE_REASONS)[number];
@@ -76,8 +79,8 @@ export type ApiTokenRevokeReason = (typeof API_TOKEN_REVOKE_REASONS)[number];
  * days. `last_used_at` is written at most once a minute. A token is revoked, never
  * un-revoked: `revoked_at` and `revoke_reason` are set together; `revoked_by` is the
  * person who did it, required for a `manual` revocation (`api_token_manual_revoker_check`)
- * and NULL for the reasons the server acts on its own (`access-reset`, `membership-ended`),
- * so the reason and the audit trail say why and who.
+ * and NULL for the reasons the server acts on its own (`access-reset`, `membership-ended`,
+ * `admin-action`), so the reason and the audit trail say why and who.
  *
  * A security table: only `auth/api-tokens.ts` writes it, directly, and every change is
  * audited instead of change-logged (CLAUDE.md, Data rules). It is the third security
@@ -169,7 +172,7 @@ export const apiToken = securityTable(
       sql`${t.revokeReason} is null or ${t.revokeReason} in (${sqlList(API_TOKEN_REVOKE_REASONS)})`,
     ),
     // Only a revoked token has a revoker, and a manual revocation always names one.
-    // The three reasons the server acts on its own may leave it empty.
+    // The reasons the server acts on its own may leave it empty.
     check(
       'api_token_revoker_check',
       sql`${t.revokedBy} is null or ${t.revokedAt} is not null`,

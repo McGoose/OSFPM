@@ -10,10 +10,11 @@ import type { App } from '../app.js';
 /**
  * What the server does about first-run setup (SC-10, decision D-56) each time it
  * starts: make sure the `installation` row exists and, until the first
- * administrator has been created, issue a setup code to print. The code is the
- * only secret OSFPM ever prints, and it goes to standard error, outside the
- * JSON logger (see `runStartup`). The logger must keep masking codes; nothing
- * here asks it to let one through.
+ * administrator has been created, issue a setup code to print. The code is one
+ * of the two secrets OSFPM ever prints (the other is the emergency access link of
+ * the admin command line), and it goes to standard error, outside the JSON
+ * logger (see `runStartup`). The logger must keep masking codes; nothing here
+ * asks it to let one through.
  */
 
 /**

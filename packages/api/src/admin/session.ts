@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import type { AdminCommand } from '@osfpm/core/src/auth/admin-report.js';
 import { ServerKeysError } from '@osfpm/core/src/keys/errors.js';
 import { createDatabase, type Database } from '@osfpm/core/src/db/client.js';
 import {
@@ -100,13 +101,46 @@ function isFolder(dataDir: string): boolean {
 }
 
 /**
- * Opens the database of `config` for a command and marks it as in use for `role`
- * (`markDatabaseInUse`): an `offline-command` takes the exclusive lock on PostgreSQL
- * and refuses at once if a server holds it; a `read-only-command` takes none there;
- * on PGlite both take the lock file, because two processes must never open one data
- * directory. The command line never makes a database: a PGlite directory with no
- * database in it is refused, so a mistyped path does not make an empty one. It asks
- * the database the time, which is also the check that it answers.
+ * How a command uses the database, as the role it marks the database in use with
+ * (decisions D-64 and D-81). The key commands (`rotate-data-key`,
+ * `accept-data-key-loss`, `new-identity`) change what a running server keeps in
+ * memory, so they are `offline-command` and need every server stopped. The three
+ * that only write rows a running server writes too, under the same locks
+ * (`emergency-access`, `revoke-sessions`, `run-cleanups`), are `online-command`;
+ * `info` and `doctor` only read, so they are `read-only-command`. Those two roles take
+ * no lock on PostgreSQL, so they run beside servers. On PGlite every role takes the
+ * lock file, because two processes never open one data directory.
+ *
+ * `openAdminSession` asks here for the command it is given, so no caller chooses a
+ * role. The switch has no default, so a command added to `ADMIN_COMMANDS` does not
+ * compile until it is given a role here.
+ */
+export function roleOf(command: AdminCommand): InUseRole {
+  switch (command) {
+    case 'rotate-data-key':
+    case 'accept-data-key-loss':
+    case 'new-identity':
+      return 'offline-command';
+    case 'emergency-access':
+    case 'revoke-sessions':
+    case 'run-cleanups':
+      return 'online-command';
+    case 'info':
+    case 'doctor':
+      return 'read-only-command';
+  }
+}
+
+/**
+ * Opens the database of `config` for `command` and marks it as in use with that
+ * command's role (`roleOf`, `markDatabaseInUse`): an `offline-command` takes the
+ * exclusive lock on PostgreSQL and refuses at once if a server holds it; an
+ * `online-command` and a `read-only-command` take none there; on PGlite every role
+ * takes the lock file, because two processes must never open one data directory. It
+ * takes the command and not a role, so no caller can choose how it marks the database
+ * (decisions D-64 and D-81). The command line never makes a database: a PGlite
+ * directory with no database in it is refused, so a mistyped path does not make an
+ * empty one. It asks the database the time, which is also the check that it answers.
  *
  * @throws AdminRefusal when a PGlite directory holds no database.
  * @throws DatabaseInUseError when another process has the database.
@@ -116,7 +150,7 @@ function isFolder(dataDir: string): boolean {
 export async function openAdminSession(
   config: Config,
   context: AdminContext,
-  role: InUseRole,
+  command: AdminCommand,
 ): Promise<AdminSession> {
   const target = config.database;
   if (
@@ -129,7 +163,7 @@ export async function openAdminSession(
       'No database was found in OSFPM_DATA_DIR. Start the server once to make it, then run the command again.',
     );
   }
-  const marker = markDatabaseInUse(target, role);
+  const marker = markDatabaseInUse(target, roleOf(command));
   const database = context.database ?? createDatabase(target);
   let closed = false;
   const close = async () => {
@@ -176,13 +210,22 @@ export async function requireMigrated(
 }
 
 /**
+ * What an error is called in a message the operator reads: the class name and the
+ * short system code or SQLSTATE, as in `RecordWriteError (42P01)`, and nothing else,
+ * because a driver's message can hold the connection's address, a user name or SQL
+ * (CLAUDE.md, Privacy rule), and `DATABASE_URL` holds a password.
+ */
+export function failureDetail(error: unknown): string {
+  const code = codeOf(error);
+  return `${errorClassName(error)}${code === undefined ? '' : ` (${code})`}`;
+}
+
+/**
  * What to tell the operator about a failure, on one line or a few. A refusal, an
  * in-use error, a key refusal and an invalid configuration carry fixed text written
  * for the operator (the configuration's names the variables and the rules, never a
  * value), and that is printed. Anything else is the error's class name and its short
- * system code and nothing else, because a driver's message can hold the
- * connection's address, a user name or SQL (CLAUDE.md, Privacy rule), and
- * `DATABASE_URL` holds a password.
+ * system code and nothing else (`failureDetail`).
  */
 export function describeFailure(error: unknown): string {
   if (
@@ -193,8 +236,7 @@ export function describeFailure(error: unknown): string {
   ) {
     return error.message;
   }
-  const code = codeOf(error);
-  const detail = `${errorClassName(error)}${code === undefined ? '' : ` (${code})`}`;
+  const detail = failureDetail(error);
   return isDatabaseUnreachable(error)
     ? `The database could not be reached: ${detail}.`
     : `The command failed: ${detail}.`;

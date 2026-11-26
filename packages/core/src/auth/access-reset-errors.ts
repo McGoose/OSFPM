@@ -3,7 +3,8 @@ import { RecordStateError } from '../db/write.js';
 /**
  * Why a reset link step was refused. The first four say why a token is no good; the
  * rest are the rules for who may reset whom (SC-10, decision D-57), checked again
- * when the link is used. All of them are for the audit trail alone: a caller is
+ * when the link is used, and the last is a rule only a link the system issued has
+ * (P-09a2, decision D-81). All of them are for the audit trail alone: a caller is
  * given one answer for every one of them (`AccessResetInvalidError`), so it learns
  * nothing about which it was, and nothing about the person the link is for.
  */
@@ -12,7 +13,10 @@ export const ACCESS_RESET_REFUSAL_REASONS = [
   'expired',
   'revoked',
   'used',
-  /** The person who made the link no longer holds `members:reset-access`, or can no longer sign in. */
+  /**
+   * The person who made the link no longer holds `members:reset-access`, or can no
+   * longer sign in. A link the system issued has no creator and never gives this.
+   */
   'creator-not-allowed',
   /** The person is no longer a member of the organisation. */
   'target-not-member',
@@ -28,6 +32,11 @@ export const ACCESS_RESET_REFUSAL_REASONS = [
   'target-not-active',
   /** The person's membership of the organisation was removed, or is still only an invitation. */
   'target-membership-not-active',
+  /**
+   * A link the system issued, for a person who is no longer an owner of the
+   * organisation and no longer holds its managed Administrator role (decision D-81, E2).
+   */
+  'not-an-administrator',
 ] as const;
 /** One value of `ACCESS_RESET_REFUSAL_REASONS`. */
 export type AccessResetRefusalReason =

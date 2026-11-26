@@ -376,7 +376,7 @@ export async function runDoctor(
 
       // 2. The database, marked as in use for a read.
       try {
-        session = await openAdminSession(config, context, 'read-only-command');
+        session = await openAdminSession(config, context, 'doctor');
         record('database', {
           status: 'ok',
           reason: `it answers (${config.database.driver})`,

@@ -1002,11 +1002,16 @@ async function revokeLiveTokens(
 /**
  * Revokes every live token of one person, in any organisation, with the reason given, and
  * returns how many. For an admin reset link being used (`access-reset`, in
- * `useAccessReset`, in the same transaction and counted in its audit event) and, when
- * member management comes (P-04b), for a membership that ends (`membership-ended`). A
- * person whose access was reset, or who left, must not keep a script that still works.
- * Writes no audit event of its own, and checks no permission: the caller has decided, and
- * records the count. Never touches a token that is already revoked or past its end.
+ * `useAccessReset`, in the same transaction and counted in its audit event), for the
+ * admin command `revoke-sessions --include-api-tokens` (`admin-action`, recorded by
+ * `revokeSessionsOfPerson` as one `auth.api-tokens-revoked` event; P-09a2, decision
+ * D-81) and, when member management comes
+ * (P-04b), for a membership that ends (`membership-ended`). A person whose access was
+ * reset, or who left, must not keep a script that still works. Writes no audit event of
+ * its own, and checks no permission: the caller has decided, and records the count.
+ * Never touches a token that is already revoked or past its end. The caller holds the
+ * person's user row `FOR UPDATE` (CLAUDE.md, Data rules), and the token rows are locked
+ * here in id order.
  *
  * TODO(P-04b): member removal calls this with `membership-ended`. Until then a token whose
  * owner's membership is not active simply fails (`authenticateApiToken`), which stops it
@@ -1018,12 +1023,41 @@ async function revokeLiveTokens(
 export function revokeApiTokensOfUser(
   tx: Tx,
   userId: string,
-  reason: Extract<ApiTokenRevokeReason, 'access-reset' | 'membership-ended'>,
+  reason: Extract<
+    ApiTokenRevokeReason,
+    'access-reset' | 'membership-ended' | 'admin-action'
+  >,
   now: Date,
 ): Promise<number> {
   return guardedAuth('api_token', 'update', () =>
     revokeLiveTokens(tx, eq(apiToken.userId, userId), reason, null, now),
   );
+}
+
+/**
+ * The ids of the users, in id order and each once, who have a personal API token that
+ * still works at `now` (`liveAt`: not revoked, not past its end), in any organisation,
+ * without the ones whose account is deleted: a deleted account cannot sign in, so its
+ * tokens work for no one (`authenticateApiToken`). For the admin command
+ * `revoke-sessions --all --include-api-tokens` (P-09a2, decision D-81), which then
+ * revokes each person's tokens in a transaction of their own (`revokeApiTokensOfUser`).
+ * A read, which takes no lock. Checks no permission: only the command line calls it.
+ *
+ * @throws RecordWriteError when the database refuses a read; it carries the SQLSTATE only.
+ */
+export function listUsersWithLiveApiTokens(
+  tx: Tx,
+  now: Date,
+): Promise<string[]> {
+  return guardedAuth('api_token', 'select', async () => {
+    const rows = await tx
+      .selectDistinct({ id: apiToken.userId })
+      .from(apiToken)
+      .innerJoin(user, eq(user.id, apiToken.userId))
+      .where(and(isNull(user.deletedAt), liveAt(now)))
+      .orderBy(asc(apiToken.userId));
+    return rows.map((row) => row.id);
+  });
 }
 
 /**

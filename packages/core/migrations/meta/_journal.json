@@ -281,6 +281,13 @@
       "when": 1795480534026,
       "tag": "0039_contract_terms",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1795619831799,
+      "tag": "0040_system_reset_links",
+      "breakpoints": true
     }
   ]
 }

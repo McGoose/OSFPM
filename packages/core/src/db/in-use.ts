@@ -29,17 +29,22 @@ import { IN_USE_LOCK_KEY } from './migrate.js';
  *   directory (tried with 0.5.16: the second process opened it and ran queries
  *   while the first held it open), so a lock file, `PGLITE_LOCK_FILE`, holds the
  *   number of the process that has the directory. Every role takes it, a
- *   read-only command too, because two processes must never open one directory.
+ *   command that only reads or only writes rows too, because two processes must
+ *   never open one directory.
  */
 
 /**
  * What a process does with the database. `server` serves requests and may run
  * beside other servers. `offline-command` changes what a running server holds in
- * memory, so no server may run beside it. `read-only-command` only reads, so on
- * PostgreSQL it runs beside servers (on PGlite it still needs the directory to
- * itself).
+ * memory, so no server may run beside it. `online-command` changes nothing a
+ * running server holds in memory, but it writes rows that a server writes too, under
+ * the same locks (the admin commands `emergency-access`, `revoke-sessions` and
+ * `run-cleanups`, P-09a2, decision D-81). `read-only-command` only reads (`info` and
+ * `doctor`). So on PostgreSQL the last two run beside servers and take no lock (on
+ * PGlite every role still needs the directory to itself).
  */
-export type InUseRole = 'server' | 'offline-command' | 'read-only-command';
+export type InUseRole =
+  'server' | 'offline-command' | 'online-command' | 'read-only-command';
 
 /** The name of the lock file inside a PGlite data directory. */
 export const PGLITE_LOCK_FILE = 'osfpm.lock';
@@ -293,9 +298,9 @@ async function takePostgresLock(
 export type InUseMarker = {
   /**
    * On PostgreSQL it takes the advisory lock on a connection of its own (a no-op for
-   * a read-only command, and when the marker is held already); on PGlite there is
-   * nothing left to do, because the lock file was taken before the directory was
-   * opened.
+   * a read-only or an online command, and when the marker is held already); on
+   * PGlite there is nothing left to do, because the lock file was taken before the
+   * directory was opened.
    *
    * @throws DatabaseInUseError when another process holds the lock the wrong way
    * round. The driver's own errors, such as an unreachable host, are thrown as they
@@ -321,8 +326,8 @@ export type InUseMarker = {
  * nothing happens until `attach`, which opens the lock's own connection.
  *
  * The server calls it with `server` and the admin command line with
- * `offline-command` or `read-only-command`; a read-only command on PostgreSQL
- * takes no lock.
+ * `offline-command`, `online-command` or `read-only-command`; the last two take
+ * no lock on PostgreSQL.
  *
  * @param options.onLost PostgreSQL only: called, once, with the error, when the
  * connection that holds the lock ends or fails. The lock is gone then, and a command
@@ -364,7 +369,14 @@ export function markDatabaseInUse(
   let closed = false;
   return {
     attach: async () => {
-      if (closed || held !== undefined || role === 'read-only-command') return;
+      if (
+        closed ||
+        held !== undefined ||
+        role === 'online-command' ||
+        role === 'read-only-command'
+      ) {
+        return;
+      }
       const taken = await takePostgresLock(
         connectionString,
         role === 'server' ? 'shared' : 'exclusive',

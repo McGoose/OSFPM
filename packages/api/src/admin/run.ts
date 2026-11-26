@@ -1,5 +1,3 @@
-import type { AdminCommand } from '@osfpm/core/src/auth/admin-report.js';
-import type { InUseRole } from '@osfpm/core/src/db/in-use.js';
 import { loadConfig } from '../config.js';
 import {
   parseAdminArguments,
@@ -8,6 +6,7 @@ import {
   type AdminRequest,
 } from './args.js';
 import { runDoctor } from './doctor.js';
+import { runEmergencyAccess } from './emergency-access.js';
 import { runInfo } from './info.js';
 import {
   NEW_IDENTITY_NEEDS_CONFIRMATION,
@@ -15,6 +14,8 @@ import {
   runNewIdentity,
   runRotateDataKey,
 } from './key-commands.js';
+import { runRevokeSessions } from './revoke-sessions.js';
+import { runCleanups } from './run-cleanups.js';
 import {
   describeFailure,
   openAdminSession,
@@ -37,34 +38,13 @@ import {
 /** The exit codes: 0 done, 1 refused or failed, 2 the arguments were wrong. */
 export const EXIT = { done: 0, refused: 1, usage: 2 } as const;
 
-/**
- * The commands that need every server stopped, because they change what a running
- * server keeps in memory. The others only read.
- */
-const OFFLINE_COMMANDS: ReadonlySet<AdminCommand> = new Set([
-  'rotate-data-key',
-  'accept-data-key-loss',
-  'new-identity',
-]);
-
-/** How the command uses the database: it needs the server stopped, or it only reads. */
-function roleOf(command: AdminCommand): InUseRole {
-  return OFFLINE_COMMANDS.has(command)
-    ? 'offline-command'
-    : 'read-only-command';
-}
-
 /** Runs a command that needs the database to be open, in use, answering and migrated. */
 async function runGuarded(
   request: AdminRequest,
   context: AdminContext,
 ): Promise<number> {
   const config = loadConfig(context.env);
-  const session = await openAdminSession(
-    config,
-    context,
-    roleOf(request.command),
-  );
+  const session = await openAdminSession(config, context, request.command);
   try {
     const migrations = await requireMigrated(session.database);
     switch (request.command) {
@@ -80,6 +60,12 @@ async function runGuarded(
         return await runAcceptDataKeyLoss(config, session, context);
       case 'new-identity':
         return await runNewIdentity(config, session, context);
+      case 'emergency-access':
+        return await runEmergencyAccess(request, config, session, context);
+      case 'revoke-sessions':
+        return await runRevokeSessions(request, session, context);
+      case 'run-cleanups':
+        return await runCleanups(session, context);
       default:
         // The parser only answers commands that have a case here.
         throw new Error('The command has no implementation');

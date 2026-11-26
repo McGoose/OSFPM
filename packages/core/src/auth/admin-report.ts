@@ -1,7 +1,13 @@
-import { count, isNotNull, isNull } from 'drizzle-orm';
-import { installation, organisation, user } from '../db/schema/index.js';
+import { and, count, eq, isNotNull, isNull, type SQL } from 'drizzle-orm';
+import {
+  installation,
+  organisation,
+  user,
+  type UserStatus,
+} from '../db/schema/index.js';
 import type { Tx } from '../db/write.js';
 import { publicKeyFingerprint } from '../keys/identity.js';
+import { normaliseEmail } from './login-user.js';
 import {
   AUTH_AUDIT,
   guardedAuth,
@@ -14,7 +20,10 @@ import {
  * database about an installation, and the one audit event it writes for a command
  * that changes nothing. Only counts, the installation's id, dates and the public
  * key's fingerprint leave here: no name, no address and no key (CLAUDE.md,
- * Privacy rule). The commands that change keys are in `server-key-admin.ts`.
+ * Privacy rule). `findAdminPerson` turns what an operator types to name a person
+ * into an account, as an id and a status. The commands that change keys are in
+ * `server-key-admin.ts`, the one that makes emergency access links is in
+ * `emergency-access.ts` and the one that ends sessions is in `admin-sessions.ts`.
  */
 
 /** The commands of the admin command line, as the audit trail names them. */
@@ -24,6 +33,9 @@ export const ADMIN_COMMANDS = [
   'rotate-data-key',
   'accept-data-key-loss',
   'new-identity',
+  'emergency-access',
+  'revoke-sessions',
+  'run-cleanups',
 ] as const;
 
 /** One of `ADMIN_COMMANDS`. */
@@ -109,6 +121,78 @@ export function readInstallationFacts(tx: Tx): Promise<InstallationFacts> {
       organisations: organisations?.total ?? 0,
       users: { ...users, deleted: deleted?.total ?? 0 },
     };
+  });
+}
+
+/**
+ * The id of this installation, or null before the server has made it: what a command
+ * that writes its own event needs to name the installation as that event's target,
+ * without the counts `readInstallationFacts` reads. A read, which takes no lock; it
+ * checks no permission (decision D-64).
+ *
+ * @throws RecordWriteError when the database refuses a read; it carries the
+ * SQLSTATE and constraint name only.
+ */
+export function readInstallationId(tx: Tx): Promise<string | null> {
+  return guardedAuth('installation', 'read', async () => {
+    const [row] = await tx
+      .select({ id: installation.id })
+      .from(installation)
+      .limit(1);
+    return row?.id ?? null;
+  });
+}
+
+/**
+ * How an operator names a person on the admin command line: the address, as typed, or
+ * the id of the account. The address is compared as the login services compare it
+ * (trimmed and in lower case), and is never printed, logged or audited.
+ */
+export type AdminPerson =
+  | { readonly kind: 'email'; readonly email: string }
+  | { readonly kind: 'user'; readonly userId: string };
+
+/** The account an operator named: its id and status, and nothing else about the person. */
+export type FoundPerson = {
+  readonly id: string;
+  readonly status: UserStatus;
+};
+
+/** What a UUID looks like, so a value that is not one never reaches a `uuid` column. */
+const UUID_SHAPE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Finds the account an operator named, or `undefined` for an address no one has, an id
+ * no one has, text that is not an id, and an account that was deleted, with one answer
+ * for all. A disabled or invited account is found: it is the caller that refuses it,
+ * with its own reason. Lists the columns it needs and never selects the whole row
+ * (CLAUDE.md, Data rules), so no name and no address leaves here. A read, which takes
+ * no lock; the caller locks the row where it matters. Checks no permission: the
+ * command line is the operator's (decision D-64).
+ *
+ * @throws RecordWriteError when the database refuses a read; it carries the
+ * SQLSTATE only, never the address.
+ */
+export function findAdminPerson(
+  tx: Tx,
+  person: AdminPerson,
+): Promise<FoundPerson | undefined> {
+  return guardedAuth('user', 'select', async () => {
+    let match: SQL;
+    if (person.kind === 'email') {
+      match = eq(user.email, normaliseEmail(person.email));
+    } else if (UUID_SHAPE.test(person.userId)) {
+      match = eq(user.id, person.userId);
+    } else {
+      return undefined;
+    }
+    const [row] = await tx
+      .select({ id: user.id, status: user.status })
+      .from(user)
+      .where(and(match, isNull(user.deletedAt)))
+      .limit(1);
+    return row;
   });
 }
 

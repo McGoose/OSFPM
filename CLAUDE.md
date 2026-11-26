@@ -37,10 +37,11 @@ Monorepo under `packages/`: `core`, `api`, `worker`, one package per module, `sd
 - Tables in `SECURITY_TABLES` are written only by the folder their declaration names: the auth service, unless the table declares another in code with a one-line reason (`access_grant`: the sensitive service). Never through the write helper; their changes are audited, not change-logged. `tableWriters()` in `db/columns.ts` is the one record of who writes each security and service-written table, and `write-helper-scan.test.ts` fails on a write from any other folder.
 - A security table has no `organisation_id`, except one that declares `organisationScoped` in code (`invite`, `access_reset`, `api_token` and `access_grant`, and the child of `invite`, `invite_role`): the composite keys that keep an invite and its roles, a reset link and its person's membership, a token and its owner's membership and project, or a grant and its project, person and role, inside one organisation need the column. The write helper still refuses them.
 - `user`, `installation`, `user_access_profile` and `user_preferences` are install-level tables, written only by the core service declared for each in `SERVICE_WRITTEN_TABLES` (the auth service for the first two, which also does first-run setup; the sensitive service for the profile; the preferences service for the preferences), never through the write helper; their changes are audited, not change-logged.
-- The setup code is the only secret OSFPM prints; it goes to stderr outside the logger.
+- The setup code and the emergency access link are the only secrets OSFPM prints; both go to stderr outside the logger.
 - Server keys live only in `OSFPM_KEYS_DIR`, never in the database, logs, errors or events. A secret encrypted at rest carries its key id and is bound to its row with additional authenticated data.
 - A start-up step whose action depends on what the database holds runs inside the `installation` row lock.
-- Admin commands that change keys run only while no server uses the database, and take the `installation` row first. The admin command line prints counts, ids and fingerprints, never a secret, a key id, an address or a database URL.
+- Admin commands that change keys run only while no server uses the database, and take the `installation` row first. The admin command line prints counts, ids and fingerprints. It never prints a secret, a key id, an address or a database URL; the one exception is the emergency access link, which goes to stderr.
+- Admin command messages never repeat what the operator typed. A secret is printed only after the transaction that makes it has committed.
 - Test fixtures may insert rows directly to set up state. Code under test always writes through the write helper.
 - A helper that writes records needs at least one test for each kind of table it serves (organisation-level, project-level, and the project table itself).
 - Side effects (email, webhooks, notifications, jobs) are only queued inside the write's own transaction; sending happens later in the worker, never in the request path.
@@ -110,6 +111,7 @@ Only the fictional demo production _The Last Withdrawal_ or invented data. Never
 - If `node -v` does not match `.nvmrc`, or `pnpm` will not run, stop and tell the maintainer. Do not run the tools another way.
 - Ask before any change not listed in the prompt, and before adding any dependency the prompt does not name.
 - Read only the files a task needs; do not explore the repo for context.
+- Push branches by literal name. Never build a push refspec from a shell variable: an empty one deletes a remote branch.
 - Open the PR; never merge it.
 - After a PR merges: GitHub deletes the remote branch automatically; delete the local branch with `git branch -d`.
 - Report back after every prompt: what was done, anything surprising, and rules you think are missing (as questions, not edits).
@@ -129,7 +131,7 @@ Read-only reference at tag `prototype-final`. Port only what a prompt names.
 - Test on PostgreSQL too: `DATABASE_URL=postgres://user:pass@host:5432/postgres pnpm test`; tests create and drop their own throwaway databases.
 - No local PostgreSQL? See "Run the tests with Docker" in `README.md`.
 - Start the API (development): `OSFPM_DATA_DIR=./data pnpm --filter @osfpm/api start` for PGlite, or `DATABASE_URL=postgres://user:pass@host:5432/dbname pnpm --filter @osfpm/api start` for PostgreSQL; settings are in `packages/api/README.md`
-- Admin command line: `pnpm --dir packages/api admin <command>` (`info`, `doctor`, `rotate-data-key`, `accept-data-key-loss`, `new-identity`); see "Admin command line" in `packages/api/README.md`. Use `--dir`, not `--filter`: `pnpm --filter` turns every failure into exit code 1.
+- Admin command line: `pnpm --dir packages/api admin <command>` (`info`, `doctor`, `rotate-data-key`, `accept-data-key-loss`, `new-identity`, `emergency-access`, `revoke-sessions`, `run-cleanups`); see "Admin command line" in `packages/api/README.md`. Use `--dir`, not `--filter`: `pnpm --filter` turns every failure into exit code 1.
 - Test the API only: `pnpm test packages/api` (it runs on PGlite, and on PostgreSQL too when `DATABASE_URL` is set)
 - Lint: `pnpm lint`
 - Format: `pnpm format` (check only: `pnpm format:check`)
