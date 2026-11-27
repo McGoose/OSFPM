@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@fastify/cookie": "11.1.5",
-    "@fastify/rate-limit": "11.2.2",
+    "@fastify/rate-limit": "11.3.0",
     "@fastify/swagger": "9.9.5",
     "@osfpm/core": "workspace:*",
     "fastify": "5.12.8",
